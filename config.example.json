@@ -1,0 +1,9 @@
+{
+  "token": "BOTFATHER_에서_받은_봇_토큰",
+  "allowedChatId": "",
+  "projectDir": "/Users/jtchoi/Projects/cube-brain-trainer",
+  "claudeBin": "/Users/jtchoi/.nvm/versions/node/v23.1.0/bin/claude",
+  "permissionMode": "bypassPermissions",
+  "model": "",
+  "env": {}
+}
