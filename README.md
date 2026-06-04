@@ -98,24 +98,73 @@ node bot.mjs
 
 ---
 
-## 5. 항상 켜두기 (launchd, 맥 재부팅·크래시에도 자동 재시작)
+## 5. 실행 방법
+
+| 방법 | 터미널 닫으면 | 재부팅 후 | 크래시 시 | 용도 |
+|---|---|---|---|---|
+| `node bot.mjs` | 종료됨 | ✗ | ✗ | 테스트·chatId 확인 |
+| `nohup node bot.mjs > bot.log 2>&1 &` | 유지 | ✗ | ✗ | 임시 백그라운드 |
+| **launchd (LaunchAgent)** | 유지 | ✅ 자동 시작 | ✅ 자동 재시작 | **상시 가동 (권장)** |
+
+> `node bot.mjs &` 도 백그라운드로 돌긴 하지만 터미널을 닫으면 SIGHUP으로 같이 죽음.
+> 터미널을 닫아도 유지하려면 최소 `nohup`, 재부팅·크래시까지 견디려면 launchd.
+
+---
+
+## 6. 항상 켜두기 (launchd 설정)
+
+맥 재부팅·크래시에도 자동으로 살아나는 상시 가동 방식. 로그인 세션에서 도는
+**LaunchAgent**라서 claude의 키체인/OAuth 인증을 그대로 사용함.
+
+### 6-1. plist 확인 (경로/노드 버전 점검)
+
+`com.cube.claudebot.plist`는 아래 경로들을 가정함. 다르면 먼저 수정:
 
 ```sh
-# 경로/노드버전이 다르면 plist를 먼저 수정
+which node     # ProgramArguments 첫 줄의 node 경로와 일치하는지
+which claude   # PATH 에 이 디렉토리가 포함됐는지 (EnvironmentVariables)
+```
+
+plist에서 확인할 항목:
+- `ProgramArguments` 1번째 — node 절대경로
+- `ProgramArguments` 2번째 — `bot.mjs` 절대경로
+- `WorkingDirectory` — 프로젝트 폴더
+- `EnvironmentVariables > PATH` — nvm node/claude 경로 포함
+- `StandardOutPath` / `StandardErrorPath` — 로그 파일 경로
+
+### 6-2. 등록 & 시작
+
+```sh
+cd /Users/jtchoi/Projects/cube-brain-trainer/tools/claude-telegram-bot
 cp com.cube.claudebot.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.cube.claudebot.plist
 ```
 
-관리 명령:
+> macOS 최신 버전은 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cube.claudebot.plist`
+> 형식을 권장하기도 함. `load`가 동작하지 않으면 이 명령을 사용.
+
+### 6-3. 상태 확인 & 관리
+
 ```sh
-launchctl list | grep claudebot          # 동작 확인
-launchctl unload ~/Library/LaunchAgents/com.cube.claudebot.plist   # 중지
-tail -f bot.log                          # 로그 보기
-tail -f bot.error.log                    # 에러 로그
+launchctl list | grep claudebot      # 등록·동작 확인 (PID가 보이면 실행 중)
+tail -f bot.log                      # 실행 로그
+tail -f bot.error.log                # 에러 로그
+
+# 중지
+launchctl unload ~/Library/LaunchAgents/com.cube.claudebot.plist
+
+# 코드 수정 후 재시작 (unload → load)
+launchctl unload ~/Library/LaunchAgents/com.cube.claudebot.plist
+launchctl load   ~/Library/LaunchAgents/com.cube.claudebot.plist
 ```
 
-> 로그인 세션에서 도는 LaunchAgent라서 claude의 키체인/OAuth 인증을 그대로 사용함.
-> 맥이 잠자기 모드면 폴링도 멈추니, 시스템 설정 > 배터리/전원에서 절전 해제 권장.
+### 6-4. 자주 겪는 문제
+
+- **`launchctl list`에 PID 없이 에러 코드만 보임** → `bot.error.log` 확인. 보통 node/claude
+  경로 문제(`command not found`)거나 `config.json` 누락.
+- **봇이 응답 없음** → claude 인증 만료일 수 있음. 터미널에서 `node bot.mjs` 직접 실행해
+  `claude` 로그인 상태부터 확인.
+- **맥이 잠자기 모드면 폴링도 멈춤** → 시스템 설정 > 배터리/전원에서 절전 해제 권장.
 
 ---
 
