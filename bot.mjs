@@ -9,6 +9,13 @@ import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import dns from 'node:dns'
+import net from 'node:net'
+
+// 일부 네트워크에서 IPv6 경로가 막혀 있으면 Node의 fetch(undici)가 IPv6를
+// 물고 타임아웃남(api.telegram.org가 IPv6를 가짐). IPv4 우선 + 자동선택 끄기로 회피.
+dns.setDefaultResultOrder('ipv4first')
+if (net.setDefaultAutoSelectFamily) net.setDefaultAutoSelectFamily(false)
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const CONFIG_PATH = join(HERE, 'config.json')

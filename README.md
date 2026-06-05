@@ -165,6 +165,10 @@ launchctl load   ~/Library/LaunchAgents/com.cube.claudebot.plist
 - **봇이 응답 없음** → claude 인증 만료일 수 있음. 터미널에서 `node bot.mjs` 직접 실행해
   `claude` 로그인 상태부터 확인.
 - **맥이 잠자기 모드면 폴링도 멈춤** → 시스템 설정 > 배터리/전원에서 절전 해제 권장.
+- **"폴링 오류" 반복 (ETIMEDOUT)** → 일부 네트워크에서 IPv6 경로가 막혀 Node의 fetch가
+  api.telegram.org(IPv6 보유)에서 타임아웃나는 문제. `bot.mjs`가 IPv4 우선
+  (`dns.setDefaultResultOrder('ipv4first')` + 자동선택 끄기)으로 이미 회피하도록 돼 있음.
+  그래도 안 되면 `curl https://api.telegram.org` 로 네트워크/방화벽부터 확인.
 
 ---
 
