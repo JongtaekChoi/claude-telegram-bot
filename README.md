@@ -154,7 +154,13 @@ auth layer.)
 - `run the solver tests and commit + push if they pass`
 - `add an edge case to solve-2nd-floor-edges.ts`
 
-Commands: `/new` (reset context / new session) · `/id` (show chat ID) · `/help`.
+Commands: `/new` (reset context / new session) · `/cron` (list / add / remove scheduled tasks) · `/restart` (syntax-check & restart the bot) · `/id` (show chat ID) · `/help`.
+
+> **`/restart`** runs `node --check` on `bot.mjs` first and **aborts the restart if it has a syntax
+> error** (so a bad edit can't crash-loop the bot), then exits — relying on a process supervisor
+> to relaunch it. Works out of the box with the [launchd setup](#always-on-with-launchd-macos)
+> (`KeepAlive`); under a bare `node bot.mjs` with no supervisor it just stops. Your session resumes
+> after the restart (the id lives in `state.json`).
 
 **4) Keep it always on (optional)** — see [Always-on with launchd](#always-on-with-launchd-macos).
 
@@ -183,6 +189,7 @@ Edit `config.json`:
 | `persona` | (optional) Role system prompt — defines a persona (developer/planner/…). See below |
 | `appendSystemPrompt` | (optional) Override the default "be concise for Telegram" instruction |
 | `env` | (optional) Extra environment variables passed to the `claude` process |
+| `schedule` | (optional) Cron jobs that run a prompt on a timer — see [Scheduled tasks](#scheduled-tasks-cron) |
 
 State (`state.json`) and downloaded `attachments/` are written **next to the config file**, so
 projects stay isolated.
@@ -197,6 +204,44 @@ projects stay isolated.
   absolute path is handed to Claude (caption included as the message). Images can be opened with Read.
 - **Sessions**: conversations resume automatically (`--resume`); the last session id is saved in
   `state.json`, so context survives restarts. Use `/new` to start fresh.
+
+### Scheduled tasks (cron)
+
+Add a `schedule` array to the config to run prompts on a timer — daily briefings, periodic
+checks, reminders. Each entry runs the prompt and sends the result to `allowedChatId`.
+
+```json
+"schedule": [
+  { "cron": "0 9 * * 1-5", "label": "Morning brief", "prompt": "Summarize today's open issues and TODOs" },
+  { "cron": "*/30 * * * *", "prompt": "Check CI status; only reply if something is red" }
+]
+```
+
+- **`cron`** — standard 5-field expression `minute hour day-of-month month day-of-week`
+  (e.g. `0 9 * * 1-5` = 09:00 on weekdays). Supports `*`, lists (`1,3,5`), ranges (`1-5`),
+  and steps (`*/15`). Day-of-week `0` and `7` both mean Sunday. Times use the **host's local
+  timezone**. No external dependency — the parser lives in `bot.mjs`.
+- **`prompt`** (required) — the message sent to Claude. **`label`** (optional) — a short name
+  shown in the reply footer and in `/cron`.
+- **Fresh session**: scheduled jobs run in their **own session** so they never pollute your
+  interactive conversation context (`state.json` stays yours). They share the single-task lock,
+  so a job is **skipped** (logged) if a task is already running when it fires.
+
+**Add jobs from the chat — in plain language:**
+
+```
+/cron add summarize open issues every weekday at 9am
+```
+
+The bot asks Claude to turn that into a cron expression, **echoes back what it understood**
+(so you can catch a misread), and saves it to `state.json` — **no restart needed**. Dynamic
+jobs get an id; manage them with:
+
+- `/cron` — list everything (config jobs are tagged `[config]`; dynamic ones show `#id`)
+- `/cron add <plain-language request>` — e.g. `/cron add every 30 min, ping me if CI is red`
+- `/cron rm <id>` — remove a dynamic job (config jobs are edited in the file)
+
+Config-defined jobs still require a restart to change; only chat-added jobs are live.
 
 ---
 
