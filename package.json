@@ -1,0 +1,39 @@
+{
+  "name": "claude-telegram-bot",
+  "version": "0.1.0",
+  "description": "Drive Claude Code from Telegram — messages run headless `claude -p` in a project dir and replies come back to the chat. Zero dependencies.",
+  "type": "module",
+  "bin": {
+    "claude-telegram-bot": "bot.mjs"
+  },
+  "files": [
+    "bot.mjs",
+    "config.example.json",
+    "com.claudebot.example.plist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node bot.mjs"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "telegram",
+    "bot",
+    "cli",
+    "headless"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JongtaekChoi/claude-telegram-bot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JongtaekChoi/claude-telegram-bot/issues"
+  },
+  "homepage": "https://github.com/JongtaekChoi/claude-telegram-bot#readme",
+  "author": "Jongtaek Choi",
+  "license": "MIT"
+}
