@@ -1,10 +1,12 @@
 {
+  "name": "봇 이름 (도움말/구분용, 선택)",
   "token": "BOTFATHER_에서_받은_봇_토큰",
   "allowedChatId": "",
-  "projectDir": "/Users/jtchoi/Projects/cube-brain-trainer",
+  "projectDir": "/ABSOLUTE/PATH/TO/PROJECT",
   "claudeBin": "/Users/jtchoi/.nvm/versions/node/v23.1.0/bin/claude",
   "permissionMode": "bypassPermissions",
   "model": "",
+  "persona": "이 봇의 역할/말투를 정의하는 시스템 프롬프트 (선택). 멀티 봇(개발자/기획자 등)에서 페르소나 구분에 사용.",
   "appendSystemPrompt": "",
   "env": {}
 }

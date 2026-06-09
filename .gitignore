@@ -1,5 +1,10 @@
 config.json
+config.*.json
+*.config.json
+!config.example.json
 state.json
+state.*.json
+*.state.json
 attachments/
 bot.log
 bot.error.log

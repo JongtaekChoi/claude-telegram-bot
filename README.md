@@ -26,6 +26,36 @@ node bot.mjs ~/projects/A/claudebot.config.json   # 인스턴스 A
 node bot.mjs ~/projects/B/claudebot.config.json   # 인스턴스 B
 ```
 
+## 여러 페르소나(역할) 봇
+
+**같은 프로젝트**를 역할별 봇으로 나눠 띄울 수 있다 (예: **개발자** + **기획자**).
+코드는 하나, **config 파일만 역할별로** 따로 둔다.
+
+- **`persona`**: config에 역할 시스템 프롬프트를 넣으면 그 봇의 정체성이 된다.
+  텔레그램용 간결 지침은 자동으로 함께 주입되므로 `persona`엔 역할만 적으면 됨.
+- **`permissionMode`로 권한 차등**: 같은 폴더를 공유하므로 **셸을 쓰는 봇(`bypassPermissions`)은
+  하나로 제한**하면 동시 편집 충돌을 피할 수 있다. 읽기·계획만 시키려면 `plan`.
+- **세션 분리**: `state` 파일은 config 이름에서 파생된다
+  (`config.json`→`state.json`, `dev.config.json`→`dev.config.state.json`). 같은 폴더에
+  config 여러 개를 둬도 봇끼리 맥락이 안 섞임.
+- **봇마다 토큰 1개**: 각 봇은 BotFather에서 별도 토큰 발급 (`allowedChatId`는 동일해도 됨).
+
+예) 개발자 + 기획자:
+```
+dev.config.json       (permissionMode: bypassPermissions, persona: "시니어 개발자...")
+planner.config.json   (permissionMode: plan,              persona: "기획자 겸 UX 담당...")
+node bot.mjs dev.config.json
+node bot.mjs planner.config.json
+```
+
+| 봇 | permissionMode | 역할 |
+|---|---|---|
+| 개발자 | `bypassPermissions` | 코드 구현·수정·테스트·git |
+| 기획자 | `plan` (읽기·계획만) | 기능 제안·스펙·UX/디자인 방향 |
+
+> 상시 가동은 `com.claudebot.example.plist`를 **봇마다** 복사해 `Label`·config 인자·로그
+> 경로를 다르게 등록한다 (아래 launchd 섹션 참고).
+
 ---
 
 ## ⚡ 빠른 시작 (내가 할 일)
@@ -86,8 +116,10 @@ cp config.example.json config.json
 | `allowedChatId` | **비워두고 시작** → 봇이 알려줌 (아래 3단계) |
 | `projectDir` | 작업 폴더 (기본값 그대로 두면 됨) |
 | `claudeBin` | `which claude` 결과 (절대경로 권장) |
-| `permissionMode` | `acceptEdits`(파일편집 자동승인) / `bypassPermissions`(전부 자동, 쉘 포함) |
+| `permissionMode` | `plan`(읽기·계획만) / `acceptEdits`(파일편집 자동승인) / `bypassPermissions`(전부 자동, 쉘 포함) |
 | `model` | 비워두면 기본 모델. `opus` / `sonnet` 등 |
+| `name` | (선택) `/help`에 표시되는 봇 이름 — 멀티 봇 구분용 |
+| `persona` | (선택) 역할 시스템 프롬프트 — 페르소나(개발자/기획자 등) 정의. 자세히는 아래 페르소나 섹션 |
 
 ## 3. 내 chatId 알아내기
 
