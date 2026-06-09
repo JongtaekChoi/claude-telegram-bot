@@ -2,15 +2,18 @@
 
 [한국어](./README.ko.md) · **English**
 
+**A zero-dependency, single-file, daemonized Claude Code bot — no Bun, no Python, no open session.**
+
 A tiny bridge that takes your Telegram messages, runs `claude -p` (Claude Code headless mode)
-in a project folder, and sends the result back to the chat. **Zero dependencies** — built on
-Node 18+ built-ins only.
+in a project folder, and sends the result back to the chat. One `.mjs` file on Node 18+ built-ins —
+nothing to `npm install`, nothing to audit but ~400 readable lines.
 
 ```
 [you] → Telegram → bot.mjs → claude -p (config.projectDir) → result → Telegram
 ```
 
 Drive Claude Code from your phone: run tests, edit files, commit, push — all from a chat.
+It runs as a **background daemon** (launchd), so there's no interactive session to keep open.
 
 > ### ⚠️ This is a remote code-execution tool by design. Read the [Security](#security) section before running it.
 > A message you send from Telegram is executed as a command on the machine running the bot.
@@ -25,6 +28,26 @@ Drive Claude Code from your phone: run tests, edit files, commit, push — all f
 - **Session continuity** — conversations resume across restarts (`--resume`); `/new` to reset.
 - **Attachments** — send photos/docs/voice/video; they're saved locally and handed to Claude.
 - **Always-on** — ships with a launchd template for macOS (auto-start, auto-restart).
+
+## How it compares
+
+This space is crowded, and Anthropic now ships an official solution. Here's an honest map so you
+can pick the right tool:
+
+| | This bot | [Official Claude Code Channels](https://code.claude.com/docs/en/channels) | [claude-code-telegram](https://github.com/RichardAtCT/claude-code-telegram) |
+|---|---|---|---|
+| Runtime | **Node built-ins only** | Bun + MCP plugin | Python 3.11+ + libs |
+| Execution model | headless `claude -p` per message | events pushed into an **open** `claude --channels` session | Claude SDK / CLI |
+| Stays running as | **background daemon** (no session open) | a live interactive session you keep running | service / daemon |
+| Multi-persona, permission-scoped bots on one repo | **yes** (dev=`bypass`, planner=`plan`) | no | no |
+| Per-action permission approval (inline buttons) | no (set `permissionMode`) | **yes** | partial |
+| Feature breadth (webhooks, cron, voice, export) | minimal | medium | **large** |
+| Lines of code to read/fork | **~400, one file** | larger | large |
+
+**Use the official Channels** if you want per-action approvals and don't mind keeping a session
+open. **Use claude-code-telegram** if you want maximum features. **Use this** if you want a
+minimal, auditable, zero-dependency daemon — and especially if you want **role-split persona bots**
+with different permission levels on the same project.
 
 ---
 

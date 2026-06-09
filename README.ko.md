@@ -2,18 +2,40 @@
 
 **한국어** · [English](./README.md)
 
+**의존성 0, 단일 파일, 데몬으로 도는 Claude Code 봇 — Bun도 Python도 떠 있는 세션도 필요 없음.**
+
 텔레그램 메시지를 받아 지정한 프로젝트 폴더에서 `claude -p`(헤드리스 모드)를 실행하고
-결과를 다시 텔레그램으로 보내주는 작은 브릿지. 의존성 없음 (Node 18+ 내장 기능만 사용).
+결과를 다시 텔레그램으로 보내주는 작은 브릿지. `bot.mjs` 파일 하나, Node 18+ 내장 기능만 사용 —
+`npm install`할 것도 없고, 감사(audit)할 거라곤 읽기 쉬운 ~400줄이 전부.
 
 ```
 [너] → Telegram → bot.mjs → claude -p (config.projectDir) → 결과 → Telegram
 ```
 
 검증 완료: `bypassPermissions` 헤드리스 모드 정상 동작 확인. 쉘·git·테스트까지 자동 실행됨.
+**백그라운드 데몬**(launchd)으로 돌아서 인터랙티브 세션을 열어둘 필요가 없음.
 
 > ### ⚠️ 이 도구는 설계상 원격 코드 실행 도구입니다. 실행 전에 [보안](#-보안) 섹션을 꼭 읽으세요.
 > 텔레그램으로 보낸 메시지는 봇이 도는 머신에서 **명령으로 실행**됩니다.
 > `permissionMode: bypassPermissions`면 한 줄짜리 메시지가 네 계정 권한으로 **무엇이든** 실행할 수 있습니다.
+
+## 다른 도구와 비교
+
+이 분야는 이미 붐비고, Anthropic도 공식 솔루션을 내놨다. 솔직한 지도를 그려두니 용도에 맞게 고르면 된다:
+
+| | 이 봇 | [공식 Claude Code Channels](https://code.claude.com/docs/en/channels) | [claude-code-telegram](https://github.com/RichardAtCT/claude-code-telegram) |
+|---|---|---|---|
+| 런타임 | **Node 내장만** | Bun + MCP 플러그인 | Python 3.11+ + 라이브러리 |
+| 실행 모델 | 메시지당 헤드리스 `claude -p` | **열려있는** `claude --channels` 세션에 이벤트 push | Claude SDK / CLI |
+| 상시 가동 형태 | **백그라운드 데몬** (세션 안 떠도 됨) | 계속 떠 있는 인터랙티브 세션 | 서비스 / 데몬 |
+| 한 레포에 권한 차등 멀티 페르소나 | **가능** (개발자=`bypass`, 기획자=`plan`) | 불가 | 불가 |
+| 작업별 권한 승인 (인라인 버튼) | 없음 (`permissionMode`로) | **있음** | 일부 |
+| 기능 폭 (웹훅·cron·음성·export) | 최소 | 중간 | **큼** |
+| 읽고/포크할 코드량 | **~400줄, 단일 파일** | 큼 | 큼 |
+
+**작업별 승인이 필요하고** 세션을 열어두는 게 괜찮다면 → 공식 Channels. **기능이 많이 필요하면** →
+claude-code-telegram. **의존성 0·감사 가능·데몬**이 필요하거나, 특히 같은 프로젝트에 **권한이 다른
+역할별 페르소나 봇**을 띄우고 싶다면 → 이 봇.
 
 ## 여러 프로젝트 동시 운영
 
