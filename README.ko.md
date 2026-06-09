@@ -86,40 +86,54 @@ node bot.mjs planner.config.json
 
 ---
 
-## ⚡ 빠른 시작 (내가 할 일)
+## 설치 & 실행
 
-**1) 봇 토큰 발급** — 텔레그램에서 `@BotFather` → `/newbot` → 이름/username 지정 → 토큰 복사
+이건 독립 실행 CLI/데몬이지 **라이브러리가 아니다** — `import`해서 쓰는 게 아니라, 전역 설치(또는
+`npx`)하고 config 파일을 만들어 실행한다. config의 `projectDir`가 Claude가 일할 폴더를 정하므로,
+봇이 어디에 설치됐는지와 무관하다.
 
-**2) 설정 파일 생성**
+선행 조건: **Node 18+**, 그리고 호스트에 **`claude` CLI 설치·인증** 완료.
+
+**방법 A — npx (설치 없이)**
+
 ```sh
-cd /Users/jtchoi/Projects/cube-brain-trainer/tools/claude-telegram-bot
-cp config.example.json config.json
-# config.json 에 BotFather 토큰만 붙여넣기 (allowedChatId 는 일단 비워둠)
-# permissionMode 는 이미 bypassPermissions 로 설정돼 있음
+npx claude-telegram-bot init        # ./config.json 생성
+# config.json 편집 (token, projectDir 등)
+npx claude-telegram-bot             # ./config.json 으로 실행
 ```
 
-**3) chatId 알아내기 + 실행**
+**방법 B — 전역 설치 (상시 데몬에 권장)**
+
 ```sh
-node bot.mjs
-# → 텔레그램에서 봇에게 아무 메시지나 전송 → 봇이 이 채팅의 chatId 를 답장
-# → 그 숫자를 config.json 의 allowedChatId 에 넣고 봇 재시작 (Ctrl+C 후 다시 node bot.mjs)
-# 이제 너만 사용 가능
+npm i -g claude-telegram-bot
+
+claude-telegram-bot init ~/botconfigs/myproj    # ~/botconfigs/myproj/config.json 생성
+# 그 config.json 편집 (token, projectDir 등)
+claude-telegram-bot ~/botconfigs/myproj/config.json
 ```
 
-**4) 사용** — 텔레그램으로 메시지 전송:
+여러 프로젝트/페르소나는 config 파일을 하나씩 더 만들어 경로를 넘기면 된다 —
+`state.json`·`attachments/`는 그 config 옆에 저장돼 안 섞인다.
+
+### 첫 실행 단계
+
+**1) 봇 토큰 발급** — 텔레그램에서 `@BotFather` → `/newbot` → 이름/username(`_bot`으로 끝나게) 지정 →
+토큰 복사(`123456789:AA...` 형태). `config.json`에 넣고 `allowedChatId`는 일단 비워둔다.
+
+**2) chatId 알아내고 봇 잠그기** — 봇 실행(`claude-telegram-bot …`) → 텔레그램에서 아무 메시지나
+보내면 봇이 이 채팅의 `chatId`를 답장한다. 그 숫자를 `config.json`의 `allowedChatId`에 넣고 재시작.
+이제 너만 사용 가능. ([보안](#-보안) 참고 — 이게 유일한 인증 계층이다.)
+
+**3) 사용** — 텔레그램으로 메시지 전송:
 - `cross 솔버 테스트 돌리고 통과하면 커밋 후 push 해줘`
 - `solve-2nd-floor-edges.ts 에 엣지 케이스 추가해줘`
 
-**5) 항상 켜두기** (선택)
-```sh
-cp com.cube.claudebot.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cube.claudebot.plist
-tail -f bot.log
-```
+명령어: `/new`(맥락 초기화) · `/id`(채팅 ID) · `/help`
 
-> ⚠️ 봇은 현재 작업 브랜치(`develop`) 기준으로 동작함. push 시점 등 브랜치 관리는 메시지로 명확히 지시할 것.
+**4) 항상 켜두기** (선택) — 아래 [launchd 섹션](#6-항상-켜두기-launchd-설정) 참고.
 
-자세한 설명은 아래 섹션 참고.
+> **소스에서 실행** (봇 자체를 고칠 때): 레포 클론 → `cp config.example.json config.json` →
+> `node bot.mjs [config.json]`. CLI와 동작 동일.
 
 ---
 

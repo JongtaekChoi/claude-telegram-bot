@@ -103,43 +103,57 @@ sensitive reports) rather than posting exploit details publicly.
 
 ---
 
-## Quick start
+## Install & run
+
+This is a standalone CLI/daemon, **not a library** — you don't `import` it. Install it globally (or
+run via `npx`), point a config file at any project, and run it. `projectDir` in the config decides
+which folder Claude works in, independent of where the bot is installed.
+
+Prerequisites: **Node 18+** and the **`claude` CLI installed and authenticated** on the host.
+
+**Option A — npx (no install)**
+
+```sh
+npx claude-telegram-bot init        # writes ./config.json
+# edit config.json (token, projectDir, …)
+npx claude-telegram-bot             # runs ./config.json
+```
+
+**Option B — global install (recommended for an always-on daemon)**
+
+```sh
+npm i -g claude-telegram-bot
+
+claude-telegram-bot init ~/botconfigs/myproj    # writes ~/botconfigs/myproj/config.json
+# edit that config.json (token, projectDir, …)
+claude-telegram-bot ~/botconfigs/myproj/config.json
+```
+
+Run several projects/personas by making one config file each and passing its path —
+`state.json` and `attachments/` live next to that config, so they don't mix.
+
+### First-run steps
 
 **1) Create a bot token** — In Telegram, open `@BotFather` → `/newbot` → pick a name and a
-`username` ending in `_bot` → copy the token (looks like `123456789:AA...`).
+`username` ending in `_bot` → copy the token (looks like `123456789:AA...`). Put it in `config.json`,
+leave `allowedChatId` empty for now.
 
-**2) Create a config file**
+**2) Find your chatId and lock the bot to it** — Start the bot (`claude-telegram-bot …`), send it any
+message in Telegram; it replies with this chat's `chatId`. Put that number into `config.json`
+`allowedChatId` and restart. Now only you can use it. (See [Security](#security) — this is your only
+auth layer.)
 
-```sh
-# from the repo folder
-cp config.example.json config.json
-# paste your BotFather token into config.json (leave allowedChatId empty for now)
-```
-
-Or scaffold one anywhere with the CLI:
-
-```sh
-node bot.mjs init ~/my-project    # writes ~/my-project/config.json
-```
-
-**3) Find your chatId and lock the bot to it**
-
-```sh
-node bot.mjs
-# → send the bot any message in Telegram
-# → it replies with this chat's chatId
-# → put that number into config.json `allowedChatId`, then restart the bot (Ctrl+C, run again)
-# now only you can use it
-```
-
-**4) Use it** — just send messages:
+**3) Use it** — just send messages:
 
 - `run the solver tests and commit + push if they pass`
 - `add an edge case to solve-2nd-floor-edges.ts`
 
 Commands: `/new` (reset context / new session) · `/id` (show chat ID) · `/help`.
 
-**5) Keep it always on (optional)** — see [Always-on with launchd](#always-on-with-launchd-macos).
+**4) Keep it always on (optional)** — see [Always-on with launchd](#always-on-with-launchd-macos).
+
+> **From source** (for hacking on the bot): clone the repo, `cp config.example.json config.json`,
+> then `node bot.mjs [config.json]`. Same behavior as the CLI.
 
 ---
 
