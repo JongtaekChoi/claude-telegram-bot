@@ -1,18 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  프로젝트마다 이 템플릿을 복사해서 쓰세요. 바꿀 곳:
+    - Label:        com.claudebot.<프로젝트명>  (인스턴스마다 고유)
+    - 3번째 인자:   해당 프로젝트의 config.json 절대경로
+    - 로그 경로:    인스턴스마다 다른 파일
+  설치: launchctl bootstrap gui/$(id -u) <이_plist_경로>
+  제거: launchctl bootout  gui/$(id -u)/<Label>
+-->
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.cube.claudebot</string>
+    <string>com.claudebot.PROJECT</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/Users/jtchoi/.nvm/versions/node/v23.1.0/bin/node</string>
-        <string>/Users/jtchoi/Projects/cube-brain-trainer/tools/claude-telegram-bot/bot.mjs</string>
+        <string>/Users/jtchoi/Projects/claude-telegram-bot/bot.mjs</string>
+        <string>/ABSOLUTE/PATH/TO/PROJECT/claudebot.config.json</string>
     </array>
-
-    <key>WorkingDirectory</key>
-    <string>/Users/jtchoi/Projects/cube-brain-trainer</string>
 
     <!-- nvm node/claude 경로를 PATH 에 포함 -->
     <key>EnvironmentVariables</key>
@@ -21,7 +27,6 @@
         <string>/Users/jtchoi/.nvm/versions/node/v23.1.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
 
-    <!-- 죽으면 자동 재시작, 로그인 시 자동 시작 -->
     <key>KeepAlive</key>
     <true/>
     <key>RunAtLoad</key>
@@ -30,8 +35,8 @@
     <integer>10</integer>
 
     <key>StandardOutPath</key>
-    <string>/Users/jtchoi/Projects/cube-brain-trainer/tools/claude-telegram-bot/bot.log</string>
+    <string>/ABSOLUTE/PATH/TO/PROJECT/claudebot.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jtchoi/Projects/cube-brain-trainer/tools/claude-telegram-bot/bot.error.log</string>
+    <string>/ABSOLUTE/PATH/TO/PROJECT/claudebot.error.log</string>
 </dict>
 </plist>

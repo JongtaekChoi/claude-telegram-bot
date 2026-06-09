@@ -1,13 +1,30 @@
-# Claude Telegram Bot (Cube Brain Trainer 전용)
+# Claude Telegram Bot (범용)
 
-텔레그램 메시지를 받아 이 프로젝트 폴더에서 `claude -p`(헤드리스 모드)를 실행하고
+텔레그램 메시지를 받아 지정한 프로젝트 폴더에서 `claude -p`(헤드리스 모드)를 실행하고
 결과를 다시 텔레그램으로 보내주는 작은 브릿지. 의존성 없음 (Node 18+ 내장 기능만 사용).
 
 ```
-[너] → Telegram → bot.mjs → claude -p (이 프로젝트 폴더) → 결과 → Telegram
+[너] → Telegram → bot.mjs → claude -p (config.projectDir) → 결과 → Telegram
 ```
 
 검증 완료: `bypassPermissions` 헤드리스 모드 정상 동작 확인. 쉘·git·테스트까지 자동 실행됨.
+
+## 여러 프로젝트 동시 운영
+
+이 코드는 프로젝트 비종속이라, **프로젝트마다 config 파일 하나씩**만 만들면 여러 개를 동시에 돌릴 수 있다.
+
+- 실행: `node bot.mjs /절대경로/프로젝트.config.json` (인자 없으면 같은 폴더의 `config.json`)
+- 상태(`state.json`)·첨부(`attachments/`)는 **그 config 파일이 있는 폴더**에 저장돼 프로젝트끼리 안 섞임
+- **주의**: 텔레그램은 토큰당 폴링 1개만 허용 → 프로젝트마다 **BotFather 토큰을 따로** 만들어야 동시 운영 가능
+- 상시 가동은 `com.claudebot.example.plist`를 프로젝트별로 복사해 등록 (아래 launchd 섹션 참고)
+
+예) 두 프로젝트:
+```
+~/projects/A/claudebot.config.json   (토큰 A, projectDir=~/projects/A)
+~/projects/B/claudebot.config.json   (토큰 B, projectDir=~/projects/B)
+node bot.mjs ~/projects/A/claudebot.config.json   # 인스턴스 A
+node bot.mjs ~/projects/B/claudebot.config.json   # 인스턴스 B
+```
 
 ---
 
