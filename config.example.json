@@ -5,5 +5,6 @@
   "claudeBin": "/Users/jtchoi/.nvm/versions/node/v23.1.0/bin/claude",
   "permissionMode": "bypassPermissions",
   "model": "",
+  "appendSystemPrompt": "",
   "env": {}
 }
