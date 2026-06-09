@@ -38,7 +38,7 @@ node bot.mjs
 **5) 항상 켜두기** (선택)
 ```sh
 cp com.cube.claudebot.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.cube.claudebot.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cube.claudebot.plist
 tail -f bot.log
 ```
 
@@ -146,11 +146,11 @@ plist에서 확인할 항목:
 ```sh
 cd /Users/jtchoi/Projects/cube-brain-trainer/tools/claude-telegram-bot
 cp com.cube.claudebot.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.cube.claudebot.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cube.claudebot.plist
 ```
 
-> macOS 최신 버전은 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cube.claudebot.plist`
-> 형식을 권장하기도 함. `load`가 동작하지 않으면 이 명령을 사용.
+> 최신 macOS 권장 방식은 `bootstrap`/`bootout`. 구버전(`load`/`unload`)도 동작하지만
+> deprecated 경고가 뜰 수 있음. `bootstrap`이 안 되면 `launchctl load ~/Library/LaunchAgents/com.cube.claudebot.plist`로 대체.
 
 ### 6-3. 상태 확인 & 관리
 
@@ -160,11 +160,11 @@ tail -f bot.log                      # 실행 로그
 tail -f bot.error.log                # 에러 로그
 
 # 중지
-launchctl unload ~/Library/LaunchAgents/com.cube.claudebot.plist
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.cube.claudebot.plist
 
-# 코드 수정 후 재시작 (unload → load)
-launchctl unload ~/Library/LaunchAgents/com.cube.claudebot.plist
-launchctl load   ~/Library/LaunchAgents/com.cube.claudebot.plist
+# 코드 수정 후 재시작 (bootout → bootstrap)
+launchctl bootout   gui/$(id -u) ~/Library/LaunchAgents/com.cube.claudebot.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cube.claudebot.plist
 ```
 
 ### 6-4. 자주 겪는 문제

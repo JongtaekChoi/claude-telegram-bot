@@ -1,3 +1,5 @@
 config.json
 state.json
 attachments/
+bot.log
+bot.error.log
