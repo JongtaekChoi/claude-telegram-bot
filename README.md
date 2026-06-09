@@ -1,240 +1,294 @@
-# Claude Telegram Bot (범용)
+# Claude Telegram Bot
 
-텔레그램 메시지를 받아 지정한 프로젝트 폴더에서 `claude -p`(헤드리스 모드)를 실행하고
-결과를 다시 텔레그램으로 보내주는 작은 브릿지. 의존성 없음 (Node 18+ 내장 기능만 사용).
+[한국어](./README.ko.md) · **English**
+
+A tiny bridge that takes your Telegram messages, runs `claude -p` (Claude Code headless mode)
+in a project folder, and sends the result back to the chat. **Zero dependencies** — built on
+Node 18+ built-ins only.
 
 ```
-[너] → Telegram → bot.mjs → claude -p (config.projectDir) → 결과 → Telegram
+[you] → Telegram → bot.mjs → claude -p (config.projectDir) → result → Telegram
 ```
 
-검증 완료: `bypassPermissions` 헤드리스 모드 정상 동작 확인. 쉘·git·테스트까지 자동 실행됨.
+Drive Claude Code from your phone: run tests, edit files, commit, push — all from a chat.
 
-## 여러 프로젝트 동시 운영
+> ### ⚠️ This is a remote code-execution tool by design. Read the [Security](#security) section before running it.
+> A message you send from Telegram is executed as a command on the machine running the bot.
+> With `permissionMode: bypassPermissions`, a one-line message can run **anything** as your user.
 
-이 코드는 프로젝트 비종속이라, **프로젝트마다 config 파일 하나씩**만 만들면 여러 개를 동시에 돌릴 수 있다.
+**Highlights**
 
-- 실행: `node bot.mjs /절대경로/프로젝트.config.json` (인자 없으면 같은 폴더의 `config.json`)
-- 상태(`state.json`)·첨부(`attachments/`)는 **그 config 파일이 있는 폴더**에 저장돼 프로젝트끼리 안 섞임
-- **주의**: 텔레그램은 토큰당 폴링 1개만 허용 → 프로젝트마다 **BotFather 토큰을 따로** 만들어야 동시 운영 가능
-- 상시 가동은 `com.claudebot.example.plist`를 프로젝트별로 복사해 등록 (아래 launchd 섹션 참고)
+- **Zero dependencies** — just Node 18+. No npm install, no supply chain.
+- **Multi-project** — one codebase drives many projects via per-project config files.
+- **Multi-persona** — split the *same* project into role-based bots (e.g. Developer + Planner)
+  with per-bot system prompts and **differentiated permission levels**.
+- **Session continuity** — conversations resume across restarts (`--resume`); `/new` to reset.
+- **Attachments** — send photos/docs/voice/video; they're saved locally and handed to Claude.
+- **Always-on** — ships with a launchd template for macOS (auto-start, auto-restart).
 
-예) 두 프로젝트:
+---
+
+## Security
+
+**Treat this tool like an SSH key into your machine that lives in a chat app.** It is designed
+to execute commands; that power is the point, and also the risk. Read this before exposing it.
+
+### Threat model — who can run commands on your machine
+
+1. **The allowed chat.** Anyone with access to the Telegram account whose `chatId` you allow can
+   run commands. Lock your phone and Telegram account (2FA).
+2. **Whoever holds the bot token.** The token is the bot's password. With it, an attacker can read
+   incoming messages and impersonate the bot. The `allowedChatId` whitelist still blocks command
+   *execution* (Telegram-supplied `chatId`s can't be forged), but **treat a leaked token as an
+   incident**: revoke it via `@BotFather` → `/revoke` and issue a new one.
+3. **Prompt-injected content.** If you forward a webpage, file, or repo issue and ask the bot to act
+   on it, malicious instructions inside that content can steer Claude. Don't pipe untrusted content
+   into a `bypassPermissions` bot.
+
+### Non-negotiables
+
+- **Always set `allowedChatId`.** Until you do, the bot refuses to run anything and just replies
+  with the chat's ID. Once set, only that chat can issue commands — this is your only auth layer,
+  so it must be set.
+- **Guard the token like a credential.** `config.json` and `state.json` are in `.gitignore` so you
+  don't commit it — keep it that way. Never paste the token into issues, logs, or screenshots. The
+  startup log redacts it (`token: <redacted>`); don't add it back.
+- **There is no sandbox.** The bot runs `claude` as *your* user, with your filesystem, your SSH/git
+  credentials, and your Claude OAuth/keychain session. It can do anything you can.
+
+### Choose the least permission you can live with
+
+`permissionMode` is the main safety dial:
+
+| Mode | What it allows | Use when |
+|---|---|---|
+| `plan` | Read & plan only, no edits | Q&A, code review, a "planner" persona |
+| `acceptEdits` | Auto-approve file edits; other actions (shell, etc.) still gated | **Recommended default** — useful but bounded |
+| `bypassPermissions` | Everything auto-runs, **including arbitrary shell** | You accept that one chat message = arbitrary code execution |
+
+Practical hardening:
+
+- Prefer `acceptEdits` over `bypassPermissions` unless you specifically need autonomous shell/git.
+- Point `projectDir` at a **specific project**, not your home directory — limit the blast radius.
+- For multi-persona setups, give only **one** bot `bypassPermissions`; keep the rest on `plan`.
+- Consider running on a dedicated user account or VM if you'll leave it always-on.
+
+### Reporting a vulnerability
+
+Found a security issue? Please open a GitHub issue (or contact the maintainer privately for
+sensitive reports) rather than posting exploit details publicly.
+
+---
+
+## Quick start
+
+**1) Create a bot token** — In Telegram, open `@BotFather` → `/newbot` → pick a name and a
+`username` ending in `_bot` → copy the token (looks like `123456789:AA...`).
+
+**2) Create a config file**
+
+```sh
+# from the repo folder
+cp config.example.json config.json
+# paste your BotFather token into config.json (leave allowedChatId empty for now)
 ```
-~/projects/A/claudebot.config.json   (토큰 A, projectDir=~/projects/A)
-~/projects/B/claudebot.config.json   (토큰 B, projectDir=~/projects/B)
-node bot.mjs ~/projects/A/claudebot.config.json   # 인스턴스 A
-node bot.mjs ~/projects/B/claudebot.config.json   # 인스턴스 B
+
+Or scaffold one anywhere with the CLI:
+
+```sh
+node bot.mjs init ~/my-project    # writes ~/my-project/config.json
 ```
 
-## 여러 페르소나(역할) 봇
+**3) Find your chatId and lock the bot to it**
 
-**같은 프로젝트**를 역할별 봇으로 나눠 띄울 수 있다 (예: **개발자** + **기획자**).
-코드는 하나, **config 파일만 역할별로** 따로 둔다.
-
-- **`persona`**: config에 역할 시스템 프롬프트를 넣으면 그 봇의 정체성이 된다.
-  텔레그램용 간결 지침은 자동으로 함께 주입되므로 `persona`엔 역할만 적으면 됨.
-- **`permissionMode`로 권한 차등**: 같은 폴더를 공유하므로 **셸을 쓰는 봇(`bypassPermissions`)은
-  하나로 제한**하면 동시 편집 충돌을 피할 수 있다. 읽기·계획만 시키려면 `plan`.
-- **세션 분리**: `state` 파일은 config 이름에서 파생된다
-  (`config.json`→`state.json`, `dev.config.json`→`dev.config.state.json`). 같은 폴더에
-  config 여러 개를 둬도 봇끼리 맥락이 안 섞임.
-- **봇마다 토큰 1개**: 각 봇은 BotFather에서 별도 토큰 발급 (`allowedChatId`는 동일해도 됨).
-
-예) 개발자 + 기획자:
+```sh
+node bot.mjs
+# → send the bot any message in Telegram
+# → it replies with this chat's chatId
+# → put that number into config.json `allowedChatId`, then restart the bot (Ctrl+C, run again)
+# now only you can use it
 ```
-dev.config.json       (permissionMode: bypassPermissions, persona: "시니어 개발자...")
-planner.config.json   (permissionMode: plan,              persona: "기획자 겸 UX 담당...")
+
+**4) Use it** — just send messages:
+
+- `run the solver tests and commit + push if they pass`
+- `add an edge case to solve-2nd-floor-edges.ts`
+
+Commands: `/new` (reset context / new session) · `/id` (show chat ID) · `/help`.
+
+**5) Keep it always on (optional)** — see [Always-on with launchd](#always-on-with-launchd-macos).
+
+---
+
+## Configuration
+
+```sh
+cp config.example.json config.json
+```
+
+Edit `config.json`:
+
+| Key | Description |
+|---|---|
+| `token` | Bot token from BotFather |
+| `allowedChatId` | **Leave empty at first** → the bot tells you (step 3). Required before it runs anything. |
+| `projectDir` | Absolute path to the working folder Claude runs in |
+| `claudeBin` | Output of `which claude` (absolute path recommended) |
+| `permissionMode` | `plan` / `acceptEdits` / `bypassPermissions` — see [Security](#security) |
+| `model` | Empty = default. Or `opus` / `sonnet`, etc. |
+| `name` | (optional) Bot name shown in `/help` — handy for telling multiple bots apart |
+| `persona` | (optional) Role system prompt — defines a persona (developer/planner/…). See below |
+| `appendSystemPrompt` | (optional) Override the default "be concise for Telegram" instruction |
+| `env` | (optional) Extra environment variables passed to the `claude` process |
+
+State (`state.json`) and downloaded `attachments/` are written **next to the config file**, so
+projects stay isolated.
+
+### Usage details
+
+- **Concise mode**: a `--append-system-prompt` is applied by default so replies stay short for
+  Telegram. Override it via `appendSystemPrompt` (empty string disables it).
+- **Formatting**: the reply's Markdown (bold/code/headings/tables) is converted to Telegram-safe
+  HTML. If conversion ever produces invalid HTML, the message is automatically resent as plain text.
+- **Attachments**: send a photo/document/voice/video and it's downloaded into `attachments/`; the
+  absolute path is handed to Claude (caption included as the message). Images can be opened with Read.
+- **Sessions**: conversations resume automatically (`--resume`); the last session id is saved in
+  `state.json`, so context survives restarts. Use `/new` to start fresh.
+
+---
+
+## Running multiple projects
+
+The code is project-agnostic: make **one config file per project** and run several at once.
+
+- Run: `node bot.mjs /absolute/path/to/project.config.json` (no arg → `./config.json`)
+- `state.json` and `attachments/` live in the **config file's folder**, so projects don't mix.
+- **Note**: Telegram allows only one poller per token → each project needs its **own BotFather
+  token**.
+- For always-on, copy the launchd template per project (see below).
+
+Example — two projects:
+
+```
+~/projects/A/claudebot.config.json   (token A, projectDir=~/projects/A)
+~/projects/B/claudebot.config.json   (token B, projectDir=~/projects/B)
+node bot.mjs ~/projects/A/claudebot.config.json   # instance A
+node bot.mjs ~/projects/B/claudebot.config.json   # instance B
+```
+
+## Multiple personas (roles)
+
+You can split the **same project** into role-based bots (e.g. **Developer** + **Planner**).
+One codebase, **a separate config file per role**.
+
+- **`persona`**: a role system prompt in the config becomes that bot's identity. The concise-Telegram
+  instruction is injected automatically, so `persona` only needs the role itself.
+- **Differentiated permissions via `permissionMode`**: since the bots share a folder, keep the
+  shell-using bot (`bypassPermissions`) to **just one** to avoid concurrent-edit conflicts. For
+  read/plan-only, use `plan`.
+- **Session isolation**: the `state` filename is derived from the config name
+  (`config.json` → `state.json`, `dev.config.json` → `dev.config.state.json`), so multiple configs
+  in one folder don't share context.
+- **One token per bot**: each bot needs its own BotFather token (`allowedChatId` can be the same).
+
+Example — Developer + Planner:
+
+```
+dev.config.json       (permissionMode: bypassPermissions, persona: "Senior developer...")
+planner.config.json   (permissionMode: plan,              persona: "Product/UX planner...")
 node bot.mjs dev.config.json
 node bot.mjs planner.config.json
 ```
 
-| 봇 | permissionMode | 역할 |
+| Bot | permissionMode | Role |
 |---|---|---|
-| 개발자 | `bypassPermissions` | 코드 구현·수정·테스트·git |
-| 기획자 | `plan` (읽기·계획만) | 기능 제안·스펙·UX/디자인 방향 |
+| Developer | `bypassPermissions` | Implement, edit, test, git |
+| Planner | `plan` (read/plan only) | Feature proposals, specs, UX direction |
 
-> 상시 가동은 `com.claudebot.example.plist`를 **봇마다** 복사해 `Label`·config 인자·로그
-> 경로를 다르게 등록한다 (아래 launchd 섹션 참고).
-
----
-
-## ⚡ 빠른 시작 (내가 할 일)
-
-**1) 봇 토큰 발급** — 텔레그램에서 `@BotFather` → `/newbot` → 이름/username 지정 → 토큰 복사
-
-**2) 설정 파일 생성**
-```sh
-cd /Users/jtchoi/Projects/cube-brain-trainer/tools/claude-telegram-bot
-cp config.example.json config.json
-# config.json 에 BotFather 토큰만 붙여넣기 (allowedChatId 는 일단 비워둠)
-# permissionMode 는 이미 bypassPermissions 로 설정돼 있음
-```
-
-**3) chatId 알아내기 + 실행**
-```sh
-node bot.mjs
-# → 텔레그램에서 봇에게 아무 메시지나 전송 → 봇이 이 채팅의 chatId 를 답장
-# → 그 숫자를 config.json 의 allowedChatId 에 넣고 봇 재시작 (Ctrl+C 후 다시 node bot.mjs)
-# 이제 너만 사용 가능
-```
-
-**4) 사용** — 텔레그램으로 메시지 전송:
-- `cross 솔버 테스트 돌리고 통과하면 커밋 후 push 해줘`
-- `solve-2nd-floor-edges.ts 에 엣지 케이스 추가해줘`
-
-**5) 항상 켜두기** (선택)
-```sh
-cp com.cube.claudebot.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cube.claudebot.plist
-tail -f bot.log
-```
-
-> ⚠️ 봇은 현재 작업 브랜치(`develop`) 기준으로 동작함. push 시점 등 브랜치 관리는 메시지로 명확히 지시할 것.
-
-자세한 설명은 아래 섹션 참고.
+> For always-on, copy `com.claudebot.example.plist` **per bot** and register each with a distinct
+> `Label`, config argument, and log paths (see below).
 
 ---
 
-## 1. 봇 만들기 (BotFather)
+## How to run
 
-1. 텔레그램에서 **@BotFather** 검색 → 대화 시작
-2. `/newbot` 입력 → 봇 이름과 username 지정 (username은 `_bot`으로 끝나야 함)
-3. 받은 **토큰**을 복사 (예: `123456789:AAxxxxxxxx`)
-
-## 2. 설정
-
-```sh
-cd tools/claude-telegram-bot
-cp config.example.json config.json
-```
-
-`config.json` 편집:
-
-| 키 | 설명 |
-|---|---|
-| `token` | BotFather에서 받은 토큰 |
-| `allowedChatId` | **비워두고 시작** → 봇이 알려줌 (아래 3단계) |
-| `projectDir` | 작업 폴더 (기본값 그대로 두면 됨) |
-| `claudeBin` | `which claude` 결과 (절대경로 권장) |
-| `permissionMode` | `plan`(읽기·계획만) / `acceptEdits`(파일편집 자동승인) / `bypassPermissions`(전부 자동, 쉘 포함) |
-| `model` | 비워두면 기본 모델. `opus` / `sonnet` 등 |
-| `name` | (선택) `/help`에 표시되는 봇 이름 — 멀티 봇 구분용 |
-| `persona` | (선택) 역할 시스템 프롬프트 — 페르소나(개발자/기획자 등) 정의. 자세히는 아래 페르소나 섹션 |
-
-## 3. 내 chatId 알아내기
-
-```sh
-node bot.mjs
-```
-
-실행 후 텔레그램에서 봇에게 아무 메시지나 보내면, 봇이 **이 채팅의 chatId**를 답장해줌.
-그 숫자를 `config.json`의 `allowedChatId`에 넣고 봇을 재시작. → 이제 너만 쓸 수 있음.
-
-## 4. 사용
-
-봇에게 그냥 메시지를 보내면 됨:
-
-- `cross 솔버 테스트 돌려보고 결과 알려줘`
-- `solve-2nd-floor-edges.ts 에 엣지 케이스 추가해줘`
-
-명령어:
-- `/new` — 대화 맥락 초기화 (새 세션)
-- `/id` — 채팅 ID 확인
-- `/help` — 도움말
-
-세션은 자동으로 이어짐 (`--resume`). `state.json`에 마지막 세션 ID가 저장돼서
-봇을 재시작해도 맥락이 유지됨. 맥락을 끊고 싶으면 `/new`.
-
-### 응답 형식 / 첨부
-
-- **간결 모드**: 텔레그램용으로 짧게 답하도록 `--append-system-prompt`가 기본 적용됨.
-  지침을 바꾸려면 `config.json`의 `appendSystemPrompt`에 문자열을 넣으면 됨(빈 문자열이면 비활성).
-- **서식**: 응답의 마크다운(굵게/코드/제목/표)을 텔레그램 HTML로 변환해 전송함.
-  변환이 실패하는 예외 케이스는 자동으로 평문으로 재전송됨.
-- **파일 첨부**: 사진/문서/음성/영상을 보내면 `attachments/`에 내려받아 그 경로를
-  Claude에게 전달함(캡션은 메시지로 같이 전달). 이미지도 Read로 열어볼 수 있음.
-
----
-
-## 5. 실행 방법
-
-| 방법 | 터미널 닫으면 | 재부팅 후 | 크래시 시 | 용도 |
+| Method | When terminal closes | After reboot | On crash | Use for |
 |---|---|---|---|---|
-| `node bot.mjs` | 종료됨 | ✗ | ✗ | 테스트·chatId 확인 |
-| `nohup node bot.mjs > bot.log 2>&1 &` | 유지 | ✗ | ✗ | 임시 백그라운드 |
-| **launchd (LaunchAgent)** | 유지 | ✅ 자동 시작 | ✅ 자동 재시작 | **상시 가동 (권장)** |
+| `node bot.mjs` | stops | ✗ | ✗ | testing, finding chatId |
+| `nohup node bot.mjs > bot.log 2>&1 &` | survives | ✗ | ✗ | quick background run |
+| **launchd (LaunchAgent)** | survives | ✅ auto-start | ✅ auto-restart | **always-on (recommended)** |
 
-> `node bot.mjs &` 도 백그라운드로 돌긴 하지만 터미널을 닫으면 SIGHUP으로 같이 죽음.
-> 터미널을 닫아도 유지하려면 최소 `nohup`, 재부팅·크래시까지 견디려면 launchd.
+> `node bot.mjs &` also backgrounds it, but closing the terminal kills it (SIGHUP). Use `nohup` to
+> survive that, and launchd to survive reboots/crashes.
+
+## Always-on with launchd (macOS)
+
+Keeps the bot alive across reboots and crashes. It runs as a **LaunchAgent** in your login session,
+so it reuses Claude's keychain/OAuth auth.
+
+### 1. Check the plist (paths / node version)
+
+`com.claudebot.example.plist` assumes certain paths — fix them first if yours differ:
+
+```sh
+which node     # must match the node path in ProgramArguments
+which claude   # its directory must be on PATH (EnvironmentVariables)
+```
+
+Items to verify in the plist:
+
+- `ProgramArguments` [0] — absolute path to `node`
+- `ProgramArguments` [1] — absolute path to `bot.mjs`
+- `WorkingDirectory` — the project folder
+- `EnvironmentVariables > PATH` — includes your node/claude directories
+- `StandardOutPath` / `StandardErrorPath` — log file paths
+
+### 2. Register & start
+
+```sh
+cp com.claudebot.example.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.plist
+```
+
+> Modern macOS prefers `bootstrap`/`bootout`. The old `load`/`unload` still works but may print a
+> deprecation warning. If `bootstrap` fails, fall back to
+> `launchctl load ~/Library/LaunchAgents/com.claudebot.example.plist`.
+
+### 3. Manage
+
+```sh
+launchctl list | grep claudebot      # registered/running? (a PID means it's up)
+tail -f bot.log                      # run log
+tail -f bot.error.log                # error log
+
+# stop
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.plist
+
+# restart after editing code (bootout → bootstrap)
+launchctl bootout   gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.plist
+```
+
+### Troubleshooting
+
+- **`launchctl list` shows an error code with no PID** → check `bot.error.log`. Usually a node/claude
+  path issue (`command not found`) or a missing `config.json`.
+- **Bot doesn't respond** → Claude auth may have expired. Run `node bot.mjs` directly and confirm
+  `claude` is logged in.
+- **Mac is asleep → polling stops** → disable sleep in System Settings > Battery/Power.
+- **Repeated "polling error" (ETIMEDOUT)** → some networks block IPv6, so Node's fetch times out
+  against api.telegram.org (which has an IPv6 address). `bot.mjs` already works around this by
+  preferring IPv4 (`dns.setDefaultResultOrder('ipv4first')` + disabling auto-select). If it still
+  fails, check the network/firewall with `curl https://api.telegram.org`.
 
 ---
 
-## 6. 항상 켜두기 (launchd 설정)
+## Requirements
 
-맥 재부팅·크래시에도 자동으로 살아나는 상시 가동 방식. 로그인 세션에서 도는
-**LaunchAgent**라서 claude의 키체인/OAuth 인증을 그대로 사용함.
+- Node.js 18+ (for built-in `fetch`)
+- The `claude` CLI installed and authenticated on the host
+- A Telegram bot token from `@BotFather`
 
-### 6-1. plist 확인 (경로/노드 버전 점검)
+## License
 
-`com.cube.claudebot.plist`는 아래 경로들을 가정함. 다르면 먼저 수정:
-
-```sh
-which node     # ProgramArguments 첫 줄의 node 경로와 일치하는지
-which claude   # PATH 에 이 디렉토리가 포함됐는지 (EnvironmentVariables)
-```
-
-plist에서 확인할 항목:
-- `ProgramArguments` 1번째 — node 절대경로
-- `ProgramArguments` 2번째 — `bot.mjs` 절대경로
-- `WorkingDirectory` — 프로젝트 폴더
-- `EnvironmentVariables > PATH` — nvm node/claude 경로 포함
-- `StandardOutPath` / `StandardErrorPath` — 로그 파일 경로
-
-### 6-2. 등록 & 시작
-
-```sh
-cd /Users/jtchoi/Projects/cube-brain-trainer/tools/claude-telegram-bot
-cp com.cube.claudebot.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cube.claudebot.plist
-```
-
-> 최신 macOS 권장 방식은 `bootstrap`/`bootout`. 구버전(`load`/`unload`)도 동작하지만
-> deprecated 경고가 뜰 수 있음. `bootstrap`이 안 되면 `launchctl load ~/Library/LaunchAgents/com.cube.claudebot.plist`로 대체.
-
-### 6-3. 상태 확인 & 관리
-
-```sh
-launchctl list | grep claudebot      # 등록·동작 확인 (PID가 보이면 실행 중)
-tail -f bot.log                      # 실행 로그
-tail -f bot.error.log                # 에러 로그
-
-# 중지
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.cube.claudebot.plist
-
-# 코드 수정 후 재시작 (bootout → bootstrap)
-launchctl bootout   gui/$(id -u) ~/Library/LaunchAgents/com.cube.claudebot.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cube.claudebot.plist
-```
-
-### 6-4. 자주 겪는 문제
-
-- **`launchctl list`에 PID 없이 에러 코드만 보임** → `bot.error.log` 확인. 보통 node/claude
-  경로 문제(`command not found`)거나 `config.json` 누락.
-- **봇이 응답 없음** → claude 인증 만료일 수 있음. 터미널에서 `node bot.mjs` 직접 실행해
-  `claude` 로그인 상태부터 확인.
-- **맥이 잠자기 모드면 폴링도 멈춤** → 시스템 설정 > 배터리/전원에서 절전 해제 권장.
-- **"폴링 오류" 반복 (ETIMEDOUT)** → 일부 네트워크에서 IPv6 경로가 막혀 Node의 fetch가
-  api.telegram.org(IPv6 보유)에서 타임아웃나는 문제. `bot.mjs`가 IPv4 우선
-  (`dns.setDefaultResultOrder('ipv4first')` + 자동선택 끄기)으로 이미 회피하도록 돼 있음.
-  그래도 안 되면 `curl https://api.telegram.org` 로 네트워크/방화벽부터 확인.
-
----
-
-## ⚠️ 보안 주의
-
-- **반드시 `allowedChatId`를 설정**할 것. 안 하면 봇 토큰을 아는 누구나 네 맥에서 명령 실행 가능.
-- `permissionMode`:
-  - `acceptEdits` — 파일 편집은 자동 승인, 그 외(쉘 등)는 제한. 비교적 안전.
-  - `bypassPermissions` — 쉘 명령 포함 전부 자동 실행. 편하지만 위험. 텔레그램으로 보낸 한 줄이
-    네 맥에서 무엇이든 실행할 수 있다는 뜻이니 신중히.
-- `config.json`, `state.json`은 `.gitignore`에 포함됨 (토큰 커밋 방지).
+MIT © Jongtaek Choi
