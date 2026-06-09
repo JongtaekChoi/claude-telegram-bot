@@ -115,6 +115,12 @@ claude-telegram-bot ~/botconfigs/myproj/config.json
 여러 프로젝트/페르소나는 config 파일을 하나씩 더 만들어 경로를 넘기면 된다 —
 `state.json`·`attachments/`는 그 config 옆에 저장돼 안 섞인다.
 
+> **config는 git에 올리지 말 것.** config 파일엔 봇 토큰이 들어있다. git 레포 안에 config를 두면,
+> 그것(과 `state*.json`, `attachments/`)을 *그 프로젝트의* `.gitignore`에 추가해야 한다. 이 레포는
+> 이미 `config.json`, `config.*.json`, `*.config.json`, `state*.json`, `attachments/`를 무시하므로
+> `claudebot.config.json` 같은 이름도 여기선 안전하다 — 하지만 네 프로젝트는 네가 지정하기 전까진
+> 무시하지 않는다.
+
 ### 첫 실행 단계
 
 **1) 봇 토큰 발급** — 텔레그램에서 `@BotFather` → `/newbot` → 이름/username(`_bot`으로 끝나게) 지정 →

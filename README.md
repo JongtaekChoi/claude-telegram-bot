@@ -132,6 +132,12 @@ claude-telegram-bot ~/botconfigs/myproj/config.json
 Run several projects/personas by making one config file each and passing its path —
 `state.json` and `attachments/` live next to that config, so they don't mix.
 
+> **Keep your config out of git.** The config file holds your bot token. If you drop one inside a git
+> repo, add it (plus `state*.json` and `attachments/`) to *that* project's `.gitignore`. This repo
+> already ignores `config.json`, `config.*.json`, `*.config.json`, `state*.json`, and `attachments/`,
+> so any name like `claudebot.config.json` is covered here — but your own project won't ignore them
+> until you say so.
+
 ### First-run steps
 
 **1) Create a bot token** — In Telegram, open `@BotFather` → `/newbot` → pick a name and a
