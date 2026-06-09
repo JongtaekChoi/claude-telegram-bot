@@ -1,15 +1,16 @@
 {
-  "name": "봇 이름 (도움말/구분용, 선택)",
-  "token": "BOTFATHER_에서_받은_봇_토큰",
+  "name": "Bot name (shown in /help, for telling bots apart; optional)",
+  "token": "BOT_TOKEN_FROM_BOTFATHER",
   "allowedChatId": "",
   "projectDir": "/ABSOLUTE/PATH/TO/PROJECT",
-  "claudeBin": "/Users/jtchoi/.nvm/versions/node/v23.1.0/bin/claude",
+  "claudeBin": "/ABSOLUTE/PATH/TO/claude",
   "permissionMode": "bypassPermissions",
   "model": "",
-  "persona": "이 봇의 역할/말투를 정의하는 시스템 프롬프트 (선택). 멀티 봇(개발자/기획자 등)에서 페르소나 구분에 사용.",
+  "lang": "",
+  "persona": "System prompt defining this bot's role/voice (optional). Used to differentiate persona bots (developer/planner/...).",
   "appendSystemPrompt": "",
   "env": {},
   "schedule": [
-    { "cron": "0 9 * * 1-5", "label": "아침 브리핑", "prompt": "오늘 처리할 이슈/할 일을 요약해줘 (선택, 표준 cron 5필드: 분 시 일 월 요일)" }
+    { "cron": "0 9 * * 1-5", "label": "Morning brief", "prompt": "Summarize today's open issues and TODOs (optional; standard 5-field cron: min hour day month weekday)" }
   ]
 }

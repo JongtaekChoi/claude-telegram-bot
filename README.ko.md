@@ -93,6 +93,7 @@ claude-telegram-bot ~/botconfigs/myproj/config.json
 | `claudeBin` | `which claude` 결과 (절대경로 권장) |
 | `permissionMode` | `plan`(읽기·계획만) / `acceptEdits`(편집 자동 승인) / `bypassPermissions`(쉘 포함 전부 자동) |
 | `model` | 비우면 기본 모델. `opus`, `sonnet` 등 |
+| `lang` | (선택) UI 언어. 비우면 사용자별 자동 판별(기본 영어, 텔레그램이 한국어면 한국어). `"en"`/`"ko"`로 고정 가능 |
 | `name` | (선택) `/help`에 표시되는 봇 이름. 여러 봇 구분용 |
 | `persona` | (선택) 역할 시스템 프롬프트. 페르소나 봇 정의용 |
 | `appendSystemPrompt` | (선택) 기본 "간결하게 답하기" 지침을 직접 덮어쓸 때 |
@@ -117,6 +118,7 @@ claude-telegram-bot ~/botconfigs/myproj/config.json
 
 - **세션 유지** — 대화는 `--resume`으로 자동으로 이어집니다. 마지막 세션 ID가 `state.json`에 저장되므로 봇을 재시작해도 맥락이 남습니다. 새로 시작하려면 `/new`.
 - **간결한 답변** — 텔레그램에 맞게 짧게 답하도록 시스템 프롬프트가 기본으로 붙습니다. 바꾸려면 `appendSystemPrompt`에 직접 넣으세요 (빈 문자열이면 끔).
+- **언어** — 봇 자체 문구(`/help`, 명령 메뉴, 상태 메시지)는 **기본 영어**, 텔레그램이 한국어인 사용자에겐 한국어로 나옵니다. `lang`(`"en"`/`"ko"`)으로 고정할 수 있습니다. Claude의 실제 답변은 **사용자가 쓴 언어**를 따라갑니다. `/` 명령 메뉴는 `setMyCommands`로 언어별 등록됩니다.
 - **서식 변환** — 답변의 마크다운(굵게·코드·표 등)을 텔레그램 HTML로 바꿔 보냅니다. 변환이 깨지는 경우엔 평문으로 다시 보냅니다.
 - **첨부 파일** — 사진·문서·음성·영상을 보내면 `attachments/`에 내려받고, 그 경로를 Claude에게 전달합니다(캡션도 함께). 이미지는 Read로 열어볼 수 있습니다.
 

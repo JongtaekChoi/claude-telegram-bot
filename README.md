@@ -185,6 +185,7 @@ Edit `config.json`:
 | `claudeBin` | Output of `which claude` (absolute path recommended) |
 | `permissionMode` | `plan` / `acceptEdits` / `bypassPermissions` — see [Security](#security) |
 | `model` | Empty = default. Or `opus` / `sonnet`, etc. |
+| `lang` | (optional) UI language. Empty = auto-detect per user (English default, Korean for Korean Telegram clients). Force with `"en"` / `"ko"`. |
 | `name` | (optional) Bot name shown in `/help` — handy for telling multiple bots apart |
 | `persona` | (optional) Role system prompt — defines a persona (developer/planner/…). See below |
 | `appendSystemPrompt` | (optional) Override the default "be concise for Telegram" instruction |
@@ -198,6 +199,10 @@ projects stay isolated.
 
 - **Concise mode**: a `--append-system-prompt` is applied by default so replies stay short for
   Telegram. Override it via `appendSystemPrompt` (empty string disables it).
+- **Language**: the bot's own messages (`/help`, command menu, status text) are English by default
+  and switch to Korean for users whose Telegram client is Korean. Force one language with `lang`
+  (`"en"`/`"ko"`). Claude's actual replies follow the language you write in, regardless. The `/`
+  command menu is registered per-language via `setMyCommands`.
 - **Formatting**: the reply's Markdown (bold/code/headings/tables) is converted to Telegram-safe
   HTML. If conversion ever produces invalid HTML, the message is automatically resent as plain text.
 - **Attachments**: send a photo/document/voice/video and it's downloaded into `attachments/`; the
