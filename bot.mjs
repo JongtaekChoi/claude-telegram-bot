@@ -379,7 +379,7 @@ async function send(chatId, text) {
 }
 
 // ── Claude 실행 ───────────────────────────────────────────────────────────
-function runClaude(prompt, sessionId) {
+function runClaude(prompt, sessionId, opts = {}) {
   return new Promise((resolve) => {
     const args = [
       "-p",
@@ -389,13 +389,17 @@ function runClaude(prompt, sessionId) {
       "--permission-mode",
       cfg.permissionMode || "acceptEdits",
     ];
+    const model = state.model || cfg.model; // /model 로 바꾸면 state.model 우선
     const brevity =
       cfg.appendSystemPrompt ??
       "This reply is delivered over Telegram. Be concise — short paragraphs and lists, no filler intro/summary, avoid large tables. Reply in the user's language.";
-    // 페르소나(cfg.persona) + 간결 지침을 함께 주입 → 멀티 봇(역할별) 운영용
-    const appendSys = [cfg.persona, brevity].filter(Boolean).join("\n\n");
+    // opts.modelHint: 현재 모델을 주입 → 답변 끝에 상위 모델 권유 제안(판단은 Claude 본인)
+    const modelHint = opts.modelHint
+      ? `Current model: ${model || "claude (default)"}. Model tiers (low→high): haiku → sonnet → opus. If this question seems to require more capability than the current model, append one short line at the very end of your reply: 💡 \`/model sonnet\` (or \`/model opus\`) for a stronger answer. Omit the suggestion for simple questions.`
+      : null;
+    // 페르소나(cfg.persona) + 간결 지침 + 모델 힌트를 함께 주입 → 멀티 봇(역할별) 운영용
+    const appendSys = [cfg.persona, brevity, modelHint].filter(Boolean).join("\n\n");
     if (appendSys) args.push("--append-system-prompt", appendSys);
-    const model = state.model || cfg.model; // /model 로 바꾸면 state.model 우선
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
 
@@ -788,7 +792,7 @@ async function handle(msg) {
         await send(chatId, t(l, "attachFail", e.message));
       }
     }
-    const res = await runClaude(prompt, state.sessionId);
+    const res = await runClaude(prompt, state.sessionId, { modelHint: true });
     if (res.sessionId) {
       state.sessionId = res.sessionId;
       saveState(state);
