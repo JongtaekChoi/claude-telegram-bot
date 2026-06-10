@@ -154,7 +154,7 @@ auth layer.)
 - `run the solver tests and commit + push if they pass`
 - `add an edge case to solve-2nd-floor-edges.ts`
 
-Commands: `/new` (reset context / new session) · `/cron` (list / add / remove scheduled tasks) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/id` (show chat ID) · `/help`.
+Commands: `/new` (reset context / new session) · `/cron` (list / add / remove scheduled tasks) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/model` (view / switch the model) · `/id` (show chat ID) · `/help`.
 
 > **`/restart`** runs `node --check` on `bot.mjs` first and **aborts the restart if it has a syntax
 > error** (so a bad edit can't crash-loop the bot), then exits — relying on a process supervisor
@@ -184,7 +184,7 @@ Edit `config.json`:
 | `projectDir` | Absolute path to the working folder Claude runs in |
 | `claudeBin` | Output of `which claude` (absolute path recommended) |
 | `permissionMode` | `plan` / `acceptEdits` / `bypassPermissions` — see [Security](#security) |
-| `model` | Empty = default. Or `opus` / `sonnet`, etc. |
+| `model` | Empty = default. Or `opus` / `sonnet`, etc. Override at runtime with `/model` (persists in state). |
 | `lang` | (optional) UI language. Empty = auto-detect per user (English default, Korean for Korean Telegram clients). Force with `"en"` / `"ko"`. |
 | `name` | (optional) Bot name shown in `/help` — handy for telling multiple bots apart |
 | `persona` | (optional) Role system prompt — defines a persona (developer/planner/…). See below |

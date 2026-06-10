@@ -129,6 +129,7 @@ const STR = {
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
       "• /restart — restart the bot (after a syntax check)\n" +
       "• /status — bot status & version\n" +
+      "• /model — view / switch the model\n" +
       "• /id — show this chat ID\n" +
       `\nWorking dir: ${cfg.projectDir}\nPermission mode: ${cfg.permissionMode}`,
     newSession: "🆕 Started a new conversation (previous context cleared).",
@@ -168,6 +169,12 @@ const STR = {
       `• Scheduled jobs: ${i.jobs}\n` +
       `• Project: ${i.projectDir}\n` +
       `• Permission: ${i.permissionMode}`,
+    modelStatus: (cur, list) =>
+      `🧠 Model: ${cur}\n` +
+      `Switch: ${list.map((x) => `/model ${x}`).join(" · ")} (or a full model id)\n` +
+      `/model default — clear the override`,
+    modelSet: (m) => `🧠 Model set to: ${m}`,
+    modelReset: (def) => `🧠 Model reset to default (${def}).`,
   },
   ko: {
     help: () =>
@@ -177,6 +184,7 @@ const STR = {
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
       "• /restart — 봇 재시작 (문법 검사 후 안전하게)\n" +
       "• /status — 봇 상태·버전 보기\n" +
+      "• /model — 모델 보기·전환\n" +
       "• /id — 이 채팅 ID 확인\n" +
       `\n작업 폴더: ${cfg.projectDir}\n권한 모드: ${cfg.permissionMode}`,
     newSession: "🆕 새 대화를 시작합니다 (이전 맥락 초기화).",
@@ -215,12 +223,21 @@ const STR = {
       `• 예약 작업: ${i.jobs}개\n` +
       `• 작업 폴더: ${i.projectDir}\n` +
       `• 권한 모드: ${i.permissionMode}`,
+    modelStatus: (cur, list) =>
+      `🧠 현재 모델: ${cur}\n` +
+      `전환: ${list.map((x) => `/model ${x}`).join(" · ")} (또는 전체 모델 ID)\n` +
+      `/model default — 오버라이드 해제`,
+    modelSet: (m) => `🧠 모델을 ${m} (으)로 설정했습니다.`,
+    modelReset: (def) => `🧠 모델을 기본값(${def})으로 되돌렸습니다.`,
   },
 };
 const t = (l, key, ...a) => {
   const v = (STR[l] || STR.en)[key];
   return typeof v === "function" ? v(...a) : v;
 };
+
+// /model 에서 보여줄 추천 별칭(claude CLI 가 별칭·전체 모델 ID 모두 허용).
+const MODEL_SUGGESTIONS = ["opus", "sonnet", "haiku"];
 
 // /(슬래시) 자동완성 메뉴용 명령 목록 (언어별). setMyCommands 로 등록.
 const COMMANDS = {
@@ -229,6 +246,7 @@ const COMMANDS = {
     { command: "cron", description: "List / add / remove scheduled tasks" },
     { command: "restart", description: "Restart the bot (after syntax check)" },
     { command: "status", description: "Bot status / version" },
+    { command: "model", description: "View / switch the model" },
     { command: "id", description: "Show this chat ID" },
     { command: "help", description: "Help" },
   ],
@@ -237,6 +255,7 @@ const COMMANDS = {
     { command: "cron", description: "예약 작업 보기·추가·삭제" },
     { command: "restart", description: "봇 재시작 (문법 검사 후)" },
     { command: "status", description: "봇 상태·버전 보기" },
+    { command: "model", description: "모델 보기·전환" },
     { command: "id", description: "이 채팅 ID 확인" },
     { command: "help", description: "도움말" },
   ],
@@ -260,7 +279,7 @@ function saveState(s) {
   }
 }
 migrateData(); // 루트 직하 → .claude-bot/ 1회 이주(있으면) 후 state 로드
-let state = loadState(); // { sessionId?, cron?: [{ id, cron, prompt, label? }], restartNotify? }
+let state = loadState(); // { sessionId?, cron?: [{ id, cron, prompt, label? }], restartNotify?, model? }
 
 // ── 텔레그램 헬퍼 ─────────────────────────────────────────────────────────
 async function tg(method, body) {
@@ -376,7 +395,8 @@ function runClaude(prompt, sessionId) {
     // 페르소나(cfg.persona) + 간결 지침을 함께 주입 → 멀티 봇(역할별) 운영용
     const appendSys = [cfg.persona, brevity].filter(Boolean).join("\n\n");
     if (appendSys) args.push("--append-system-prompt", appendSys);
-    if (cfg.model) args.push("--model", cfg.model);
+    const model = state.model || cfg.model; // /model 로 바꾸면 state.model 우선
+    if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
 
     const child = spawn(cfg.claudeBin || "claude", args, {
@@ -684,13 +704,31 @@ async function handle(msg) {
       t(l, "status", {
         version: VERSION,
         name: cfg.name || "claude-telegram-bot",
-        model: cfg.model || (l === "ko" ? "(기본값)" : "(default)"),
+        model: state.model || cfg.model || (l === "ko" ? "(기본값)" : "(default)"),
         hasSession: Boolean(state.sessionId),
         jobs: schedule.length,
         projectDir: cfg.projectDir,
         permissionMode: cfg.permissionMode || "acceptEdits",
       }),
     );
+    return;
+  }
+  if (text === "/model" || text.startsWith("/model ")) {
+    const arg = text.slice(6).trim();
+    if (!arg) {
+      const cur = state.model || cfg.model || (l === "ko" ? "(기본값)" : "(default)");
+      await send(chatId, t(l, "modelStatus", cur, MODEL_SUGGESTIONS));
+      return;
+    }
+    if (arg === "default" || arg === "reset") {
+      state.model = undefined;
+      saveState(state);
+      await send(chatId, t(l, "modelReset", cfg.model || (l === "ko" ? "기본값" : "default")));
+      return;
+    }
+    state.model = arg;
+    saveState(state);
+    await send(chatId, t(l, "modelSet", arg));
     return;
   }
   if (text === "/cron" || text.startsWith("/cron ")) {

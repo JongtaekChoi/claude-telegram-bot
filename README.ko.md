@@ -92,7 +92,7 @@ claude-telegram-bot ~/botconfigs/myproj/config.json
 | `projectDir` | Claude가 작업할 폴더의 절대경로 |
 | `claudeBin` | `which claude` 결과 (절대경로 권장) |
 | `permissionMode` | `plan`(읽기·계획만) / `acceptEdits`(편집 자동 승인) / `bypassPermissions`(쉘 포함 전부 자동) |
-| `model` | 비우면 기본 모델. `opus`, `sonnet` 등 |
+| `model` | 비우면 기본 모델. `opus`, `sonnet` 등. 런타임에 `/model`로 전환 가능(state에 저장) |
 | `lang` | (선택) UI 언어. 비우면 사용자별 자동 판별(기본 영어, 텔레그램이 한국어면 한국어). `"en"`/`"ko"`로 고정 가능 |
 | `name` | (선택) `/help`에 표시되는 봇 이름. 여러 봇 구분용 |
 | `persona` | (선택) 역할 시스템 프롬프트. 페르소나 봇 정의용 |
@@ -110,7 +110,7 @@ claude-telegram-bot ~/botconfigs/myproj/config.json
    - `테스트 돌려보고 통과하면 커밋하고 push 해줘`
    - `api.ts 에 에러 핸들링 추가해줘`
 
-명령어: `/new`(맥락 초기화) · `/cron`(예약 작업 보기·추가·삭제) · `/restart`(문법 검사 후 재시작) · `/status`(봇 상태·버전) · `/id`(채팅 ID 확인) · `/help`(도움말)
+명령어: `/new`(맥락 초기화) · `/cron`(예약 작업 보기·추가·삭제) · `/restart`(문법 검사 후 재시작) · `/status`(봇 상태·버전) · `/model`(모델 보기·전환) · `/id`(채팅 ID 확인) · `/help`(도움말)
 
 > **`/restart`** 는 먼저 `bot.mjs` 에 `node --check` 를 돌려 **문법 오류가 있으면 재시작을 취소**합니다(잘못된 수정이 봇을 크래시 루프에 빠뜨리는 것 방지). 통과하면 프로세스를 종료하고, 다시 띄우는 건 프로세스 관리자에게 맡깁니다. [launchd 설정](#상시-실행-launchd)(`KeepAlive`)이면 바로 동작하고, 관리자 없이 `node bot.mjs` 로만 돌리면 그냥 멈춥니다. 재시작 후 대화 세션은 `state.json` 의 ID로 이어집니다.
 
