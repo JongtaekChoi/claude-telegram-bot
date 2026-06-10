@@ -435,6 +435,15 @@ async function runScheduled(job) {
   const started = Date.now();
   try {
     const res = await runClaude(job.prompt, undefined); // 새 세션 (state 미저장)
+    // 조용한 예약 작업: 출력이 비었거나 정확히 "SKIP"이면 전송하지 않는다.
+    // (예: "조건 충족 시에만 알리고, 아니면 SKIP만 출력해" 식의 조건부 알림용)
+    if (res.ok) {
+      const body = (res.text || "").trim();
+      if (!body || /^skip$/i.test(body)) {
+        console.log(`Scheduled job suppressed (empty/SKIP): ${job.label || job.cron}`);
+        return;
+      }
+    }
     const secs = Math.round((Date.now() - started) / 1000);
     const label = job.label || job.cron;
     const footer = res.ok

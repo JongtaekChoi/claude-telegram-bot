@@ -231,6 +231,10 @@ checks, reminders. Each entry runs the prompt and sends the result to `allowedCh
 - **Fresh session**: scheduled jobs run in their **own session** so they never pollute your
   interactive conversation context (`state.json` stays yours). They share the single-task lock,
   so a job is **skipped** (logged) if a task is already running when it fires.
+- **Silent jobs (conditional alerts)**: if Claude's output is **empty or exactly `SKIP`**, that run
+  sends **nothing** to Telegram. To get "alert only when it matters, stay quiet otherwise," tell the
+  prompt to *output just `SKIP` when the condition isn't met*. This lets even frequent jobs (e.g.
+  every 5 minutes) run without spamming the chat.
 
 **Add jobs from the chat — in plain language:**
 
