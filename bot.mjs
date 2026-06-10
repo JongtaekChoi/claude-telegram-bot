@@ -14,7 +14,7 @@
 // 자동 판별하고, cfg.lang 을 주면 그 언어로 고정함. 콘솔/CLI 출력은 영어 단일.
 
 import { basename, dirname, join } from "node:path";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 
 import dns from "node:dns";
 import { fileURLToPath } from "node:url";
@@ -73,13 +73,33 @@ Requires: the claude CLI installed and authenticated on the host.`);
 // isolated. Falls back to ./config.json for the single-project setup.
 const CONFIG_PATH = process.argv[2] || process.env.BOT_CONFIG || join(HERE, "config.json");
 const DATA_DIR = dirname(CONFIG_PATH);
-// state 파일은 config 이름에서 파생 → 같은 폴더에 여러 페르소나 config 를 둬도 세션이 안 섞임.
-// config.json → state.json (단일 봇 호환), 그 외 foo.json → foo.state.json.
+// 데이터(state·attachments)는 config 폴더 아래 숨김 폴더 .claude-bot/ 에 모은다.
+// state 파일명은 config 이름에서 파생 → 여러 페르소나 config 가 한 .claude-bot/ 를 공유해도 안 섞임
+// (config.json → state.json, 그 외 foo.json → foo.state.json).
 const stateBase = basename(CONFIG_PATH, ".json");
-const STATE_PATH = join(
-  DATA_DIR,
-  stateBase === "config" ? "state.json" : `${stateBase}.state.json`,
-);
+const stateFile = stateBase === "config" ? "state.json" : `${stateBase}.state.json`;
+const BOT_DIR = join(DATA_DIR, ".claude-bot");
+const STATE_PATH = join(BOT_DIR, stateFile);
+const ATTACH_DIR = join(BOT_DIR, "attachments");
+const LEGACY_STATE_PATH = join(DATA_DIR, stateFile); // 구버전(루트 직하) 호환
+const LEGACY_ATTACH_DIR = join(DATA_DIR, "attachments");
+
+// 구버전에서 올라온 경우, 루트 직하 데이터를 .claude-bot/ 로 1회 이동(무손실, 실패 시 기존 경로 폴백).
+function migrateData() {
+  try {
+    mkdirSync(BOT_DIR, { recursive: true });
+    if (!existsSync(STATE_PATH) && existsSync(LEGACY_STATE_PATH)) {
+      renameSync(LEGACY_STATE_PATH, STATE_PATH);
+      console.log(`Migrated state → ${STATE_PATH}`);
+    }
+    if (!existsSync(ATTACH_DIR) && existsSync(LEGACY_ATTACH_DIR)) {
+      renameSync(LEGACY_ATTACH_DIR, ATTACH_DIR);
+      console.log(`Migrated attachments → ${ATTACH_DIR}`);
+    }
+  } catch (e) {
+    console.error("Data migration skipped:", e.message);
+  }
+}
 
 if (!existsSync(CONFIG_PATH)) {
   console.error(
@@ -224,11 +244,13 @@ const COMMANDS = {
 
 // ── 상태 (세션 이어가기용) ────────────────────────────────────────────────
 function loadState() {
-  try {
-    return JSON.parse(readFileSync(STATE_PATH, "utf8"));
-  } catch {
-    return {};
+  // 새 경로(.claude-bot/) 우선, 없으면 구버전 루트 경로로 폴백(이주 실패 시 안전망).
+  for (const p of [STATE_PATH, LEGACY_STATE_PATH]) {
+    try {
+      return JSON.parse(readFileSync(p, "utf8"));
+    } catch {}
   }
+  return {};
 }
 function saveState(s) {
   try {
@@ -237,6 +259,7 @@ function saveState(s) {
     console.error("Failed to save state", e);
   }
 }
+migrateData(); // 루트 직하 → .claude-bot/ 1회 이주(있으면) 후 state 로드
 let state = loadState(); // { sessionId?, cron?: [{ id, cron, prompt, label? }], restartNotify? }
 
 // ── 텔레그램 헬퍼 ─────────────────────────────────────────────────────────
@@ -616,7 +639,7 @@ async function downloadAttachment(att) {
   const r = await fetch(`https://api.telegram.org/file/bot${cfg.token}/${filePath}`);
   if (!r.ok) throw new Error(`download failed ${r.status}`);
   const buf = Buffer.from(await r.arrayBuffer());
-  const dir = join(DATA_DIR, "attachments");
+  const dir = ATTACH_DIR;
   mkdirSync(dir, { recursive: true });
   const ext = filePath.includes(".") ? filePath.slice(filePath.lastIndexOf(".")) : "";
   const name = att.name || `tg-${att.fileId.slice(-10)}${ext}`;

@@ -192,8 +192,10 @@ Edit `config.json`:
 | `env` | (optional) Extra environment variables passed to the `claude` process |
 | `schedule` | (optional) Cron jobs that run a prompt on a timer — see [Scheduled tasks](#scheduled-tasks-cron) |
 
-State (`state.json`) and downloaded `attachments/` are written **next to the config file**, so
-projects stay isolated.
+State and downloaded attachments live in a hidden **`.claude-bot/`** folder next to the config
+file, so projects stay isolated. Upgrading from an older version **auto-moves** an existing
+`state.json` / `attachments/` into `.claude-bot/` on first start (no data loss). Logs stay wherever
+your launchd plist points them.
 
 ### Usage details
 

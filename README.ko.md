@@ -100,7 +100,7 @@ claude-telegram-bot ~/botconfigs/myproj/config.json
 | `env` | (선택) `claude` 프로세스에 넘길 환경 변수 |
 | `schedule` | (선택) 정해진 시각에 프롬프트를 실행하는 cron 작업 — [예약 작업](#예약-작업-cron) 참고 |
 
-`state.json`과 첨부 파일(`attachments/`)은 config 파일과 같은 폴더에 저장됩니다. 그래서 config만 따로 두면 프로젝트끼리 섞이지 않습니다.
+`state`와 첨부 파일은 config 파일 옆 **`.claude-bot/` 숨김 폴더**에 저장됩니다(프로젝트 격리). 구버전에서 올리면 첫 시작 때 기존 `state.json`·`attachments/`를 `.claude-bot/`로 **자동 이동**합니다(무손실). 로그는 launchd plist가 가리키는 위치 그대로입니다.
 
 ## 첫 실행
 

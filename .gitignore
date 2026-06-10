@@ -2,6 +2,7 @@ config.json
 config.*.json
 *.config.json
 !config.example.json
+.claude-bot/
 state.json
 state.*.json
 *.state.json
