@@ -28,6 +28,14 @@ if (net.setDefaultAutoSelectFamily) net.setDefaultAutoSelectFamily(false);
 
 const SELF = fileURLToPath(import.meta.url); // /restart 자기 문법검사용
 const HERE = dirname(SELF);
+// package.json 버전을 1회만 읽어 캐시 (--version, /status 에서 사용).
+const VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(join(HERE, "package.json"), "utf8")).version;
+  } catch {
+    return "?";
+  }
+})();
 
 // ── CLI (help / version / init) ───────────────────────────────────────────
 {
@@ -45,7 +53,7 @@ Requires: the claude CLI installed and authenticated on the host.`);
     process.exit(0);
   }
   if (a === "-v" || a === "--version") {
-    console.log(JSON.parse(readFileSync(join(HERE, "package.json"), "utf8")).version);
+    console.log(VERSION);
     process.exit(0);
   }
   if (a === "init") {
@@ -100,6 +108,7 @@ const STR = {
       "• /new — reset conversation context (new session)\n" +
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
       "• /restart — restart the bot (after a syntax check)\n" +
+      "• /status — bot status & version\n" +
       "• /id — show this chat ID\n" +
       `\nWorking dir: ${cfg.projectDir}\nPermission mode: ${cfg.permissionMode}`,
     newSession: "🆕 Started a new conversation (previous context cleared).",
@@ -131,6 +140,14 @@ const STR = {
     extractNoUnderstand: "Couldn't understand the schedule. Try rephrasing.",
     extractBadCron: (cron) => `Couldn't parse cron: ${cron}`,
     extractNoPrompt: "Couldn't find what to run.",
+    status: (i) =>
+      `🤖 ${i.name}\n` +
+      `• Version: ${i.version}\n` +
+      `• Model: ${i.model}\n` +
+      `• Session: ${i.hasSession ? "active" : "none (fresh)"}\n` +
+      `• Scheduled jobs: ${i.jobs}\n` +
+      `• Project: ${i.projectDir}\n` +
+      `• Permission: ${i.permissionMode}`,
   },
   ko: {
     help: () =>
@@ -139,6 +156,7 @@ const STR = {
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
       "• /restart — 봇 재시작 (문법 검사 후 안전하게)\n" +
+      "• /status — 봇 상태·버전 보기\n" +
       "• /id — 이 채팅 ID 확인\n" +
       `\n작업 폴더: ${cfg.projectDir}\n권한 모드: ${cfg.permissionMode}`,
     newSession: "🆕 새 대화를 시작합니다 (이전 맥락 초기화).",
@@ -169,6 +187,14 @@ const STR = {
     extractNoUnderstand: "일정을 이해하지 못했어요. 다르게 표현해 보세요.",
     extractBadCron: (cron) => `cron 해석 실패: ${cron}`,
     extractNoPrompt: "무엇을 실행할지 찾지 못했어요.",
+    status: (i) =>
+      `🤖 ${i.name}\n` +
+      `• 버전: ${i.version}\n` +
+      `• 모델: ${i.model}\n` +
+      `• 세션: ${i.hasSession ? "이어가는 중" : "없음 (새 세션)"}\n` +
+      `• 예약 작업: ${i.jobs}개\n` +
+      `• 작업 폴더: ${i.projectDir}\n` +
+      `• 권한 모드: ${i.permissionMode}`,
   },
 };
 const t = (l, key, ...a) => {
@@ -182,6 +208,7 @@ const COMMANDS = {
     { command: "new", description: "Reset context (new session)" },
     { command: "cron", description: "List / add / remove scheduled tasks" },
     { command: "restart", description: "Restart the bot (after syntax check)" },
+    { command: "status", description: "Bot status / version" },
     { command: "id", description: "Show this chat ID" },
     { command: "help", description: "Help" },
   ],
@@ -189,6 +216,7 @@ const COMMANDS = {
     { command: "new", description: "대화 맥락 초기화 (새 세션)" },
     { command: "cron", description: "예약 작업 보기·추가·삭제" },
     { command: "restart", description: "봇 재시작 (문법 검사 후)" },
+    { command: "status", description: "봇 상태·버전 보기" },
     { command: "id", description: "이 채팅 ID 확인" },
     { command: "help", description: "도움말" },
   ],
@@ -625,6 +653,21 @@ async function handle(msg) {
   }
   if (text === "/id") {
     await send(chatId, `chatId: ${chatId}`);
+    return;
+  }
+  if (text === "/status") {
+    await send(
+      chatId,
+      t(l, "status", {
+        version: VERSION,
+        name: cfg.name || "claude-telegram-bot",
+        model: cfg.model || (l === "ko" ? "(기본값)" : "(default)"),
+        hasSession: Boolean(state.sessionId),
+        jobs: schedule.length,
+        projectDir: cfg.projectDir,
+        permissionMode: cfg.permissionMode || "acceptEdits",
+      }),
+    );
     return;
   }
   if (text === "/cron" || text.startsWith("/cron ")) {

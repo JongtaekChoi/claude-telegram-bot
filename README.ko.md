@@ -110,7 +110,7 @@ claude-telegram-bot ~/botconfigs/myproj/config.json
    - `테스트 돌려보고 통과하면 커밋하고 push 해줘`
    - `api.ts 에 에러 핸들링 추가해줘`
 
-명령어: `/new`(맥락 초기화) · `/cron`(예약 작업 보기·추가·삭제) · `/restart`(문법 검사 후 재시작) · `/id`(채팅 ID 확인) · `/help`(도움말)
+명령어: `/new`(맥락 초기화) · `/cron`(예약 작업 보기·추가·삭제) · `/restart`(문법 검사 후 재시작) · `/status`(봇 상태·버전) · `/id`(채팅 ID 확인) · `/help`(도움말)
 
 > **`/restart`** 는 먼저 `bot.mjs` 에 `node --check` 를 돌려 **문법 오류가 있으면 재시작을 취소**합니다(잘못된 수정이 봇을 크래시 루프에 빠뜨리는 것 방지). 통과하면 프로세스를 종료하고, 다시 띄우는 건 프로세스 관리자에게 맡깁니다. [launchd 설정](#상시-실행-launchd)(`KeepAlive`)이면 바로 동작하고, 관리자 없이 `node bot.mjs` 로만 돌리면 그냥 멈춥니다. 재시작 후 대화 세션은 `state.json` 의 ID로 이어집니다.
 

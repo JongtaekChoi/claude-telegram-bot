@@ -154,7 +154,7 @@ auth layer.)
 - `run the solver tests and commit + push if they pass`
 - `add an edge case to solve-2nd-floor-edges.ts`
 
-Commands: `/new` (reset context / new session) · `/cron` (list / add / remove scheduled tasks) · `/restart` (syntax-check & restart the bot) · `/id` (show chat ID) · `/help`.
+Commands: `/new` (reset context / new session) · `/cron` (list / add / remove scheduled tasks) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/id` (show chat ID) · `/help`.
 
 > **`/restart`** runs `node --check` on `bot.mjs` first and **aborts the restart if it has a syntax
 > error** (so a bad edit can't crash-loop the bot), then exits — relying on a process supervisor
