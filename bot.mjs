@@ -134,6 +134,7 @@ const STR = {
       `\nWorking dir: ${cfg.projectDir}\nPermission mode: ${cfg.permissionMode}`,
     newSession: "🆕 Started a new conversation (previous context cleared).",
     busy: "⏳ A previous task is still running. Please try again when it finishes.",
+    queued: (n) => `⏳ Queued (#${n}). Will run when the current task finishes.`,
     localBusy: "💻 A local `ctb claude` session is active. Send a message when it's done.",
     needChatId: (id) => `Add this chat ID to "allowedChatId" in config.json:\n${id}`,
     cronEmpty:
@@ -190,6 +191,7 @@ const STR = {
       `\n작업 폴더: ${cfg.projectDir}\n권한 모드: ${cfg.permissionMode}`,
     newSession: "🆕 새 대화를 시작합니다 (이전 맥락 초기화).",
     busy: "⏳ 이전 작업이 아직 진행 중입니다. 끝나면 다시 보내주세요.",
+    queued: (n) => `⏳ 대기열에 추가됐습니다 (${n}번째). 현재 작업이 끝나면 자동으로 실행됩니다.`,
     localBusy: "💻 로컬 `ctb claude` 세션이 활성화되어 있습니다. 종료 후 메시지를 보내주세요.",
     needChatId: (id) => `이 채팅 ID를 config.json 의 allowedChatId 에 넣으세요:\n${id}`,
     cronEmpty:
@@ -693,6 +695,7 @@ async function downloadAttachment(att) {
 
 // ── 메시지 처리 ───────────────────────────────────────────────────────────
 let busy = false;
+const msgQueue = []; // { msg, receivedAt } — busy 중 수신 메시지 대기열
 
 async function handle(msg) {
   const chatId = msg.chat?.id;
@@ -785,7 +788,8 @@ async function handle(msg) {
   }
 
   if (busy) {
-    await send(chatId, t(l, "busy"));
+    msgQueue.push({ msg, receivedAt: Date.now() });
+    await send(chatId, t(l, "queued", msgQueue.length));
     return;
   }
   if (checkLocalLock()) {
@@ -830,6 +834,7 @@ async function handle(msg) {
   } finally {
     clearInterval(typing);
     busy = false;
+    if (msgQueue.length > 0) setImmediate(() => handle(msgQueue.shift().msg));
   }
 }
 
