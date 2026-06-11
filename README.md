@@ -118,11 +118,10 @@ Prerequisites: **Node 18+** and the **`claude` CLI installed and authenticated**
 **Option A — npx (no install)**
 
 ```sh
-npx claude-telegram-bot init             # writes ./config.json
-npx claude-telegram-bot init mybot.json  # or pick your own filename
+npx claude-telegram-bot init             # writes ./mybot.json
+npx claude-telegram-bot init myapp.json  # or pick your own filename
 # edit the config (token, projectDir, …)
-npx claude-telegram-bot                  # runs ./config.json
-npx claude-telegram-bot mybot.json       # or pass the path directly
+npx claude-telegram-bot                  # runs ./mybot.json (falls back to config.json)
 ```
 
 **Option B — global install (recommended for an always-on daemon)**
@@ -130,8 +129,8 @@ npx claude-telegram-bot mybot.json       # or pass the path directly
 ```sh
 npm i -g claude-telegram-bot
 
-claude-telegram-bot init ~/botconfigs/myproj           # writes ~/botconfigs/myproj/config.json
-claude-telegram-bot init ~/botconfigs/myproj/mybot.json  # or a custom filename
+claude-telegram-bot init ~/botconfigs/myproj             # writes ~/botconfigs/myproj/mybot.json
+claude-telegram-bot init ~/botconfigs/myproj/myapp.json  # or a custom filename
 # edit the config (token, projectDir, …)
 claude-telegram-bot ~/botconfigs/myproj/mybot.json
 ```
@@ -152,7 +151,7 @@ Run several projects/personas by making one config file each and passing its pat
 leave `allowedChatId` empty for now.
 
 **2) Find your chatId and lock the bot to it** — Start the bot (`claude-telegram-bot …`), send it any
-message in Telegram; it replies with this chat's `chatId`. Put that number into `config.json`
+message in Telegram; it replies with this chat's `chatId`. Put that number into `mybot.json`
 `allowedChatId` and restart. Now only you can use it. (See [Security](#security) — this is your only
 auth layer.)
 
@@ -175,18 +174,18 @@ Commands: `/new` (reset context / new session) · `/stop` (stop current task; `-
 
 **4) Keep it always on (optional)** — see [Always-on with launchd](#always-on-with-launchd-macos).
 
-> **From source** (for hacking on the bot): clone the repo, `cp config.example.json config.json`,
-> then `node bot.mjs [config.json]`. Same behavior as the CLI.
+> **From source** (for hacking on the bot): clone the repo, `cp config.example.json mybot.json`,
+> then `node bot.mjs [mybot.json]`. Same behavior as the CLI.
 
 ---
 
 ## Configuration
 
 ```sh
-cp config.example.json config.json
+cp config.example.json mybot.json
 ```
 
-Edit `config.json`:
+Edit `mybot.json`:
 
 | Key | Description |
 |---|---|
@@ -273,7 +272,7 @@ Config-defined jobs still require a restart to change; only chat-added jobs are 
 
 The code is project-agnostic: make **one config file per project** and run several at once.
 
-- Run: `node bot.mjs /absolute/path/to/project.config.json` (no arg → `./config.json`)
+- Run: `node bot.mjs /absolute/path/to/project.config.json` (no arg → `./mybot.json`, fallback `./config.json`)
 - `state.json` and `attachments/` live in the **config file's folder**, so projects don't mix.
 - **Note**: Telegram allows only one poller per token → each project needs its **own BotFather
   token**.
@@ -299,7 +298,7 @@ One codebase, **a separate config file per role**.
   shell-using bot (`bypassPermissions`) to **just one** to avoid concurrent-edit conflicts. For
   read/plan-only, use `plan`.
 - **Session isolation**: the `state` filename is derived from the config name
-  (`config.json` → `state.json`, `dev.config.json` → `dev.config.state.json`), so multiple configs
+  (`mybot.json` → `mybot.state.json`, `dev.config.json` → `dev.config.state.json`), so multiple configs
   in one folder don't share context.
 - **One token per bot**: each bot needs its own BotFather token (`allowedChatId` can be the same).
 

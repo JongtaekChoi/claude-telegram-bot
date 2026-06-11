@@ -58,7 +58,7 @@ Requires: the claude CLI installed and authenticated on the host.`);
   }
   if (a === "init") {
     const arg = process.argv[3];
-    const target = arg?.endsWith(".json") ? resolve(arg) : join(arg || process.cwd(), "config.json");
+    const target = arg?.endsWith(".json") ? resolve(arg) : join(arg || process.cwd(), "mybot.json");
     if (existsSync(target)) {
       console.error(`Already exists: ${target}`);
       process.exit(1);
@@ -71,8 +71,9 @@ Requires: the claude CLI installed and authenticated on the host.`);
 
 // Config path via arg or BOT_CONFIG env so one shared codebase can drive many
 // projects; state + attachments live next to that config, keeping projects
-// isolated. Falls back to ./config.json for the single-project setup.
-const CONFIG_PATH = process.argv[2] || process.env.BOT_CONFIG || join(HERE, "config.json");
+// isolated. Defaults to mybot.json, falls back to config.json for existing setups.
+const _defaultCfg = existsSync(join(HERE, "mybot.json")) ? join(HERE, "mybot.json") : join(HERE, "config.json");
+const CONFIG_PATH = process.argv[2] || process.env.BOT_CONFIG || _defaultCfg;
 const DATA_DIR = dirname(CONFIG_PATH);
 // 데이터(state·attachments)는 config 폴더 아래 숨김 폴더 .claude-bot/ 에 모은다.
 // state 파일명은 config 이름에서 파생 → 여러 페르소나 config 가 한 .claude-bot/ 를 공유해도 안 섞임
