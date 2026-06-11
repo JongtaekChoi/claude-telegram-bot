@@ -239,7 +239,7 @@ const t = (l, key, ...a) => {
 };
 
 // /model 에서 보여줄 추천 별칭(claude CLI 가 별칭·전체 모델 ID 모두 허용).
-const MODEL_SUGGESTIONS = ["opus", "sonnet", "haiku"];
+const MODEL_SUGGESTIONS = ["fable", "opus", "sonnet", "haiku"];
 
 // /(슬래시) 자동완성 메뉴용 명령 목록 (언어별). setMyCommands 로 등록.
 const COMMANDS = {
@@ -414,7 +414,7 @@ function runClaude(prompt, sessionId, opts = {}) {
       "This reply is delivered over Telegram. Be concise — short paragraphs and lists, no filler intro/summary, avoid large tables. Reply in the user's language.";
     // opts.modelHint: 현재 모델을 주입 → 답변 끝에 상위 모델 권유 제안(판단은 Claude 본인)
     const modelHint = opts.modelHint
-      ? `Current model: ${model || "claude (default)"}. Model tiers (low→high): haiku → sonnet → opus. If this question seems to require more capability than the current model, append one short line at the very end of your reply: 💡 \`/model sonnet\` (or \`/model opus\`) for a stronger answer. Omit the suggestion for simple questions.`
+      ? `Current model: ${model || "claude (default)"}. Model tiers (low→high): haiku → sonnet → opus → fable. If this question seems to require more capability than the current model, append one short line at the very end of your reply: 💡 \`/model sonnet\` (or \`/model opus\`, \`/model fable\`) for a stronger answer. Omit the suggestion for simple questions.`
       : null;
     // 페르소나(cfg.persona) + 간결 지침 + 모델 힌트를 함께 주입 → 멀티 봇(역할별) 운영용
     const appendSys = [cfg.persona, brevity, modelHint].filter(Boolean).join("\n\n");
