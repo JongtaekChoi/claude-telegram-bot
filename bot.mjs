@@ -14,7 +14,7 @@
 // 자동 판별하고, cfg.lang 을 주면 그 언어로 고정함. 콘솔/CLI 출력은 영어 단일.
 
 import { basename, dirname, join } from "node:path";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 
 import dns from "node:dns";
 import { fileURLToPath } from "node:url";
@@ -134,6 +134,7 @@ const STR = {
       `\nWorking dir: ${cfg.projectDir}\nPermission mode: ${cfg.permissionMode}`,
     newSession: "🆕 Started a new conversation (previous context cleared).",
     busy: "⏳ A previous task is still running. Please try again when it finishes.",
+    localBusy: "💻 A local `ctb claude` session is active. Send a message when it's done.",
     needChatId: (id) => `Add this chat ID to "allowedChatId" in config.json:\n${id}`,
     cronEmpty:
       "No scheduled tasks yet.\nAdd one in plain language, e.g. `/cron add summarize open issues every weekday at 9am`.",
@@ -189,6 +190,7 @@ const STR = {
       `\n작업 폴더: ${cfg.projectDir}\n권한 모드: ${cfg.permissionMode}`,
     newSession: "🆕 새 대화를 시작합니다 (이전 맥락 초기화).",
     busy: "⏳ 이전 작업이 아직 진행 중입니다. 끝나면 다시 보내주세요.",
+    localBusy: "💻 로컬 `ctb claude` 세션이 활성화되어 있습니다. 종료 후 메시지를 보내주세요.",
     needChatId: (id) => `이 채팅 ID를 config.json 의 allowedChatId 에 넣으세요:\n${id}`,
     cronEmpty:
       "등록된 예약 작업이 없습니다.\n`/cron add 매일 아침 9시에 …` 처럼 자연어로 추가해 보세요.",
@@ -260,6 +262,23 @@ const COMMANDS = {
     { command: "help", description: "도움말" },
   ],
 };
+
+// ── 로컬 세션 lock ────────────────────────────────────────────────────────
+// ctb claude 실행 시 .claude-bot/local.lock (PID) 을 생성하고 종료 시 삭제.
+// 봇은 claude 실행 전 이 파일을 확인해 동시 실행을 방지한다.
+// PID 가 이미 종료된 경우(stale lock) 자동 제거 후 진행.
+const LOCAL_LOCK_PATH = join(BOT_DIR, "local.lock");
+function checkLocalLock() {
+  if (!existsSync(LOCAL_LOCK_PATH)) return false;
+  try {
+    const pid = parseInt(readFileSync(LOCAL_LOCK_PATH, "utf8"), 10);
+    process.kill(pid, 0); // throws if process is dead
+    return true; // lock is valid
+  } catch {
+    try { unlinkSync(LOCAL_LOCK_PATH); } catch {} // stale — remove
+    return false;
+  }
+}
 
 // ── 상태 (세션 이어가기용) ────────────────────────────────────────────────
 function loadState() {
@@ -502,7 +521,7 @@ let schedule = buildSchedule();
 // 예약 작업은 사용자 대화 맥락을 오염시키지 않도록 항상 새 세션으로 독립 실행하고,
 // 결과를 allowedChatId 로 보낸다. busy 락을 공유해 사용자 요청과 직렬화됨.
 async function runScheduled(job) {
-  if (busy) {
+  if (busy || checkLocalLock()) {
     console.warn(`Skipped scheduled job (busy): ${job.cron} — ${String(job.prompt).slice(0, 40)}`);
     return;
   }
@@ -767,6 +786,10 @@ async function handle(msg) {
 
   if (busy) {
     await send(chatId, t(l, "busy"));
+    return;
+  }
+  if (checkLocalLock()) {
+    await send(chatId, t(l, "localBusy"));
     return;
   }
   busy = true;

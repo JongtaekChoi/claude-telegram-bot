@@ -4,10 +4,16 @@
   "description": "Drive Claude Code from Telegram — messages run headless `claude -p` in a project dir and replies come back to the chat. Zero dependencies.",
   "type": "module",
   "bin": {
-    "claude-telegram-bot": "bot.mjs"
+    "claude-telegram-bot": "bot.mjs",
+    "ctb": "ctb.mjs"
+  },
+  "exports": {
+    "./session.mjs": "./session.mjs"
   },
   "files": [
     "bot.mjs",
+    "ctb.mjs",
+    "session.mjs",
     "config.example.json",
     "com.claudebot.example.plist"
   ],
