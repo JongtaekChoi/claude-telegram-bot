@@ -83,6 +83,7 @@ const stateFile = stateBase === "config" ? "state.json" : `${stateBase}.state.js
 const BOT_DIR = join(DATA_DIR, ".claude-bot");
 const STATE_PATH = join(BOT_DIR, stateFile);
 const ATTACH_DIR = join(BOT_DIR, "attachments");
+const MEMORY_PATH = join(BOT_DIR, "memory.md"); // /new 로 초기화해도 유지되는 퍼시스턴트 메모리
 const LEGACY_STATE_PATH = join(DATA_DIR, stateFile); // 구버전(루트 직하) 호환
 const LEGACY_ATTACH_DIR = join(DATA_DIR, "attachments");
 
@@ -130,6 +131,8 @@ const STR = {
       "• /new — reset conversation context (new session)\n" +
       "• /stop — stop the current task · /stop --reset to also roll back the session\n" +
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
+      "• /remember <text> — save to persistent memory (survives /new)\n" +
+      "• /memory — view memory · /memory clear to wipe\n" +
       "• /restart — restart the bot (after a syntax check)\n" +
       "• /status — bot status & version\n" +
       "• /model — view / switch the model\n" +
@@ -183,6 +186,12 @@ const STR = {
       `/model default — clear the override`,
     modelSet: (m) => `🧠 Model set to: ${m}`,
     modelReset: (def) => `🧠 Model reset to default (${def}).`,
+    memoryEmpty: "No memory yet. Use `/remember <text>` to add.",
+    memoryShow: (m) => `💾 Memory:\n\`\`\`\n${m}\n\`\`\``,
+    memoryCleared: "🧹 Memory cleared.",
+    remembered: "💾 Saved to memory.",
+    rememberUsage: "Usage: /remember <text to remember>",
+    memoryUsage: "Usage: /memory · /memory clear",
   },
   ko: {
     help: () =>
@@ -191,6 +200,9 @@ const STR = {
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
       "• /stop — 진행 중인 작업 중단 · /stop --reset 으로 세션도 되돌리기\n" +
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
+      "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
+      "• /remember <내용> — 퍼시스턴트 메모리에 저장 (/new 로 초기화해도 유지)\n" +
+      "• /memory — 메모리 보기 · /memory clear 로 삭제\n" +
       "• /restart — 봇 재시작 (문법 검사 후 안전하게)\n" +
       "• /status — 봇 상태·버전 보기\n" +
       "• /model — 모델 보기·전환\n" +
@@ -243,6 +255,12 @@ const STR = {
       `/model default — 오버라이드 해제`,
     modelSet: (m) => `🧠 모델을 ${m} (으)로 설정했습니다.`,
     modelReset: (def) => `🧠 모델을 기본값(${def})으로 되돌렸습니다.`,
+    memoryEmpty: "저장된 메모리가 없습니다. `/remember <내용>`으로 추가하세요.",
+    memoryShow: (m) => `💾 메모리:\n\`\`\`\n${m}\n\`\`\``,
+    memoryCleared: "🧹 메모리를 삭제했습니다.",
+    remembered: "💾 메모리에 저장했습니다.",
+    rememberUsage: "사용법: /remember <기억할 내용>",
+    memoryUsage: "사용법: /memory · /memory clear",
   },
 };
 const t = (l, key, ...a) => {
@@ -258,6 +276,8 @@ const COMMANDS = {
   en: [
     { command: "new", description: "Reset context (new session)" },
     { command: "stop", description: "Stop the current task (--reset to roll back session)" },
+    { command: "remember", description: "Save to persistent memory (survives /new)" },
+    { command: "memory", description: "View or clear persistent memory" },
     { command: "cron", description: "List / add / remove scheduled tasks" },
     { command: "restart", description: "Restart the bot (after syntax check)" },
     { command: "status", description: "Bot status / version" },
@@ -268,6 +288,8 @@ const COMMANDS = {
   ko: [
     { command: "new", description: "대화 맥락 초기화 (새 세션)" },
     { command: "stop", description: "작업 중단 (--reset 으로 세션 되돌리기)" },
+    { command: "remember", description: "퍼시스턴트 메모리에 저장 (/new 후에도 유지)" },
+    { command: "memory", description: "메모리 보기·삭제" },
     { command: "cron", description: "예약 작업 보기·추가·삭제" },
     { command: "restart", description: "봇 재시작 (문법 검사 후)" },
     { command: "status", description: "봇 상태·버전 보기" },
@@ -292,6 +314,15 @@ function checkLocalLock() {
     try { unlinkSync(LOCAL_LOCK_PATH); } catch {} // stale — remove
     return false;
   }
+}
+
+// ── 퍼시스턴트 메모리 ─────────────────────────────────────────────────────
+// /new 로 세션을 초기화해도 유지되는 메모리. runClaude 시 시스템 프롬프트에 주입.
+function loadMemory() {
+  try { return readFileSync(MEMORY_PATH, "utf8").trim(); } catch { return ""; }
+}
+function saveMemory(content) {
+  writeFileSync(MEMORY_PATH, content);
 }
 
 // ── 상태 (세션 이어가기용) ────────────────────────────────────────────────
@@ -430,8 +461,11 @@ function runClaude(prompt, sessionId, opts = {}) {
     const modelHint = opts.modelHint
       ? `Current model: ${model || "claude (default)"}. Model tiers (low→high): haiku → sonnet → opus → fable. If this question seems to require more capability than the current model, append one short line at the very end of your reply: 💡 \`/model sonnet\` (or \`/model opus\`, \`/model fable\`) for a stronger answer. Omit the suggestion for simple questions.`
       : null;
-    // 페르소나(cfg.persona) + 간결 지침 + 모델 힌트를 함께 주입 → 멀티 봇(역할별) 운영용
-    const appendSys = [cfg.persona, brevity, modelHint].filter(Boolean).join("\n\n");
+    // opts.injectMemory: 퍼시스턴트 메모리를 시스템 프롬프트에 주입 (/new 로 초기화해도 유지)
+    const mem = opts.injectMemory ? loadMemory() : "";
+    const memoryBlock = mem ? `## Persistent memory (survives /new)\n${mem}` : null;
+    // 페르소나(cfg.persona) + 간결 지침 + 모델 힌트 + 메모리를 함께 주입
+    const appendSys = [cfg.persona, brevity, modelHint, memoryBlock].filter(Boolean).join("\n\n");
     if (appendSys) args.push("--append-system-prompt", appendSys);
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
@@ -821,6 +855,25 @@ async function handle(msg) {
     await send(chatId, t(l, reset ? "stopReset" : "stopOk"));
     return;
   }
+  if (text.startsWith("/remember ")) {
+    const content = text.slice(10).trim();
+    if (!content) { await send(chatId, t(l, "rememberUsage")); return; }
+    const existing = loadMemory();
+    saveMemory(existing ? `${existing}\n- ${content}` : `- ${content}`);
+    await send(chatId, t(l, "remembered"));
+    return;
+  }
+  if (text === "/memory" || text.startsWith("/memory ")) {
+    const arg = text.slice(7).trim();
+    if (arg === "clear") {
+      saveMemory("");
+      await send(chatId, t(l, "memoryCleared"));
+      return;
+    }
+    const mem = loadMemory();
+    await send(chatId, mem ? t(l, "memoryShow", mem) : t(l, "memoryEmpty"));
+    return;
+  }
 
   if (busy) {
     msgQueue.push({ msg, receivedAt: Date.now() });
@@ -855,7 +908,7 @@ async function handle(msg) {
       }
     }
     prevSessionId = state.sessionId; // /stop --reset 복원 대상 저장
-    const res = await runClaude(prompt, state.sessionId, { modelHint: true, trackChild: true });
+    const res = await runClaude(prompt, state.sessionId, { modelHint: true, trackChild: true, injectMemory: true });
     if (res.sessionId) {
       state.sessionId = res.sessionId;
       saveState(state);
