@@ -834,8 +834,22 @@ async function handle(msg) {
   } finally {
     clearInterval(typing);
     busy = false;
-    if (msgQueue.length > 0) setImmediate(() => handle(msgQueue.shift().msg));
+    if (msgQueue.length > 0) setImmediate(() => handle(drainQueue()));
   }
+}
+
+// 큐 전체를 꺼내 하나의 메시지로 합침. 여러 개면 번호+경과시간 붙여 병합 → Claude가 맥락 일괄 파악.
+function drainQueue() {
+  if (msgQueue.length === 1) return msgQueue.shift().msg;
+  const group = msgQueue.splice(0);
+  const merged = group
+    .map((item, i) => {
+      const text = item.msg.text || item.msg.caption || "";
+      const dt = Math.round((item.receivedAt - group[0].receivedAt) / 1000);
+      return i === 0 ? `[1] ${text}` : `[${i + 1}, +${dt}s] ${text}`;
+    })
+    .join("\n");
+  return { ...group[group.length - 1].msg, text: merged, caption: undefined };
 }
 
 // ── 롱폴링 루프 ───────────────────────────────────────────────────────────
