@@ -13,7 +13,7 @@
 // 사용자 대상 문구는 영어 기본 + 한국어(STR 테이블). 언어는 텔레그램 from.language_code 로
 // 자동 판별하고, cfg.lang 을 주면 그 언어로 고정함. 콘솔/CLI 출력은 영어 단일.
 
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 
 import dns from "node:dns";
@@ -57,7 +57,8 @@ Requires: the claude CLI installed and authenticated on the host.`);
     process.exit(0);
   }
   if (a === "init") {
-    const target = join(process.argv[3] || process.cwd(), "config.json");
+    const arg = process.argv[3];
+    const target = arg?.endsWith(".json") ? resolve(arg) : join(arg || process.cwd(), "config.json");
     if (existsSync(target)) {
       console.error(`Already exists: ${target}`);
       process.exit(1);
