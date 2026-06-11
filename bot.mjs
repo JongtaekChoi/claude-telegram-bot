@@ -200,7 +200,6 @@ const STR = {
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
       "• /stop — 진행 중인 작업 중단 · /stop --reset 으로 세션도 되돌리기\n" +
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
-      "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
       "• /remember <내용> — 퍼시스턴트 메모리에 저장 (/new 로 초기화해도 유지)\n" +
       "• /memory — 메모리 보기 · /memory clear 로 삭제\n" +
       "• /restart — 봇 재시작 (문법 검사 후 안전하게)\n" +
