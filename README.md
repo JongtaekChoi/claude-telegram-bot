@@ -2,6 +2,10 @@
 
 [한국어](./README.ko.md) · **English**
 
+[![npm version](https://img.shields.io/npm/v/claude-telegram-bot.svg)](https://www.npmjs.com/package/claude-telegram-bot)
+[![npm downloads](https://img.shields.io/npm/dm/claude-telegram-bot.svg)](https://www.npmjs.com/package/claude-telegram-bot)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 **A zero-dependency, single-file, daemonized Claude Code bot — no Bun, no Python, no open session.**
 
 A tiny bridge that takes your Telegram messages, runs `claude -p` (Claude Code headless mode)

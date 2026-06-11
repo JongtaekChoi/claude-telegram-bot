@@ -2,6 +2,10 @@
 
 **한국어** · [English](./README.md)
 
+[![npm version](https://img.shields.io/npm/v/claude-telegram-bot.svg)](https://www.npmjs.com/package/claude-telegram-bot)
+[![npm downloads](https://img.shields.io/npm/dm/claude-telegram-bot.svg)](https://www.npmjs.com/package/claude-telegram-bot)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 텔레그램으로 메시지를 보내면, 집이나 서버에 켜둔 Claude Code가 작업하고 결과를 다시 텔레그램으로 돌려주는 봇입니다.
 
 ```
