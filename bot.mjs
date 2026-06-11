@@ -126,6 +126,7 @@ const STR = {
       `${cfg.name || "Claude Code Telegram bot"}\n\n` +
       "• Just send a message and Claude works in the project.\n" +
       "• /new — reset conversation context (new session)\n" +
+      "• /stop — stop the current task · /stop --reset to also roll back the session\n" +
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
       "• /restart — restart the bot (after a syntax check)\n" +
       "• /status — bot status & version\n" +
@@ -135,6 +136,9 @@ const STR = {
     newSession: "🆕 Started a new conversation (previous context cleared).",
     busy: "⏳ A previous task is still running. Please try again when it finishes.",
     queued: (n) => `⏳ Queued (#${n}). Will run when the current task finishes.`,
+    stopOk: "🛑 Task stopped.",
+    stopReset: "🛑 Task stopped and session rolled back to before the task.",
+    stopNoop: "No task is running.",
     localBusy: "💻 A local `ctb claude` session is active. Send a message when it's done.",
     needChatId: (id) => `Add this chat ID to "allowedChatId" in config.json:\n${id}`,
     cronEmpty:
@@ -183,6 +187,7 @@ const STR = {
       `${cfg.name || "Claude Code 텔레그램 봇"}\n\n` +
       "• 그냥 메시지를 보내면 Claude가 프로젝트에서 작업합니다.\n" +
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
+      "• /stop — 진행 중인 작업 중단 · /stop --reset 으로 세션도 되돌리기\n" +
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
       "• /restart — 봇 재시작 (문법 검사 후 안전하게)\n" +
       "• /status — 봇 상태·버전 보기\n" +
@@ -192,6 +197,9 @@ const STR = {
     newSession: "🆕 새 대화를 시작합니다 (이전 맥락 초기화).",
     busy: "⏳ 이전 작업이 아직 진행 중입니다. 끝나면 다시 보내주세요.",
     queued: (n) => `⏳ 대기열에 추가됐습니다 (${n}번째). 현재 작업이 끝나면 자동으로 실행됩니다.`,
+    stopOk: "🛑 작업을 중단했습니다.",
+    stopReset: "🛑 작업을 중단하고 세션을 작업 이전으로 되돌렸습니다.",
+    stopNoop: "실행 중인 작업이 없습니다.",
     localBusy: "💻 로컬 `ctb claude` 세션이 활성화되어 있습니다. 종료 후 메시지를 보내주세요.",
     needChatId: (id) => `이 채팅 ID를 config.json 의 allowedChatId 에 넣으세요:\n${id}`,
     cronEmpty:
@@ -247,6 +255,7 @@ const MODEL_SUGGESTIONS = ["fable", "opus", "sonnet", "haiku"];
 const COMMANDS = {
   en: [
     { command: "new", description: "Reset context (new session)" },
+    { command: "stop", description: "Stop the current task (--reset to roll back session)" },
     { command: "cron", description: "List / add / remove scheduled tasks" },
     { command: "restart", description: "Restart the bot (after syntax check)" },
     { command: "status", description: "Bot status / version" },
@@ -256,6 +265,7 @@ const COMMANDS = {
   ],
   ko: [
     { command: "new", description: "대화 맥락 초기화 (새 세션)" },
+    { command: "stop", description: "작업 중단 (--reset 으로 세션 되돌리기)" },
     { command: "cron", description: "예약 작업 보기·추가·삭제" },
     { command: "restart", description: "봇 재시작 (문법 검사 후)" },
     { command: "status", description: "봇 상태·버전 보기" },
@@ -428,6 +438,7 @@ function runClaude(prompt, sessionId, opts = {}) {
       cwd: cfg.projectDir,
       env: { ...process.env, ...(cfg.env || {}) },
     });
+    if (opts.trackChild) currentChild = child; // /stop 에서 kill 가능하도록 노출
 
     let out = "",
       err = "";
@@ -437,10 +448,12 @@ function runClaude(prompt, sessionId, opts = {}) {
     child.stderr.on("data", (d) => {
       err += d;
     });
-    child.on("error", (e) =>
-      resolve({ ok: false, text: `Failed to start claude: ${e.message}` }),
-    );
+    child.on("error", (e) => {
+      currentChild = null;
+      resolve({ ok: false, text: `Failed to start claude: ${e.message}` });
+    });
     child.on("close", (code) => {
+      currentChild = null;
       try {
         const j = JSON.parse(out);
         resolve({
@@ -696,6 +709,10 @@ async function downloadAttachment(att) {
 // ── 메시지 처리 ───────────────────────────────────────────────────────────
 let busy = false;
 const msgQueue = []; // { msg, receivedAt } — busy 중 수신 메시지 대기열
+let currentChild = null;  // 실행 중인 claude child process (/stop 용)
+let currentTyping = null; // 타이핑 인터벌 (/stop 시 정리용)
+let prevSessionId;        // /stop --reset 복원 대상
+let stopping = false;     // /stop 처리 중 오류 메시지 억제 플래그
 
 async function handle(msg) {
   const chatId = msg.chat?.id;
@@ -786,6 +803,22 @@ async function handle(msg) {
     await send(chatId, t(l, "newSession"));
     return;
   }
+  if (text === "/stop" || text.startsWith("/stop ")) {
+    if (!busy || !currentChild) {
+      await send(chatId, t(l, "stopNoop"));
+      return;
+    }
+    const reset = text.includes("--reset");
+    stopping = true;
+    msgQueue.length = 0; // 대기 메시지도 취소
+    currentChild.kill();
+    if (reset) {
+      state.sessionId = prevSessionId;
+      saveState(state);
+    }
+    await send(chatId, t(l, reset ? "stopReset" : "stopOk"));
+    return;
+  }
 
   if (busy) {
     msgQueue.push({ msg, receivedAt: Date.now() });
@@ -800,7 +833,7 @@ async function handle(msg) {
   await tg("sendChatAction", { chat_id: chatId, action: "typing" });
   const started = Date.now();
   // 긴 작업 동안 타이핑 표시 유지
-  const typing = setInterval(
+  currentTyping = setInterval(
     () =>
       tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(
         () => {},
@@ -819,7 +852,8 @@ async function handle(msg) {
         await send(chatId, t(l, "attachFail", e.message));
       }
     }
-    const res = await runClaude(prompt, state.sessionId, { modelHint: true });
+    prevSessionId = state.sessionId; // /stop --reset 복원 대상 저장
+    const res = await runClaude(prompt, state.sessionId, { modelHint: true, trackChild: true });
     if (res.sessionId) {
       state.sessionId = res.sessionId;
       saveState(state);
@@ -828,11 +862,13 @@ async function handle(msg) {
     const footer = res.ok
       ? `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`
       : "";
-    await send(chatId, (res.ok ? res.text : `⚠️ ${res.text}`) + footer);
+    if (!stopping) await send(chatId, (res.ok ? res.text : `⚠️ ${res.text}`) + footer);
   } catch (e) {
-    await send(chatId, t(l, "botError", e.message));
+    if (!stopping) await send(chatId, t(l, "botError", e.message));
   } finally {
-    clearInterval(typing);
+    clearInterval(currentTyping);
+    currentTyping = null;
+    stopping = false;
     busy = false;
     if (msgQueue.length > 0) setImmediate(() => handle(drainQueue()));
   }
