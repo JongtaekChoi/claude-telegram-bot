@@ -10,7 +10,7 @@
 
 A tiny bridge that takes your Telegram messages, runs `claude -p` (Claude Code headless mode)
 in a project folder, and sends the result back to the chat. One `.mjs` file on Node 18+ built-ins —
-nothing to `npm install`, nothing to audit but ~400 readable lines.
+nothing to `npm install`, nothing to audit but under 1 000 readable lines.
 
 ```
 [you] → Telegram → bot.mjs → claude -p (config.projectDir) → result → Telegram
@@ -118,9 +118,11 @@ Prerequisites: **Node 18+** and the **`claude` CLI installed and authenticated**
 **Option A — npx (no install)**
 
 ```sh
-npx claude-telegram-bot init        # writes ./config.json
-# edit config.json (token, projectDir, …)
-npx claude-telegram-bot             # runs ./config.json
+npx claude-telegram-bot init             # writes ./config.json
+npx claude-telegram-bot init mybot.json  # or pick your own filename
+# edit the config (token, projectDir, …)
+npx claude-telegram-bot                  # runs ./config.json
+npx claude-telegram-bot mybot.json       # or pass the path directly
 ```
 
 **Option B — global install (recommended for an always-on daemon)**
@@ -128,9 +130,10 @@ npx claude-telegram-bot             # runs ./config.json
 ```sh
 npm i -g claude-telegram-bot
 
-claude-telegram-bot init ~/botconfigs/myproj    # writes ~/botconfigs/myproj/config.json
-# edit that config.json (token, projectDir, …)
-claude-telegram-bot ~/botconfigs/myproj/config.json
+claude-telegram-bot init ~/botconfigs/myproj           # writes ~/botconfigs/myproj/config.json
+claude-telegram-bot init ~/botconfigs/myproj/mybot.json  # or a custom filename
+# edit the config (token, projectDir, …)
+claude-telegram-bot ~/botconfigs/myproj/mybot.json
 ```
 
 Run several projects/personas by making one config file each and passing its path —
@@ -158,7 +161,11 @@ auth layer.)
 - `run the solver tests and commit + push if they pass`
 - `add an edge case to solve-2nd-floor-edges.ts`
 
-Commands: `/new` (reset context / new session) · `/cron` (list / add / remove scheduled tasks) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/model` (view / switch the model) · `/id` (show chat ID) · `/help`.
+Commands: `/new` (reset context / new session) · `/stop` (stop current task; `--reset` to also roll back the session) · `/cron` (list / add / remove scheduled tasks) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/model` (view / switch the model) · `/id` (show chat ID) · `/help`.
+
+> **`/stop`** kills the running Claude process immediately and clears any queued messages.
+> Add `--reset` to also restore the session to the state it was in *before* the task started,
+> so the conversation history doesn't include the interrupted work.
 
 > **`/restart`** runs `node --check` on `bot.mjs` first and **aborts the restart if it has a syntax
 > error** (so a bad edit can't crash-loop the bot), then exits — relying on a process supervisor
@@ -215,6 +222,8 @@ your launchd plist points them.
   absolute path is handed to Claude (caption included as the message). Images can be opened with Read.
 - **Sessions**: conversations resume automatically (`--resume`); the last session id is saved in
   `state.json`, so context survives restarts. Use `/new` to start fresh.
+- **Message queue**: if you send a message while a task is running, it is queued (not dropped). When the task finishes, all queued messages are merged into a single prompt so Claude can resolve corrections and follow-ups in one pass (e.g. "do X" then "never mind, do Y" → handled together). Use `/stop` to cancel the running task and discard the queue.
+- **Model hint**: the bot tells Claude which model it is running as. If Claude judges a question to be beyond its current tier, it appends a one-line suggestion at the end of the reply (e.g. 💡 `/model sonnet`). Switch with `/model <name>` — `haiku`, `sonnet`, `opus`, `fable`, or a full model id. The choice persists in `state.json` across restarts.
 
 ### Scheduled tasks (cron)
 
