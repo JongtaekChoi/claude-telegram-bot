@@ -13,7 +13,7 @@
 // While Claude runs, .claude-bot/local.lock (PID) is created so the bot defers
 // incoming Telegram messages until the local session ends.
 
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -38,12 +38,22 @@ function runBot(botArgs) {
 }
 
 function resolveConfig(arg) {
-  if (!arg) return process.env.BOT_CONFIG || join(HERE, "config.json");
+  if (!arg) {
+    if (process.env.BOT_CONFIG) return process.env.BOT_CONFIG;
+    // cwd 우선(프로젝트 폴더에서 ctb 실행) → 전역 설치 경로 폴백
+    for (const base of [process.cwd(), HERE]) {
+      for (const name of ["mybot.json", "config.json"]) {
+        const p = join(base, name);
+        if (existsSync(p)) return p;
+      }
+    }
+    return join(process.cwd(), "mybot.json"); // 최종 폴백
+  }
   // Absolute or explicitly relative path → use as-is
   if (arg.startsWith("/") || arg.startsWith("./") || arg.startsWith("../"))
     return arg;
-  // Bare name (e.g. "planner.json") → relative to package dir
-  return join(HERE, arg);
+  // Bare name (e.g. "planner.json") → relative to cwd first, then package dir
+  return existsSync(join(process.cwd(), arg)) ? join(process.cwd(), arg) : join(HERE, arg);
 }
 
 function main() {
