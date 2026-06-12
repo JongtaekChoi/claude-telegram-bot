@@ -978,7 +978,7 @@ async function main() {
       }
       for (const upd of res.result) {
         offset = upd.update_id + 1;
-        if (upd.message) await handle(upd.message);
+        if (upd.message) handle(upd.message).catch((e) => console.error("Handle error:", e.message));
       }
     } catch (e) {
       console.error("Polling error:", e.message);
