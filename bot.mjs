@@ -315,6 +315,19 @@ function checkLocalLock() {
   }
 }
 
+// ── npm 최신 버전 확인 (/status 에서 사용) ────────────────────────────────
+async function fetchLatestVersion() {
+  try {
+    const r = await fetch("https://registry.npmjs.org/claude-telegram-bot/latest", {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!r.ok) return null;
+    return (await r.json()).version || null;
+  } catch {
+    return null;
+  }
+}
+
 // ── 퍼시스턴트 메모리 ─────────────────────────────────────────────────────
 // /new 로 세션을 초기화해도 유지되는 메모리. runClaude 시 시스템 프롬프트에 주입.
 function loadMemory() {
@@ -777,10 +790,14 @@ async function handle(msg) {
     return;
   }
   if (text === "/status") {
+    const latest = await fetchLatestVersion();
+    const versionStr = !latest || latest === VERSION
+      ? VERSION
+      : `${VERSION} → ${latest} ✨`;
     await send(
       chatId,
       t(l, "status", {
-        version: VERSION,
+        version: versionStr,
         name: cfg.name || "claude-telegram-bot",
         model: state.model || cfg.model || (l === "ko" ? "(기본값)" : "(default)"),
         hasSession: Boolean(state.sessionId),
