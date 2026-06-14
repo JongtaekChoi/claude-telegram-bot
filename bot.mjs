@@ -454,6 +454,20 @@ async function send(chatId, text) {
   }
 }
 
+// ── Claude 에러 분류 ──────────────────────────────────────────────────────
+function classifyClaudeError(raw, code) {
+  const t = raw.toLowerCase();
+  if (t.includes("credit") || t.includes("balance") || t.includes("billing") || t.includes("payment"))
+    return "💳 API 크레딧이 부족합니다. console.anthropic.com 에서 충전해주세요.";
+  if (t.includes("rate_limit") || t.includes("rate limit") || t.includes("too many requests") || code === 429)
+    return "⏱️ 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.";
+  if (t.includes("overloaded") || code === 529)
+    return "🔄 Claude 서버가 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해주세요.";
+  if (t.includes("context") && (t.includes("length") || t.includes("limit") || t.includes("window")))
+    return "📏 대화 맥락이 너무 길어졌습니다. `/new` 로 새 세션을 시작해주세요.";
+  return `Execution error (exit ${code}):\n${raw}`;
+}
+
 // ── Claude 실행 ───────────────────────────────────────────────────────────
 function runClaude(prompt, sessionId, opts = {}) {
   return new Promise((resolve) => {
@@ -511,10 +525,8 @@ function runClaude(prompt, sessionId, opts = {}) {
           cost: j.total_cost_usd,
         });
       } catch {
-        resolve({
-          ok: false,
-          text: `Execution error (exit ${code}):\n${(err || out || "no output").slice(0, 3500)}`,
-        });
+        const raw = (err || out || "no output").slice(0, 3500);
+        resolve({ ok: false, text: classifyClaudeError(raw, code) });
       }
     });
   });
