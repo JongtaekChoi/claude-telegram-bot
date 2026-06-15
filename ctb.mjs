@@ -109,8 +109,13 @@ function main() {
   writeFileSync(lockPath, String(process.pid));
   const cleanup = () => { try { unlinkSync(lockPath); } catch {} };
   process.on("exit", cleanup);
-  process.on("SIGINT", () => { cleanup(); process.exit(130); });
-  process.on("SIGTERM", () => { cleanup(); process.exit(143); });
+
+  // SIGINT/SIGTERM: 종료 코드만 기록하고 exit 하지 않음.
+  // claude 도 같은 프로세스 그룹이라 동시에 신호를 받아 종료되고,
+  // child.on("close") 가 발화하면서 알림 전송 후 종료함.
+  let signalExitCode = null;
+  process.on("SIGINT", () => { signalExitCode = 130; });
+  process.on("SIGTERM", () => { signalExitCode = 143; });
 
   let sessionId;
   try {
@@ -124,7 +129,7 @@ function main() {
   child.on("close", async (code) => {
     cleanup();
     if (sessionId) await notifyTelegram(configPath, sessionId);
-    process.exit(code ?? 0);
+    process.exit(signalExitCode ?? code ?? 0);
   });
 }
 
@@ -132,7 +137,7 @@ async function summarizeSession(sid) {
   return new Promise((resolve) => {
     const child = spawn("claude", [
       "--resume", sid,
-      "-p", "Summarize what was accomplished in this session in one short sentence. Plain text only, no markdown, no filler. If nothing significant happened, reply with exactly: SKIP",
+      "-p", "In one short phrase (10 words max), what was done this session? Plain text only. If nothing significant, reply: SKIP",
       "--output-format", "json",
     ], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
