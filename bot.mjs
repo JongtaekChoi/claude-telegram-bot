@@ -315,7 +315,10 @@ function checkLocalLock() {
   }
 }
 
-// ── npm 최신 버전 확인 (/status 에서 사용) ────────────────────────────────
+// ── npm 최신 버전 확인 ────────────────────────────────────────────────────
+// /status 호출 및 시작 시 24h 주기 업데이트 감지에 사용.
+const VERSION_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24h
+
 async function fetchLatestVersion() {
   try {
     const r = await fetch("https://registry.npmjs.org/claude-telegram-bot/latest", {
@@ -326,6 +329,30 @@ async function fetchLatestVersion() {
   } catch {
     return null;
   }
+}
+
+// 버전 비교: "1.2.3" > "1.2.2" 형태의 semver 대소 비교 (major.minor.patch).
+function isNewer(latest, current) {
+  const p = (v) => String(v).split(".").map(Number);
+  const [lM, lm, lp] = p(latest);
+  const [cM, cm, cp] = p(current);
+  return lM !== cM ? lM > cM : lm !== cm ? lm > cm : lp > cp;
+}
+
+async function checkForUpdate() {
+  if (!cfg.allowedChatId) return;
+  const now = Date.now();
+  if (state.lastVersionCheck && now - state.lastVersionCheck < VERSION_CHECK_INTERVAL) return;
+  const latest = await fetchLatestVersion();
+  state.lastVersionCheck = now;
+  saveState(state);
+  if (!latest || !isNewer(latest, VERSION)) return;
+  if (state.notifiedVersion === latest) return; // 이미 알린 버전
+  state.notifiedVersion = latest;
+  saveState(state);
+  await send(cfg.allowedChatId,
+    `✨ 업데이트가 있습니다: ${VERSION} → ${latest}\n\`npm i -g claude-telegram-bot\` 후 /restart`
+  ).catch(() => {});
 }
 
 // ── 퍼시스턴트 메모리 ─────────────────────────────────────────────────────
@@ -995,6 +1022,7 @@ async function main() {
   } catch {}
 
   startScheduler();
+  checkForUpdate().catch(() => {});
 
   while (true) {
     try {
