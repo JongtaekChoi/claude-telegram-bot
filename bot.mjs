@@ -518,12 +518,10 @@ function runClaude(prompt, sessionId, opts = {}) {
       currentChild = null;
       try {
         const j = JSON.parse(out);
-        resolve({
-          ok: !j.is_error,
-          text: j.result ?? "(empty response)",
-          sessionId: j.session_id,
-          cost: j.total_cost_usd,
-        });
+        const text = j.is_error
+          ? classifyClaudeError(j.result ?? "", code)
+          : (j.result ?? "(empty response)");
+        resolve({ ok: !j.is_error, text, sessionId: j.session_id, cost: j.total_cost_usd });
       } catch {
         const raw = (err || out || "no output").slice(0, 3500);
         resolve({ ok: false, text: classifyClaudeError(raw, code) });

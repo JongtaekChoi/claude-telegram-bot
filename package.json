@@ -1,6 +1,6 @@
 {
   "name": "claude-telegram-bot",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Drive Claude Code from Telegram — messages run headless `claude -p` in a project dir and replies come back to the chat. Zero dependencies.",
   "type": "module",
   "bin": {
