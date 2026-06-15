@@ -133,11 +133,14 @@ function main() {
   });
 }
 
-async function summarizeSession(sid) {
+async function summarizeSession(sid, lang) {
+  const langInstruction = lang && lang.startsWith("ko")
+    ? "한국어로 짧은 구문(10단어 이내)으로 이 세션에서 한 작업을 요약해줘. 마크다운 없이 텍스트만. 중요한 작업이 없으면 정확히 이렇게만 답해: SKIP"
+    : "In one short phrase (10 words max), what was done this session? Plain text only. If nothing significant, reply: SKIP";
   return new Promise((resolve) => {
     const child = spawn("claude", [
       "--resume", sid,
-      "-p", "In one short phrase (10 words max), what was done this session? Plain text only. If nothing significant, reply: SKIP",
+      "-p", langInstruction,
       "--output-format", "json",
     ], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
@@ -157,7 +160,7 @@ async function notifyTelegram(configPath, sessionId) {
   try {
     const cfg = JSON.parse(readFileSync(configPath, "utf8"));
     if (!cfg.token || !cfg.allowedChatId || cfg.ctbNotify === false) return;
-    const summary = await summarizeSession(sessionId);
+    const summary = await summarizeSession(sessionId, cfg.lang);
     if (!summary) return;
     await fetch(`https://api.telegram.org/bot${cfg.token}/sendMessage`, {
       method: "POST",
