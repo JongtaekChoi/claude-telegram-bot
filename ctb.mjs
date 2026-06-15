@@ -121,7 +121,45 @@ function main() {
   if (sessionId) process.stderr.write(`Resuming session: ${sessionId}\n`);
 
   const child = spawn("claude", finalArgs, { stdio: "inherit" });
-  child.on("close", (code) => process.exit(code ?? 0));
+  child.on("close", async (code) => {
+    cleanup();
+    if (sessionId) await notifyTelegram(configPath, sessionId);
+    process.exit(code ?? 0);
+  });
+}
+
+async function summarizeSession(sid) {
+  return new Promise((resolve) => {
+    const child = spawn("claude", [
+      "--resume", sid,
+      "-p", "Summarize what was accomplished in this session in one short sentence. Plain text only, no markdown, no filler. If nothing significant happened, reply with exactly: SKIP",
+      "--output-format", "json",
+    ], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.on("close", () => {
+      try {
+        const text = (JSON.parse(out).result || "").trim();
+        resolve(/^skip$/i.test(text) ? null : text);
+      } catch { resolve(null); }
+    });
+    child.on("error", () => resolve(null));
+    setTimeout(() => { child.kill(); resolve(null); }, 30000);
+  });
+}
+
+async function notifyTelegram(configPath, sessionId) {
+  try {
+    const cfg = JSON.parse(readFileSync(configPath, "utf8"));
+    if (!cfg.token || !cfg.allowedChatId || cfg.ctbNotify === false) return;
+    const summary = await summarizeSession(sessionId);
+    if (!summary) return;
+    await fetch(`https://api.telegram.org/bot${cfg.token}/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chat_id: cfg.allowedChatId, text: `💻 ${summary}` }),
+    });
+  } catch {}
 }
 
 main();

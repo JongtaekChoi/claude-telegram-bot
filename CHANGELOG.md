@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.8] - 2026-06-15
+### Added
+- `ctb` 세션 종료 시 텔레그램으로 한 줄 요약 자동 전송 — config 에 `"ctbNotify": false` 로 비활성화 가능
+
 ## [0.3.7] - 2026-06-15
 ### Fixed
 - Claude 에러 분류를 JSON 경로(`is_error: true`)에도 적용 — 0.3.6 에서 비정상 종료만 처리하던 것을 JSON 응답 에러까지 확장
