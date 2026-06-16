@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.13] - 2026-06-16
+### Added
+- `ctb` 세션 시작 시 `---ctb:start---` 마커 삽입 — 종료 요약이 텔레그램 이전 대화를 제외하고 터미널 세션 작업만 요약
+
 ## [0.3.12] - 2026-06-16
 ### Fixed
 - `ctb` 종료 알림 fetch 실패 — `dns.setDefaultResultOrder("ipv4first")` 추가로 IPv6 우선 시도 문제 해결

@@ -61,7 +61,7 @@ function resolveConfig(arg) {
   return existsSync(join(process.cwd(), arg)) ? join(process.cwd(), arg) : join(HERE, arg);
 }
 
-function main() {
+async function main() {
   if (a === "-h" || a === "--help") {
     console.log(
       `ctb v${VERSION} — claude-telegram-bot short CLI\n\n` +
@@ -127,9 +127,20 @@ function main() {
     sessionId = JSON.parse(readFileSync(statePath, "utf8")).sessionId;
   } catch {}
 
-  const finalArgs = sessionId ? ["--resume", sessionId, ...claudeArgs] : claudeArgs;
-  if (sessionId) process.stderr.write(`Resuming session: ${sessionId}\n`);
+  if (sessionId) {
+    process.stderr.write(`Resuming session: ${sessionId}\n`);
+    // 텔레그램 이전 대화와 구분하기 위해 세션에 시작 마커 삽입
+    await new Promise((resolve) => {
+      const marker = spawn("claude", [
+        "--resume", sessionId, "-p", "---ctb:start---", "--output-format", "json",
+      ], { stdio: ["ignore", "ignore", "ignore"] });
+      marker.on("close", resolve);
+      marker.on("error", resolve);
+      setTimeout(() => { marker.kill(); resolve(); }, 15000);
+    });
+  }
 
+  const finalArgs = sessionId ? ["--resume", sessionId, ...claudeArgs] : claudeArgs;
   const child = spawn("claude", finalArgs, { stdio: "inherit" });
   child.on("close", async (code) => {
     cleanup();
@@ -140,8 +151,8 @@ function main() {
 
 async function summarizeSession(sid, lang) {
   const langInstruction = lang && lang.startsWith("ko")
-    ? "한국어로 짧은 구문(10단어 이내)으로 이 세션에서 한 작업을 요약해줘. 마크다운 없이 텍스트만. 중요한 작업이 없으면 정확히 이렇게만 답해: SKIP"
-    : "In one short phrase (10 words max), what was done this session? Plain text only. If nothing significant, reply: SKIP";
+    ? "---ctb:start--- 마커 이후에 이 터미널 세션에서 한 작업을 한국어로 짧은 구문(10단어 이내)으로 요약해줘. 마크다운 없이 텍스트만. 마커 이후 중요한 작업이 없으면 정확히 이렇게만 답해: SKIP"
+    : "After the ---ctb:start--- marker in this conversation, what was accomplished in this terminal session? One short phrase, 10 words max, plain text. If nothing significant after the marker, reply: SKIP";
   return new Promise((resolve) => {
     const child = spawn("claude", [
       "--resume", sid,
