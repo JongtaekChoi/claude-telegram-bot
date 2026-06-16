@@ -17,6 +17,11 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import dns from "node:dns";
+import net from "node:net";
+
+dns.setDefaultResultOrder("ipv4first");
+if (net.setDefaultAutoSelectFamily) net.setDefaultAutoSelectFamily(false);
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -28,7 +33,7 @@ const VERSION = (() => {
   } catch {
     return "?";
   }
-})();
+})();;
 
 function runBot(botArgs) {
   const child = spawn(process.execPath, [join(HERE, "bot.mjs"), ...botArgs], {
@@ -160,14 +165,22 @@ async function notifyTelegram(configPath, sessionId) {
   try {
     const cfg = JSON.parse(readFileSync(configPath, "utf8"));
     if (!cfg.token || !cfg.allowedChatId || cfg.ctbNotify === false) return;
-    const summary = await summarizeSession(sessionId, cfg.lang);
-    if (!summary) return;
-    await fetch(`https://api.telegram.org/bot${cfg.token}/sendMessage`, {
+    const lang = cfg.lang || process.env.LANG || "";
+    process.stderr.write("ctb: summarizing session...\n");
+    const summary = await summarizeSession(sessionId, lang);
+    if (!summary) { process.stderr.write("ctb: nothing to summarize (SKIP)\n"); return; }
+    process.stderr.write(`ctb: sending to Telegram — ${summary}\n`);
+    const label = lang.startsWith("ko") ? "[터미널]" : "[local]";
+    const r = await fetch(`https://api.telegram.org/bot${cfg.token}/sendMessage`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: cfg.allowedChatId, text: `💻 ${summary}` }),
+      body: JSON.stringify({ chat_id: cfg.allowedChatId, text: `💻 ${label} ${summary}` }),
     });
-  } catch {}
+    const json = await r.json();
+    if (!json.ok) process.stderr.write(`ctb: Telegram error — ${JSON.stringify(json)}\n`);
+  } catch (e) {
+    process.stderr.write(`ctb: notify error — ${e.message}\n`);
+  }
 }
 
 main();

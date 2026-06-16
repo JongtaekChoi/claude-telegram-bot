@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.12] - 2026-06-16
+### Fixed
+- `ctb` 종료 알림 fetch 실패 — `dns.setDefaultResultOrder("ipv4first")` 추가로 IPv6 우선 시도 문제 해결
+- `ctb` 알림 언어 — `cfg.lang` 미설정 시 `$LANG` 환경변수로 폴백
+- `ctb` 알림 메시지에 `[터미널]` / `[local]` 레이블 추가로 텔레그램 채팅 응답과 구분
+
 ## [0.3.11] - 2026-06-15
 ### Fixed
 - `ctb` 종료 요약을 config `lang` 에 맞는 언어로 전송 (ko 설정 시 한국어)
