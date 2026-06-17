@@ -192,6 +192,7 @@ const STR = {
     remembered: "💾 Saved to memory.",
     rememberUsage: "Usage: /remember <text to remember>",
     memoryUsage: "Usage: /memory · /memory clear",
+    retryScheduled: (time) => `⏰ Usage limit reached. Will auto-retry at ${time}.`,
   },
   ko: {
     help: () =>
@@ -260,6 +261,7 @@ const STR = {
     remembered: "💾 메모리에 저장했습니다.",
     rememberUsage: "사용법: /remember <기억할 내용>",
     memoryUsage: "사용법: /memory · /memory clear",
+    retryScheduled: (time) => `⏰ 사용 한도 초과. ${time}에 자동 재시도 예약됨.`,
   },
 };
 const t = (l, key, ...a) => {
@@ -482,11 +484,34 @@ async function send(chatId, text) {
 }
 
 // ── Claude 에러 분류 ──────────────────────────────────────────────────────
+function parseResetTime(raw) {
+  // ISO timestamp: 2026-06-17T14:00:00Z
+  const iso = raw.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?/);
+  if (iso) { const d = new Date(iso[0]); if (!isNaN(d)) return d; }
+  // "in X minutes" / "in X hours"
+  const inMin = raw.match(/in (\d+)\s*minute/i);
+  if (inMin) return new Date(Date.now() + parseInt(inMin[1]) * 60000);
+  const inHour = raw.match(/in (\d+)\s*hour/i);
+  if (inHour) return new Date(Date.now() + parseInt(inHour[1]) * 3600000);
+  // "resets at HH:MM" or "available at HH:MM"
+  const atTime = raw.match(/(?:resets?|reset|available|retry)\s+at\s+(\d{1,2}):(\d{2})(?:\s*(AM|PM))?/i);
+  if (atTime) {
+    let h = parseInt(atTime[1]);
+    const m = parseInt(atTime[2]);
+    if (atTime[3]) { if (/pm/i.test(atTime[3]) && h < 12) h += 12; if (/am/i.test(atTime[3]) && h === 12) h = 0; }
+    const d = new Date(); d.setHours(h, m, 0, 0);
+    if (d <= new Date()) d.setDate(d.getDate() + 1);
+    return d;
+  }
+  return null;
+}
+
 function classifyClaudeError(raw, code) {
   const t = raw.toLowerCase();
   if (t.includes("credit") || t.includes("balance") || t.includes("billing") || t.includes("payment"))
     return "💳 API 크레딧이 부족합니다. console.anthropic.com 에서 충전해주세요.";
-  if (t.includes("rate_limit") || t.includes("rate limit") || t.includes("too many requests") || code === 429)
+  if (t.includes("rate_limit") || t.includes("rate limit") || t.includes("too many requests") || code === 429
+      || t.includes("usage limit") || t.includes("monthly limit"))
     return "⏱️ 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.";
   if (t.includes("overloaded") || code === 529)
     return "🔄 Claude 서버가 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해주세요.";
@@ -545,13 +570,13 @@ function runClaude(prompt, sessionId, opts = {}) {
       currentChild = null;
       try {
         const j = JSON.parse(out);
-        const text = j.is_error
-          ? classifyClaudeError(j.result ?? "", code)
-          : (j.result ?? "(empty response)");
-        resolve({ ok: !j.is_error, text, sessionId: j.session_id, cost: j.total_cost_usd });
+        const rawErr = j.result ?? "";
+        const text = j.is_error ? classifyClaudeError(rawErr, code) : (rawErr || "(empty response)");
+        const resetAt = j.is_error ? parseResetTime(rawErr) : null;
+        resolve({ ok: !j.is_error, text, sessionId: j.session_id, cost: j.total_cost_usd, resetAt });
       } catch {
         const raw = (err || out || "no output").slice(0, 3500);
-        resolve({ ok: false, text: classifyClaudeError(raw, code) });
+        resolve({ ok: false, text: classifyClaudeError(raw, code), resetAt: parseResetTime(raw) });
       }
     });
   });
@@ -799,6 +824,7 @@ let currentChild = null;  // 실행 중인 claude child process (/stop 용)
 let currentTyping = null; // 타이핑 인터벌 (/stop 시 정리용)
 let prevSessionId;        // /stop --reset 복원 대상
 let stopping = false;     // /stop 처리 중 오류 메시지 억제 플래그
+let pendingRetry = null;  // 레이트 리밋 자동 재시도 예약 { timer, resetAt }
 
 async function handle(msg) {
   const chatId = msg.chat?.id;
@@ -888,12 +914,14 @@ async function handle(msg) {
     return;
   }
   if (text === "/new") {
+    if (pendingRetry) { clearTimeout(pendingRetry.timer); pendingRetry = null; }
     state.sessionId = undefined;
     saveState(state);
     await send(chatId, t(l, "newSession"));
     return;
   }
   if (text === "/stop" || text.startsWith("/stop ")) {
+    if (pendingRetry) { clearTimeout(pendingRetry.timer); pendingRetry = null; }
     if (!busy || !currentChild) {
       await send(chatId, t(l, "stopNoop"));
       return;
@@ -979,10 +1007,18 @@ async function handle(msg) {
       saveState(state);
     }
     const secs = Math.round((Date.now() - started) / 1000);
-    const footer = res.ok
-      ? `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`
-      : "";
-    if (!stopping) await send(chatId, (res.ok ? res.text : `⚠️ ${res.text}`) + footer);
+    if (!res.ok && res.resetAt && res.resetAt > new Date()) {
+      // 레이트 리밋 + 리셋 시간 파악 → 자동 재시도 예약
+      if (pendingRetry) clearTimeout(pendingRetry.timer);
+      const captured = msg;
+      const delay = res.resetAt - Date.now();
+      pendingRetry = { resetAt: res.resetAt, timer: setTimeout(() => { pendingRetry = null; handle(captured); }, delay) };
+      const timeStr = res.resetAt.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
+      if (!stopping) await send(chatId, t(l, "retryScheduled", timeStr));
+    } else {
+      const footer = res.ok ? `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}` : "";
+      if (!stopping) await send(chatId, (res.ok ? res.text : `⚠️ ${res.text}`) + footer);
+    }
   } catch (e) {
     if (!stopping) await send(chatId, t(l, "botError", e.message));
   } finally {
