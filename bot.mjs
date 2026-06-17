@@ -794,6 +794,7 @@ async function downloadAttachment(att) {
 // ── 메시지 처리 ───────────────────────────────────────────────────────────
 let busy = false;
 const msgQueue = []; // { msg, receivedAt } — busy 중 수신 메시지 대기열
+const mediaGroups = new Map(); // media_group_id → { msgs, timer } — 미디어 그룹 수집 대기
 let currentChild = null;  // 실행 중인 claude child process (/stop 용)
 let currentTyping = null; // 타이핑 인터벌 (/stop 시 정리용)
 let prevSessionId;        // /stop --reset 복원 대상
@@ -804,8 +805,8 @@ async function handle(msg) {
   if (!chatId) return;
   const l = langOf(msg);
   const text = (msg.text || msg.caption || "").trim();
-  const attachment = pickAttachment(msg);
-  if (!text && !attachment) return;
+  const attachment = msg._mediaGroup ? null : pickAttachment(msg);
+  if (!text && !attachment && !msg._mediaGroup?.length) return;
 
   // 화이트리스트
   if (!cfg.allowedChatId) {
@@ -951,7 +952,18 @@ async function handle(msg) {
 
   try {
     let prompt = text;
-    if (attachment) {
+    if (msg._mediaGroup?.length) {
+      const notes = [];
+      for (const fileId of msg._mediaGroup) {
+        try {
+          const { dest, name } = await downloadAttachment({ fileId, name: null });
+          notes.push(`[Attachment] Absolute path: ${dest} (filename: ${name}). Open it with the Read tool if needed.`);
+        } catch (e) {
+          await send(chatId, t(l, "attachFail", e.message));
+        }
+      }
+      if (notes.length) prompt = text ? `${text}\n\n${notes.join("\n")}` : notes.join("\n");
+    } else if (attachment) {
       try {
         const { dest, name } = await downloadAttachment(attachment);
         const note = `[Attachment] Absolute path: ${dest} (filename: ${name}). Open it with the Read tool if needed.`;
@@ -996,6 +1008,28 @@ function drainQueue() {
   return { ...group[group.length - 1].msg, text: merged, caption: undefined };
 }
 
+// 미디어 그룹(여러 장 동시 전송) — 1초 대기 후 일괄 처리
+function mergeMediaGroup(msgs) {
+  const captions = msgs.map((m) => m.caption || "").filter(Boolean);
+  const fileIds = msgs
+    .filter((m) => m.photo?.length)
+    .map((m) => m.photo[m.photo.length - 1].file_id);
+  return { ...msgs[0], text: captions.join("\n"), caption: undefined, _mediaGroup: fileIds };
+}
+
+function dispatch(msg) {
+  const gid = msg.media_group_id;
+  if (!gid) { handle(msg).catch((e) => console.error("Handle error:", e.message)); return; }
+  if (!mediaGroups.has(gid)) mediaGroups.set(gid, { msgs: [], timer: null });
+  const g = mediaGroups.get(gid);
+  g.msgs.push(msg);
+  clearTimeout(g.timer);
+  g.timer = setTimeout(() => {
+    mediaGroups.delete(gid);
+    handle(mergeMediaGroup(g.msgs)).catch((e) => console.error("Handle error:", e.message));
+  }, 1000);
+}
+
 // ── 롱폴링 루프 ───────────────────────────────────────────────────────────
 async function main() {
   console.log("Bot started. Polling Telegram...");
@@ -1033,7 +1067,7 @@ async function main() {
       }
       for (const upd of res.result) {
         offset = upd.update_id + 1;
-        if (upd.message) handle(upd.message).catch((e) => console.error("Handle error:", e.message));
+        if (upd.message) dispatch(upd.message);
       }
     } catch (e) {
       console.error("Polling error:", e.message);
