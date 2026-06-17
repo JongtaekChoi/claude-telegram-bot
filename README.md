@@ -160,7 +160,7 @@ auth layer.)
 - `run the solver tests and commit + push if they pass`
 - `add an edge case to solve-2nd-floor-edges.ts`
 
-Commands: `/new` (reset context / new session) · `/stop` (stop current task; `--reset` to also roll back the session) · `/cron` (list / add / remove scheduled tasks) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/model` (view / switch the model) · `/id` (show chat ID) · `/help`.
+Commands: `/new` (reset context / new session) · `/stop` (stop current task; `--reset` to also roll back the session) · `/cron` (list / add / remove scheduled tasks) · `/reserve` (schedule retry at usage-limit reset) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/model` (view / switch the model) · `/id` (show chat ID) · `/help`.
 
 > **`/stop`** kills the running Claude process immediately and clears any queued messages.
 > Add `--reset` to also restore the session to the state it was in *before* the task started,
@@ -223,6 +223,7 @@ your launchd plist points them.
   `state.json`, so context survives restarts. Use `/new` to start fresh.
 - **Message queue**: if you send a message while a task is running, it is queued (not dropped). When the task finishes, all queued messages are merged into a single prompt so Claude can resolve corrections and follow-ups in one pass (e.g. "do X" then "never mind, do Y" → handled together). Use `/stop` to cancel the running task and discard the queue.
 - **Model hint**: the bot tells Claude which model it is running as. If Claude judges a question to be beyond its current tier, it appends a one-line suggestion at the end of the reply (e.g. 💡 `/model sonnet`). Switch with `/model <name>` — `haiku`, `sonnet`, `opus`, `fable`, or a full model id. The choice persists in `state.json` across restarts.
+- **Usage-limit retry**: when a Claude Max / API rate-limit error includes a reset time, the bot shows a `/reserve` hint. `/reserve` schedules your last message to be resent automatically at that time. Use `/reserve <different text>` to change what's sent, or `/reserve rm` to cancel.
 
 ### Scheduled tasks (cron)
 
