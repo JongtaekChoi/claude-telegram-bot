@@ -133,6 +133,7 @@ const STR = {
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
       "• /remember <text> — save to persistent memory (survives /new)\n" +
       "• /memory — view memory · /memory clear to wipe\n" +
+      "• /reserve — retry at usage-limit reset time · /reserve <msg> for a different message · /reserve rm to cancel\n" +
       "• /restart — restart the bot (after a syntax check)\n" +
       "• /status — bot status & version\n" +
       "• /model — view / switch the model\n" +
@@ -192,7 +193,11 @@ const STR = {
     remembered: "💾 Saved to memory.",
     rememberUsage: "Usage: /remember <text to remember>",
     memoryUsage: "Usage: /memory · /memory clear",
-    retryScheduled: (time) => `⏰ Usage limit reached. Will auto-retry at ${time}.`,
+    reserveHint: "\n\nTo retry when the limit resets, send `/reserve` (or `/reserve <different message>`).",
+    reserveOk: (time) => `⏰ Retry scheduled for ${time}. Cancel with /reserve rm.`,
+    reserveRm: "🚫 Scheduled retry canceled.",
+    reserveNone: "No retry is scheduled.",
+    reserveNoLimit: "No recent usage limit error. Send a message first.",
   },
   ko: {
     help: () =>
@@ -203,6 +208,7 @@ const STR = {
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
       "• /remember <내용> — 퍼시스턴트 메모리에 저장 (/new 로 초기화해도 유지)\n" +
       "• /memory — 메모리 보기 · /memory clear 로 삭제\n" +
+      "• /reserve — 한도 리셋 시 재시도 예약 · /reserve <다른 메시지> 로 내용 변경 · /reserve rm 으로 취소\n" +
       "• /restart — 봇 재시작 (문법 검사 후 안전하게)\n" +
       "• /status — 봇 상태·버전 보기\n" +
       "• /model — 모델 보기·전환\n" +
@@ -261,7 +267,11 @@ const STR = {
     remembered: "💾 메모리에 저장했습니다.",
     rememberUsage: "사용법: /remember <기억할 내용>",
     memoryUsage: "사용법: /memory · /memory clear",
-    retryScheduled: (time) => `⏰ 사용 한도 초과. ${time}에 자동 재시도 예약됨.`,
+    reserveHint: "\n\n리셋 후 재시도하려면 `/reserve` (또는 `/reserve <다른 메시지>`)를 입력하세요.",
+    reserveOk: (time) => `⏰ ${time}에 재시도 예약됨. 취소: /reserve rm`,
+    reserveRm: "🚫 예약된 재시도를 취소했습니다.",
+    reserveNone: "예약된 재시도가 없습니다.",
+    reserveNoLimit: "최근 한도 초과 에러가 없습니다. 먼저 메시지를 보내주세요.",
   },
 };
 const t = (l, key, ...a) => {
@@ -283,6 +293,7 @@ const COMMANDS = {
     { command: "restart", description: "Restart the bot (after syntax check)" },
     { command: "status", description: "Bot status / version" },
     { command: "model", description: "View / switch the model" },
+    { command: "reserve", description: "Schedule retry when usage limit resets · /reserve rm to cancel" },
     { command: "id", description: "Show this chat ID" },
     { command: "help", description: "Help" },
   ],
@@ -295,6 +306,7 @@ const COMMANDS = {
     { command: "restart", description: "봇 재시작 (문법 검사 후)" },
     { command: "status", description: "봇 상태·버전 보기" },
     { command: "model", description: "모델 보기·전환" },
+    { command: "reserve", description: "한도 리셋 시 재시도 예약 · /reserve rm 으로 취소" },
     { command: "id", description: "이 채팅 ID 확인" },
     { command: "help", description: "도움말" },
   ],
@@ -820,11 +832,12 @@ async function downloadAttachment(att) {
 let busy = false;
 const msgQueue = []; // { msg, receivedAt } — busy 중 수신 메시지 대기열
 const mediaGroups = new Map(); // media_group_id → { msgs, timer } — 미디어 그룹 수집 대기
-let currentChild = null;  // 실행 중인 claude child process (/stop 용)
-let currentTyping = null; // 타이핑 인터벌 (/stop 시 정리용)
-let prevSessionId;        // /stop --reset 복원 대상
-let stopping = false;     // /stop 처리 중 오류 메시지 억제 플래그
-let pendingRetry = null;  // 레이트 리밋 자동 재시도 예약 { timer, resetAt }
+let currentChild = null;    // 실행 중인 claude child process (/stop 용)
+let currentTyping = null;   // 타이핑 인터벌 (/stop 시 정리용)
+let prevSessionId;          // /stop --reset 복원 대상
+let stopping = false;       // /stop 처리 중 오류 메시지 억제 플래그
+let rateLimitState = null;  // 마지막 레이트 리밋 { prompt, resetAt } — /reserve 용
+let pendingRetry = null;    // /reserve 로 예약된 재시도 { timer, resetAt }
 
 async function handle(msg) {
   const chatId = msg.chat?.id;
@@ -914,14 +927,12 @@ async function handle(msg) {
     return;
   }
   if (text === "/new") {
-    if (pendingRetry) { clearTimeout(pendingRetry.timer); pendingRetry = null; }
     state.sessionId = undefined;
     saveState(state);
     await send(chatId, t(l, "newSession"));
     return;
   }
   if (text === "/stop" || text.startsWith("/stop ")) {
-    if (pendingRetry) { clearTimeout(pendingRetry.timer); pendingRetry = null; }
     if (!busy || !currentChild) {
       await send(chatId, t(l, "stopNoop"));
       return;
@@ -954,6 +965,32 @@ async function handle(msg) {
     }
     const mem = loadMemory();
     await send(chatId, mem ? t(l, "memoryShow", mem) : t(l, "memoryEmpty"));
+    return;
+  }
+  if (text === "/reserve" || text.startsWith("/reserve ")) {
+    const arg = text.slice(8).trim();
+    if (arg === "rm") {
+      if (!pendingRetry) { await send(chatId, t(l, "reserveNone")); return; }
+      clearTimeout(pendingRetry.timer); pendingRetry = null;
+      await send(chatId, t(l, "reserveRm"));
+      return;
+    }
+    if (!rateLimitState) { await send(chatId, t(l, "reserveNoLimit")); return; }
+    const { resetAt } = rateLimitState;
+    const reservePrompt = arg || rateLimitState.prompt;
+    if (pendingRetry) clearTimeout(pendingRetry.timer);
+    const capturedPrompt = reservePrompt;
+    const capturedMsg = msg;
+    const delay = Math.max(resetAt - Date.now(), 1000);
+    pendingRetry = {
+      resetAt,
+      timer: setTimeout(() => {
+        pendingRetry = null;
+        handle({ ...capturedMsg, text: capturedPrompt, caption: undefined });
+      }, delay),
+    };
+    const timeStr = resetAt.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
+    await send(chatId, t(l, "reserveOk", timeStr));
     return;
   }
 
@@ -1007,17 +1044,15 @@ async function handle(msg) {
       saveState(state);
     }
     const secs = Math.round((Date.now() - started) / 1000);
-    if (!res.ok && res.resetAt && res.resetAt > new Date()) {
-      // 레이트 리밋 + 리셋 시간 파악 → 자동 재시도 예약
-      if (pendingRetry) clearTimeout(pendingRetry.timer);
-      const captured = msg;
-      const delay = res.resetAt - Date.now();
-      pendingRetry = { resetAt: res.resetAt, timer: setTimeout(() => { pendingRetry = null; handle(captured); }, delay) };
-      const timeStr = res.resetAt.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
-      if (!stopping) await send(chatId, t(l, "retryScheduled", timeStr));
+    if (!res.ok) {
+      // 레이트 리밋이고 리셋 시간을 알면 /reserve 힌트 추가
+      const hint = res.resetAt ? t(l, "reserveHint") : "";
+      rateLimitState = res.resetAt ? { prompt, resetAt: res.resetAt } : null;
+      if (!stopping) await send(chatId, `⚠️ ${res.text}${hint}`);
     } else {
-      const footer = res.ok ? `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}` : "";
-      if (!stopping) await send(chatId, (res.ok ? res.text : `⚠️ ${res.text}`) + footer);
+      rateLimitState = null;
+      const footer = `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`;
+      if (!stopping) await send(chatId, res.text + footer);
     }
   } catch (e) {
     if (!stopping) await send(chatId, t(l, "botError", e.message));
