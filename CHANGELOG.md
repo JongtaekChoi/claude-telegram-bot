@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.17] - 2026-06-18
+### Fixed
+- `/remember` 메모리가 persona에 덮어쓰여 무시되는 문제 — 메모리를 시스템 프롬프트 맨 앞에 배치하고 헤더를 `## RULES (must follow before anything else)` 로 강화
+
 ## [0.3.16] - 2026-06-18
 ### Changed
 - `allowedChatId` 를 배열로도 지정 가능 — `["chatId1", "chatId2"]` 형태로 여러 사용자 허용 (기존 문자열 형태 하위 호환)

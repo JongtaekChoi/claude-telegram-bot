@@ -559,9 +559,9 @@ function runClaude(prompt, sessionId, opts = {}) {
       : null;
     // opts.injectMemory: 퍼시스턴트 메모리를 시스템 프롬프트에 주입 (/new 로 초기화해도 유지)
     const mem = opts.injectMemory ? loadMemory() : "";
-    const memoryBlock = mem ? `## Persistent memory (survives /new)\n${mem}` : null;
-    // 페르소나(cfg.persona) + 간결 지침 + 모델 힌트 + 메모리를 함께 주입
-    const appendSys = [cfg.persona, brevity, modelHint, memoryBlock].filter(Boolean).join("\n\n");
+    // 메모리는 persona보다 앞에 배치하고 헤더를 강화 → persona가 덮어쓰는 것 방지
+    const memoryBlock = mem ? `## RULES (must follow before anything else)\n${mem}` : null;
+    const appendSys = [memoryBlock, cfg.persona, brevity, modelHint].filter(Boolean).join("\n\n");
     if (appendSys) args.push("--append-system-prompt", appendSys);
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
