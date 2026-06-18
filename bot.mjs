@@ -114,6 +114,11 @@ if (!existsSync(CONFIG_PATH)) {
 const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
 console.log({ ...cfg, token: cfg.token ? "<redacted>" : "(none)" });
 const TG = `https://api.telegram.org/bot${cfg.token}`;
+// allowedChatId 는 문자열 또는 배열 모두 허용 (하위 호환)
+const allowedIds = []
+  .concat(cfg.allowedChatId)
+  .filter(Boolean)
+  .map(String);
 
 // ── i18n (영어 기본 + 한국어) ─────────────────────────────────────────────
 // cfg.lang 를 "en"/"ko" 로 주면 그 언어로 고정. 비우면 메시지의 from.language_code 로
@@ -354,7 +359,7 @@ function isNewer(latest, current) {
 }
 
 async function checkForUpdate() {
-  if (!cfg.allowedChatId) return;
+  if (!allowedIds.length) return;
   const now = Date.now();
   if (state.lastVersionCheck && now - state.lastVersionCheck < VERSION_CHECK_INTERVAL) return;
   const latest = await fetchLatestVersion();
@@ -364,9 +369,10 @@ async function checkForUpdate() {
   if (state.notifiedVersion === latest) return; // 이미 알린 버전
   state.notifiedVersion = latest;
   saveState(state);
-  await send(cfg.allowedChatId,
-    `✨ 업데이트가 있습니다: ${VERSION} → ${latest}\n\`npm i -g claude-telegram-bot\` 후 /restart`
-  ).catch(() => {});
+  for (const id of allowedIds)
+    await send(id,
+      `✨ 업데이트가 있습니다: ${VERSION} → ${latest}\n\`npm i -g claude-telegram-bot\` 후 /restart`
+    ).catch(() => {});
 }
 
 // ── 퍼시스턴트 메모리 ─────────────────────────────────────────────────────
@@ -680,9 +686,9 @@ async function runScheduled(job) {
     const footer = res.ok
       ? `\n\n— ⏰ ${label} · ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`
       : `\n\n— ⏰ ${label}`;
-    await send(cfg.allowedChatId, (res.ok ? res.text : `⚠️ ${res.text}`) + footer);
+    for (const id of allowedIds) await send(id, (res.ok ? res.text : `⚠️ ${res.text}`) + footer);
   } catch (e) {
-    await send(cfg.allowedChatId, t(BOT_LANG, "scheduledError", e.message));
+    for (const id of allowedIds) await send(id, t(BOT_LANG, "scheduledError", e.message));
   } finally {
     busy = false;
   }
@@ -691,7 +697,7 @@ async function runScheduled(job) {
 function startScheduler() {
   // allowedChatId 없으면 결과를 보낼 곳이 없으니 비활성화. /cron add 로 나중에 작업이
   // 늘 수 있으므로, schedule 이 지금 비어 있어도 인터벌은 항상 돌린다(없으면 no-op).
-  if (!cfg.allowedChatId) {
+  if (!allowedIds.length) {
     console.warn("allowedChatId missing → scheduler disabled");
     return;
   }
@@ -848,11 +854,11 @@ async function handle(msg) {
   if (!text && !attachment && !msg._mediaGroup?.length) return;
 
   // 화이트리스트
-  if (!cfg.allowedChatId) {
+  if (!allowedIds.length) {
     await send(chatId, t(l, "needChatId", chatId));
     return;
   }
-  if (String(chatId) !== String(cfg.allowedChatId)) {
+  if (!allowedIds.includes(String(chatId))) {
     console.warn(`Ignoring unauthorized chatId ${chatId}`);
     return;
   }
