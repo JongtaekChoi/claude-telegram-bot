@@ -828,7 +828,7 @@ async function downloadAttachment(att) {
   const dir = ATTACH_DIR;
   mkdirSync(dir, { recursive: true });
   const ext = filePath.includes(".") ? filePath.slice(filePath.lastIndexOf(".")) : "";
-  const name = att.name || `tg-${att.fileId.slice(-10)}${ext}`;
+  const name = att.name || `tg-${Date.now()}-${att.fileId.slice(-6)}${ext}`;
   const dest = join(dir, name);
   writeFileSync(dest, buf);
   return { dest, name };

@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.18] - 2026-06-19
+### Fixed
+- 같은 이미지를 여러 번 보내면 파일이 덮어써지는 버그 — 파일명에 타임스탬프 추가 (`tg-<ts>-<id>.<ext>`)
+
 ## [0.3.17] - 2026-06-18
 ### Fixed
 - `/remember` 메모리가 persona에 덮어쓰여 무시되는 문제 — 메모리를 시스템 프롬프트 맨 앞에 배치하고 헤더를 `## RULES (must follow before anything else)` 로 강화
