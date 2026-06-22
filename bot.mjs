@@ -134,6 +134,7 @@ const STR = {
       `${cfg.name || "Claude Code Telegram bot"}\n\n` +
       "• Just send a message and Claude works in the project.\n" +
       "• /new — reset conversation context (new session)\n" +
+      "• /compact — compress context to free up space (keeps the session)\n" +
       "• /stop — stop the current task · /stop --reset to also roll back the session\n" +
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
       "• /remember <text> — save to persistent memory (survives /new)\n" +
@@ -145,6 +146,9 @@ const STR = {
       "• /id — show this chat ID\n" +
       `\nWorking dir: ${cfg.projectDir}\nPermission mode: ${cfg.permissionMode}`,
     newSession: "🆕 Started a new conversation (previous context cleared).",
+    compactOk: "🗜️ Context compacted. The conversation continues with a summary.",
+    compactFail: (m) => `⚠️ Compact failed: ${m}`,
+    compactNoSession: "No active session to compact. Just send a message to start one.",
     busy: "⏳ A previous task is still running. Please try again when it finishes.",
     queued: (n) => `⏳ Queued (#${n}). Will run when the current task finishes.`,
     stopOk: "🛑 Task stopped.",
@@ -203,12 +207,14 @@ const STR = {
     reserveRm: "🚫 Scheduled retry canceled.",
     reserveNone: "No retry is scheduled.",
     reserveNoLimit: "No recent usage limit error. Send a message first.",
+    contextTooLong: "⚠️ Prompt is too long. Use `/compact` to compress context, or `/new` to start fresh.",
   },
   ko: {
     help: () =>
       `${cfg.name || "Claude Code 텔레그램 봇"}\n\n` +
       "• 그냥 메시지를 보내면 Claude가 프로젝트에서 작업합니다.\n" +
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
+      "• /compact — 컨텍스트 압축 (세션 유지, 공간 확보)\n" +
       "• /stop — 진행 중인 작업 중단 · /stop --reset 으로 세션도 되돌리기\n" +
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
       "• /remember <내용> — 퍼시스턴트 메모리에 저장 (/new 로 초기화해도 유지)\n" +
@@ -277,6 +283,10 @@ const STR = {
     reserveRm: "🚫 예약된 재시도를 취소했습니다.",
     reserveNone: "예약된 재시도가 없습니다.",
     reserveNoLimit: "최근 한도 초과 에러가 없습니다. 먼저 메시지를 보내주세요.",
+    compactOk: "🗜️ 컨텍스트를 압축했습니다. 대화가 요약본으로 이어집니다.",
+    compactFail: (m) => `⚠️ compact 실패: ${m}`,
+    compactNoSession: "압축할 활성 세션이 없습니다. 메시지를 보내 세션을 시작하세요.",
+    contextTooLong: "⚠️ 프롬프트가 너무 깁니다. `/compact` 로 컨텍스트를 압축하거나 `/new` 로 새 세션을 시작하세요.",
   },
 };
 const t = (l, key, ...a) => {
@@ -291,6 +301,7 @@ const MODEL_SUGGESTIONS = ["fable", "opus", "sonnet", "haiku"];
 const COMMANDS = {
   en: [
     { command: "new", description: "Reset context (new session)" },
+    { command: "compact", description: "Compress context to free up space (keeps session)" },
     { command: "stop", description: "Stop the current task (--reset to roll back session)" },
     { command: "remember", description: "Save to persistent memory (survives /new)" },
     { command: "memory", description: "View or clear persistent memory" },
@@ -304,6 +315,7 @@ const COMMANDS = {
   ],
   ko: [
     { command: "new", description: "대화 맥락 초기화 (새 세션)" },
+    { command: "compact", description: "컨텍스트 압축 (세션 유지, 공간 확보)" },
     { command: "stop", description: "작업 중단 (--reset 으로 세션 되돌리기)" },
     { command: "remember", description: "퍼시스턴트 메모리에 저장 (/new 후에도 유지)" },
     { command: "memory", description: "메모리 보기·삭제" },
@@ -533,8 +545,8 @@ function classifyClaudeError(raw, code) {
     return "⏱️ 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.";
   if (t.includes("overloaded") || code === 529)
     return "🔄 Claude 서버가 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해주세요.";
-  if (t.includes("context") && (t.includes("length") || t.includes("limit") || t.includes("window")))
-    return "📏 대화 맥락이 너무 길어졌습니다. `/new` 로 새 세션을 시작해주세요.";
+  if (t.includes("prompt is too long") || (t.includes("context") && (t.includes("length") || t.includes("limit") || t.includes("window"))))
+    return "contextTooLong";
   return `Execution error (exit ${code}):\n${raw}`;
 }
 
@@ -932,6 +944,20 @@ async function handle(msg) {
     });
     return;
   }
+  if (text === "/compact") {
+    if (!state.sessionId) { await send(chatId, t(l, "compactNoSession")); return; }
+    try {
+      const res = await runClaude("/compact", state.sessionId);
+      if (res.ok !== false) {
+        await send(chatId, t(l, "compactOk"));
+      } else {
+        await send(chatId, t(l, "compactFail", res.text));
+      }
+    } catch (e) {
+      await send(chatId, t(l, "compactFail", e.message));
+    }
+    return;
+  }
   if (text === "/new") {
     state.sessionId = undefined;
     saveState(state);
@@ -1054,7 +1080,8 @@ async function handle(msg) {
       // 레이트 리밋이고 리셋 시간을 알면 /reserve 힌트 추가
       const hint = res.resetAt ? t(l, "reserveHint") : "";
       rateLimitState = res.resetAt ? { prompt, resetAt: res.resetAt } : null;
-      if (!stopping) await send(chatId, `⚠️ ${res.text}${hint}`);
+      const errMsg = res.text === "contextTooLong" ? t(l, "contextTooLong") : `⚠️ ${res.text}${hint}`;
+      if (!stopping) await send(chatId, errMsg);
     } else {
       rateLimitState = null;
       const footer = `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`;
