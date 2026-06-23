@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.21] - 2026-06-23
+### Added
+- `/testfallback` 명령어 — Codex 폴백 연결을 직접 테스트
+
 ## [0.3.20] - 2026-06-23
 ### Added
 - Codex 폴백 — Claude 레이트리밋·크레딧 부족 시 OpenAI Codex로 자동 대체 응답

@@ -152,6 +152,9 @@ const STR = {
     compactOk: "🗜️ Context compacted. The conversation continues with a summary.",
     compactFail: (m) => `⚠️ Compact failed: ${m}`,
     compactNoSession: "No active session to compact. Just send a message to start one.",
+    testFallbackDisabled: "⚠️ Codex fallback is not enabled. Set `\"codexFallback\": true` in config.json.",
+    testFallbackNoCodex: "⚠️ `codex` CLI not found. Install it first.",
+    testFallbackFail: (m) => `⚠️ Codex test failed: ${m}`,
     busy: "⏳ A previous task is still running. Please try again when it finishes.",
     queued: (n) => `⏳ Queued (#${n}). Will run when the current task finishes.`,
     stopOk: "🛑 Task stopped.",
@@ -290,6 +293,9 @@ const STR = {
     compactFail: (m) => `⚠️ compact 실패: ${m}`,
     compactNoSession: "압축할 활성 세션이 없습니다. 메시지를 보내 세션을 시작하세요.",
     contextTooLong: "⚠️ 프롬프트가 너무 깁니다. `/compact` 로 컨텍스트를 압축하거나 `/new` 로 새 세션을 시작하세요.",
+    testFallbackDisabled: "⚠️ Codex 폴백이 비활성화 상태입니다. config.json에 `\"codexFallback\": true` 를 추가하세요.",
+    testFallbackNoCodex: "⚠️ `codex` CLI를 찾을 수 없습니다. 먼저 설치해주세요.",
+    testFallbackFail: (m) => `⚠️ Codex 테스트 실패: ${m}`,
   },
 };
 const t = (l, key, ...a) => {
@@ -993,6 +999,15 @@ async function handle(msg) {
     } catch (e) {
       await send(chatId, t(l, "compactFail", e.message));
     }
+    return;
+  }
+  if (text === "/testfallback") {
+    if (!cfg.codexFallback) { await send(chatId, t(l, "testFallbackDisabled")); return; }
+    if (!CODEX_AVAILABLE) { await send(chatId, t(l, "testFallbackNoCodex")); return; }
+    await send(chatId, "🧪 Codex 연결 테스트 중…");
+    const res = await runCodex("Reply with exactly one sentence: Codex fallback is working.", l);
+    if (res.ok) await send(chatId, res.text);
+    else await send(chatId, t(l, "testFallbackFail", res.text));
     return;
   }
   if (text === "/new") {
