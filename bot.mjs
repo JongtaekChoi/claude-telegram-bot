@@ -877,6 +877,44 @@ async function downloadAttachment(att) {
   return { dest, name };
 }
 
+// ── 텔레그램 메시지 메타데이터 추출 ──────────────────────────────────────
+function buildMsgMeta(msg) {
+  const parts = [];
+
+  // 포워드 출처 (신규 API: forward_origin, 구버전 폴백: forward_from / forward_from_chat)
+  const fo = msg.forward_origin;
+  if (fo) {
+    if (fo.type === "user" && fo.sender_user)
+      parts.push(`[Forwarded from: ${fo.sender_user.first_name}${fo.sender_user.username ? ` (@${fo.sender_user.username})` : ""}]`);
+    else if (fo.type === "channel" && fo.chat)
+      parts.push(`[Forwarded from channel: ${fo.chat.title}${fo.chat.username ? ` (@${fo.chat.username})` : ""}]`);
+    else if (fo.type === "chat" && fo.sender_chat)
+      parts.push(`[Forwarded from: ${fo.sender_chat.title}]`);
+    else if (fo.type === "hidden_user" && fo.sender_user_name)
+      parts.push(`[Forwarded from: ${fo.sender_user_name} (hidden)]`);
+    else
+      parts.push(`[Forwarded message]`);
+  } else if (msg.forward_from) {
+    const u = msg.forward_from;
+    parts.push(`[Forwarded from: ${u.first_name}${u.username ? ` (@${u.username})` : ""}]`);
+  } else if (msg.forward_from_chat) {
+    const c = msg.forward_from_chat;
+    parts.push(`[Forwarded from: ${c.title}${c.username ? ` (@${c.username})` : ""}]`);
+  }
+
+  // 리플라이 컨텍스트
+  const reply = msg.reply_to_message;
+  if (reply) {
+    const replyText = (reply.text || reply.caption || "").trim().slice(0, 300);
+    const replyFrom = reply.from?.first_name || "unknown";
+    parts.push(replyText
+      ? `[Replying to ${replyFrom}: "${replyText}${replyText.length >= 300 ? "…" : ""}"]`
+      : `[Replying to ${replyFrom}'s message]`);
+  }
+
+  return parts.join("\n");
+}
+
 // ── 메시지 처리 ───────────────────────────────────────────────────────────
 let busy = false;
 const msgQueue = []; // { msg, receivedAt } — busy 중 수신 메시지 대기열
@@ -1112,6 +1150,8 @@ async function handle(msg) {
         await send(chatId, t(l, "attachFail", e.message));
       }
     }
+    const meta = buildMsgMeta(msg);
+    if (meta) prompt = prompt ? `${meta}\n\n${prompt}` : meta;
     prevSessionId = state.sessionId; // /stop --reset 복원 대상 저장
     const res = await runClaude(prompt, state.sessionId, { modelHint: true, trackChild: true, injectMemory: true });
     if (res.sessionId) {
