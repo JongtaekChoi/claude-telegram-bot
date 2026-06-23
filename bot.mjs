@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import dns from "node:dns";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
 // 일부 네트워크에서 IPv6 경로가 막혀 있으면 Node의 fetch(undici)가 IPv6를
 // 물고 타임아웃남(api.telegram.org가 IPv6를 가짐). IPv4 우선 + 자동선택 끄기로 회피.
@@ -35,9 +35,6 @@ const VERSION = (() => {
   } catch {
     return "?";
   }
-})();
-const CODEX_AVAILABLE = (() => {
-  try { return spawnSync("which", ["codex"], { encoding: "utf8" }).stdout.trim().length > 0; } catch { return false; }
 })();
 
 // ── CLI (help / version / init) ───────────────────────────────────────────
@@ -152,9 +149,8 @@ const STR = {
     compactOk: "🗜️ Context compacted. The conversation continues with a summary.",
     compactFail: (m) => `⚠️ Compact failed: ${m}`,
     compactNoSession: "No active session to compact. Just send a message to start one.",
-    testFallbackDisabled: "⚠️ Codex fallback is not enabled. Set `\"codexFallback\": true` in config.json.",
-    testFallbackNoCodex: "⚠️ `codex` CLI not found. Install it first.",
-    testFallbackFail: (m) => `⚠️ Codex test failed: ${m}`,
+    testFallbackDisabled: "⚠️ Ollama fallback is not enabled. Set `\"ollamaFallback\": true` in config.json.",
+    testFallbackFail: (m) => `⚠️ Ollama test failed: ${m}`,
     busy: "⏳ A previous task is still running. Please try again when it finishes.",
     queued: (n) => `⏳ Queued (#${n}). Will run when the current task finishes.`,
     stopOk: "🛑 Task stopped.",
@@ -293,9 +289,8 @@ const STR = {
     compactFail: (m) => `⚠️ compact 실패: ${m}`,
     compactNoSession: "압축할 활성 세션이 없습니다. 메시지를 보내 세션을 시작하세요.",
     contextTooLong: "⚠️ 프롬프트가 너무 깁니다. `/compact` 로 컨텍스트를 압축하거나 `/new` 로 새 세션을 시작하세요.",
-    testFallbackDisabled: "⚠️ Codex 폴백이 비활성화 상태입니다. config.json에 `\"codexFallback\": true` 를 추가하세요.",
-    testFallbackNoCodex: "⚠️ `codex` CLI를 찾을 수 없습니다. 먼저 설치해주세요.",
-    testFallbackFail: (m) => `⚠️ Codex 테스트 실패: ${m}`,
+    testFallbackDisabled: "⚠️ Ollama 폴백이 비활성화 상태입니다. config.json에 `\"ollamaFallback\": true` 를 추가하세요.",
+    testFallbackFail: (m) => `⚠️ Ollama 테스트 실패: ${m}`,
   },
 };
 const t = (l, key, ...a) => {
@@ -545,7 +540,7 @@ function parseResetTime(raw) {
   return null;
 }
 
-function isCodexFallbackError(raw, code) {
+function isFallbackError(raw, code) {
   const t = (raw || "").toLowerCase();
   return t.includes("credit") || t.includes("balance") || t.includes("billing") || t.includes("payment")
     || t.includes("rate_limit") || t.includes("rate limit") || t.includes("too many requests") || code === 429
@@ -620,39 +615,32 @@ function runClaude(prompt, sessionId, opts = {}) {
         const rawErr = j.result ?? "";
         const text = j.is_error ? classifyClaudeError(rawErr, code) : (rawErr || "(empty response)");
         const resetAt = j.is_error ? parseResetTime(rawErr) : null;
-        const canFallback = j.is_error && isCodexFallbackError(rawErr, code);
+        const canFallback = j.is_error && isFallbackError(rawErr, code);
         resolve({ ok: !j.is_error, text, sessionId: j.session_id, cost: j.total_cost_usd, resetAt, canFallback });
       } catch {
         const raw = (err || out || "no output").slice(0, 3500);
-        resolve({ ok: false, text: classifyClaudeError(raw, code), resetAt: parseResetTime(raw), canFallback: isCodexFallbackError(raw, code) });
+        resolve({ ok: false, text: classifyClaudeError(raw, code), resetAt: parseResetTime(raw), canFallback: isFallbackError(raw, code) });
       }
     });
   });
 }
 
-// ── Codex 폴백 실행 ──────────────────────────────────────────────────────
-function runCodex(prompt, lang = "en") {
-  return new Promise((resolve) => {
-    const tmpFile = `/tmp/codex-out-${Date.now()}.txt`;
-    const header = lang === "ko"
-      ? "🌙 Claude가 잠시 쉬고 있어요. 제가 대신 도와드릴게요. (세션은 이어지지 않아요)\n\n"
-      : "🌙 Claude is resting right now. I'll help in the meantime. (Session won't continue)\n\n";
-    const args = ["exec", "--ephemeral", "--skip-git-repo-check", "-o", tmpFile, prompt];
-    const child = spawn("codex", args, { env: { ...process.env } });
-    let err = "";
-    child.stderr.on("data", (d) => { err += d; });
-    child.on("error", (e) => resolve({ ok: false, text: e.message }));
-    child.on("close", () => {
-      try {
-        const text = readFileSync(tmpFile, "utf8").trim();
-        try { unlinkSync(tmpFile); } catch {}
-        if (text) resolve({ ok: true, text: header + text });
-        else resolve({ ok: false, text: err || "no output" });
-      } catch {
-        resolve({ ok: false, text: err || "no output" });
-      }
-    });
+// ── Ollama 폴백 실행 ──────────────────────────────────────────────────────
+async function runOllama(prompt, lang = "en") {
+  const header = lang === "ko"
+    ? "🌙 Claude가 잠시 쉬고 있어요. 제가 대신 도와드릴게요. (세션은 이어지지 않아요)\n\n"
+    : "🌙 Claude is resting right now. I'll help in the meantime. (Session won't continue)\n\n";
+  const model = cfg.ollamaModel || "phi3:mini";
+  const r = await fetch("http://localhost:11434/api/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, prompt, stream: false }),
+    signal: AbortSignal.timeout(60_000),
   });
+  if (!r.ok) return { ok: false, text: `Ollama HTTP ${r.status}` };
+  const j = await r.json();
+  const text = (j.response || "").trim();
+  return text ? { ok: true, text: header + text } : { ok: false, text: "no response" };
 }
 
 // ── 크론 스케줄러 ─────────────────────────────────────────────────────────
@@ -1002,12 +990,15 @@ async function handle(msg) {
     return;
   }
   if (text === "/testfallback") {
-    if (!cfg.codexFallback) { await send(chatId, t(l, "testFallbackDisabled")); return; }
-    if (!CODEX_AVAILABLE) { await send(chatId, t(l, "testFallbackNoCodex")); return; }
-    await send(chatId, "🧪 Codex 연결 테스트 중…");
-    const res = await runCodex("Reply with exactly one sentence: Codex fallback is working.", l);
-    if (res.ok) await send(chatId, res.text);
-    else await send(chatId, t(l, "testFallbackFail", res.text));
+    if (!cfg.ollamaFallback) { await send(chatId, t(l, "testFallbackDisabled")); return; }
+    await send(chatId, "🧪 Ollama 연결 테스트 중…");
+    try {
+      const res = await runOllama("Reply with exactly one sentence: Ollama fallback is working.", l);
+      if (res.ok) await send(chatId, res.text);
+      else await send(chatId, t(l, "testFallbackFail", res.text));
+    } catch (e) {
+      await send(chatId, t(l, "testFallbackFail", e.message));
+    }
     return;
   }
   if (text === "/new") {
@@ -1132,10 +1123,12 @@ async function handle(msg) {
       // 레이트 리밋이고 리셋 시간을 알면 /reserve 힌트 추가
       const hint = res.resetAt ? t(l, "reserveHint") : "";
       rateLimitState = res.resetAt ? { prompt, resetAt: res.resetAt } : null;
-      // Codex 폴백: 레이트리밋·크레딧 에러이고 codexFallback 켜져 있으면 Codex로 재시도
-      if (cfg.codexFallback && CODEX_AVAILABLE && res.canFallback && !stopping) {
-        const cres = await runCodex(prompt, l);
-        if (cres.ok) { await send(chatId, cres.text); return; }
+      // Ollama 폴백: 레이트리밋·크레딧 에러이고 ollamaFallback 켜져 있으면 Ollama로 재시도
+      if (cfg.ollamaFallback && res.canFallback && !stopping) {
+        try {
+          const oRes = await runOllama(prompt, l);
+          if (oRes.ok) { await send(chatId, oRes.text); return; }
+        } catch {}
       }
       const errMsg = res.text === "contextTooLong" ? t(l, "contextTooLong") : `⚠️ ${res.text}${hint}`;
       if (!stopping) await send(chatId, errMsg);

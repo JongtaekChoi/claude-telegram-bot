@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.22] - 2026-06-23
+### Changed
+- Codex 폴백 → Ollama 폴백으로 교체 (fetch 기반, 의존성 0 유지)
+  - config.json에 `"ollamaFallback": true`, `"ollamaModel": "phi3:mini"` 로 설정
+  - Claude 레이트리밋·크레딧 부족 시 로컬 Ollama 모델로 자동 대체
+
 ## [0.3.21] - 2026-06-23
 ### Added
 - `/testfallback` 명령어 — Codex 폴백 연결을 직접 테스트
