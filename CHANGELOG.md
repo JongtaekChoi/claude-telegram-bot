@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.20] - 2026-06-23
+### Added
+- Codex 폴백 — Claude 레이트리밋·크레딧 부족 시 OpenAI Codex로 자동 대체 응답
+  - config.json에 `"codexFallback": true` 로 활성화, `codex` CLI가 설치된 경우에만 동작
+  - 응답 앞에 "🌙 Claude가 잠시 쉬고 있어요" 안내 문구 자동 삽입
+
 ## [0.3.19] - 2026-06-19
 ### Added
 - `/compact` 명령어 — 세션을 유지한 채 컨텍스트를 요약 압축 (`/new` 없이 공간 확보)

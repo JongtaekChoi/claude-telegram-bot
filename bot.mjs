@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import dns from "node:dns";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 // 일부 네트워크에서 IPv6 경로가 막혀 있으면 Node의 fetch(undici)가 IPv6를
 // 물고 타임아웃남(api.telegram.org가 IPv6를 가짐). IPv4 우선 + 자동선택 끄기로 회피.
@@ -35,6 +35,9 @@ const VERSION = (() => {
   } catch {
     return "?";
   }
+})();
+const CODEX_AVAILABLE = (() => {
+  try { return spawnSync("which", ["codex"], { encoding: "utf8" }).stdout.trim().length > 0; } catch { return false; }
 })();
 
 // ── CLI (help / version / init) ───────────────────────────────────────────
@@ -536,6 +539,14 @@ function parseResetTime(raw) {
   return null;
 }
 
+function isCodexFallbackError(raw, code) {
+  const t = (raw || "").toLowerCase();
+  return t.includes("credit") || t.includes("balance") || t.includes("billing") || t.includes("payment")
+    || t.includes("rate_limit") || t.includes("rate limit") || t.includes("too many requests") || code === 429
+    || t.includes("usage limit") || t.includes("monthly limit")
+    || t.includes("overloaded") || code === 529;
+}
+
 function classifyClaudeError(raw, code) {
   const t = raw.toLowerCase();
   if (t.includes("credit") || t.includes("balance") || t.includes("billing") || t.includes("payment"))
@@ -603,10 +614,36 @@ function runClaude(prompt, sessionId, opts = {}) {
         const rawErr = j.result ?? "";
         const text = j.is_error ? classifyClaudeError(rawErr, code) : (rawErr || "(empty response)");
         const resetAt = j.is_error ? parseResetTime(rawErr) : null;
-        resolve({ ok: !j.is_error, text, sessionId: j.session_id, cost: j.total_cost_usd, resetAt });
+        const canFallback = j.is_error && isCodexFallbackError(rawErr, code);
+        resolve({ ok: !j.is_error, text, sessionId: j.session_id, cost: j.total_cost_usd, resetAt, canFallback });
       } catch {
         const raw = (err || out || "no output").slice(0, 3500);
-        resolve({ ok: false, text: classifyClaudeError(raw, code), resetAt: parseResetTime(raw) });
+        resolve({ ok: false, text: classifyClaudeError(raw, code), resetAt: parseResetTime(raw), canFallback: isCodexFallbackError(raw, code) });
+      }
+    });
+  });
+}
+
+// ── Codex 폴백 실행 ──────────────────────────────────────────────────────
+function runCodex(prompt, lang = "en") {
+  return new Promise((resolve) => {
+    const tmpFile = `/tmp/codex-out-${Date.now()}.txt`;
+    const header = lang === "ko"
+      ? "🌙 Claude가 잠시 쉬고 있어요. 제가 대신 도와드릴게요. (세션은 이어지지 않아요)\n\n"
+      : "🌙 Claude is resting right now. I'll help in the meantime. (Session won't continue)\n\n";
+    const args = ["exec", "--ephemeral", "--skip-git-repo-check", "-o", tmpFile, prompt];
+    const child = spawn("codex", args, { env: { ...process.env } });
+    let err = "";
+    child.stderr.on("data", (d) => { err += d; });
+    child.on("error", (e) => resolve({ ok: false, text: e.message }));
+    child.on("close", () => {
+      try {
+        const text = readFileSync(tmpFile, "utf8").trim();
+        try { unlinkSync(tmpFile); } catch {}
+        if (text) resolve({ ok: true, text: header + text });
+        else resolve({ ok: false, text: err || "no output" });
+      } catch {
+        resolve({ ok: false, text: err || "no output" });
       }
     });
   });
@@ -1080,6 +1117,11 @@ async function handle(msg) {
       // 레이트 리밋이고 리셋 시간을 알면 /reserve 힌트 추가
       const hint = res.resetAt ? t(l, "reserveHint") : "";
       rateLimitState = res.resetAt ? { prompt, resetAt: res.resetAt } : null;
+      // Codex 폴백: 레이트리밋·크레딧 에러이고 codexFallback 켜져 있으면 Codex로 재시도
+      if (cfg.codexFallback && CODEX_AVAILABLE && res.canFallback && !stopping) {
+        const cres = await runCodex(prompt, l);
+        if (cres.ok) { await send(chatId, cres.text); return; }
+      }
       const errMsg = res.text === "contextTooLong" ? t(l, "contextTooLong") : `⚠️ ${res.text}${hint}`;
       if (!stopping) await send(chatId, errMsg);
     } else {
