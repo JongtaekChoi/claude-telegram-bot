@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.25] - 2026-06-23
+### Added
+- `/ollama` 명령어 — Ollama 채팅 모드 수동 토글
+  - 켜는 동안 메시지는 Claude 없이 Ollama로 직접 처리 (Claude 세션은 유지)
+  - 다시 `/ollama` 로 끄면 Claude 모드로 복귀
+
 ## [0.3.24] - 2026-06-23
 ### Fixed
 - ctb 종료 시 요약이 항상 SKIP으로 반환되는 문제 수정

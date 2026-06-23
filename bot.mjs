@@ -135,6 +135,7 @@ const STR = {
       "• Just send a message and Claude works in the project.\n" +
       "• /new — reset conversation context (new session)\n" +
       "• /compact — compress context to free up space (keeps the session)\n" +
+      "• /ollama — toggle Ollama chat mode (bypass Claude, use local LLM)\n" +
       "• /stop — stop the current task · /stop --reset to also roll back the session\n" +
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
       "• /remember <text> — save to persistent memory (survives /new)\n" +
@@ -151,6 +152,8 @@ const STR = {
     compactNoSession: "No active session to compact. Just send a message to start one.",
     testFallbackDisabled: "⚠️ Ollama fallback is not enabled. Set `\"ollamaFallback\": true` in config.json.",
     testFallbackFail: (m) => `⚠️ Ollama test failed: ${m}`,
+    ollamaOn: "🌙 Ollama mode on. Messages will now go to Ollama. Your Claude session is preserved.",
+    ollamaOff: "✅ Ollama mode off. Back to Claude.",
     busy: "⏳ A previous task is still running. Please try again when it finishes.",
     queued: (n) => `⏳ Queued (#${n}). Will run when the current task finishes.`,
     stopOk: "🛑 Task stopped.",
@@ -217,6 +220,7 @@ const STR = {
       "• 그냥 메시지를 보내면 Claude가 프로젝트에서 작업합니다.\n" +
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
       "• /compact — 컨텍스트 압축 (세션 유지, 공간 확보)\n" +
+      "• /ollama — Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM 사용)\n" +
       "• /stop — 진행 중인 작업 중단 · /stop --reset 으로 세션도 되돌리기\n" +
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
       "• /remember <내용> — 퍼시스턴트 메모리에 저장 (/new 로 초기화해도 유지)\n" +
@@ -291,6 +295,8 @@ const STR = {
     contextTooLong: "⚠️ 프롬프트가 너무 깁니다. `/compact` 로 컨텍스트를 압축하거나 `/new` 로 새 세션을 시작하세요.",
     testFallbackDisabled: "⚠️ Ollama 폴백이 비활성화 상태입니다. config.json에 `\"ollamaFallback\": true` 를 추가하세요.",
     testFallbackFail: (m) => `⚠️ Ollama 테스트 실패: ${m}`,
+    ollamaOn: "🌙 Ollama 모드 켜짐. 이제 메시지는 Ollama로 처리됩니다. Claude 세션은 유지됩니다.",
+    ollamaOff: "✅ Ollama 모드 꺼짐. 다시 Claude로 처리합니다.",
   },
 };
 const t = (l, key, ...a) => {
@@ -306,6 +312,7 @@ const COMMANDS = {
   en: [
     { command: "new", description: "Reset context (new session)" },
     { command: "compact", description: "Compress context to free up space (keeps session)" },
+    { command: "ollama", description: "Toggle Ollama chat mode (bypass Claude, use local LLM)" },
     { command: "stop", description: "Stop the current task (--reset to roll back session)" },
     { command: "remember", description: "Save to persistent memory (survives /new)" },
     { command: "memory", description: "View or clear persistent memory" },
@@ -320,6 +327,7 @@ const COMMANDS = {
   ko: [
     { command: "new", description: "대화 맥락 초기화 (새 세션)" },
     { command: "compact", description: "컨텍스트 압축 (세션 유지, 공간 확보)" },
+    { command: "ollama", description: "Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM)" },
     { command: "stop", description: "작업 중단 (--reset 으로 세션 되돌리기)" },
     { command: "remember", description: "퍼시스턴트 메모리에 저장 (/new 후에도 유지)" },
     { command: "memory", description: "메모리 보기·삭제" },
@@ -626,10 +634,10 @@ function runClaude(prompt, sessionId, opts = {}) {
 }
 
 // ── Ollama 폴백 실행 ──────────────────────────────────────────────────────
-async function runOllama(prompt, lang = "en") {
-  const header = lang === "ko"
+async function runOllama(prompt, lang = "en", opts = {}) {
+  const header = opts.noHeader ? "" : (lang === "ko"
     ? "🌙 Claude가 잠시 쉬고 있어요. 제가 대신 도와드릴게요. (세션은 이어지지 않아요)\n\n"
-    : "🌙 Claude is resting right now. I'll help in the meantime. (Session won't continue)\n\n";
+    : "🌙 Claude is resting right now. I'll help in the meantime. (Session won't continue)\n\n");
   const model = cfg.ollamaModel || "phi3:mini";
   const r = await fetch("http://localhost:11434/api/generate", {
     method: "POST",
@@ -1027,6 +1035,13 @@ async function handle(msg) {
     }
     return;
   }
+  if (text === "/ollama") {
+    if (!cfg.ollamaFallback) { await send(chatId, t(l, "testFallbackDisabled")); return; }
+    state.ollamaMode = !state.ollamaMode;
+    saveState(state);
+    await send(chatId, t(l, state.ollamaMode ? "ollamaOn" : "ollamaOff"));
+    return;
+  }
   if (text === "/testfallback") {
     if (!cfg.ollamaFallback) { await send(chatId, t(l, "testFallbackDisabled")); return; }
     await send(chatId, "🧪 Ollama 연결 테스트 중…");
@@ -1152,6 +1167,16 @@ async function handle(msg) {
     }
     const meta = buildMsgMeta(msg);
     if (meta) prompt = prompt ? `${meta}\n\n${prompt}` : meta;
+    if (state.ollamaMode) {
+      try {
+        const oRes = await runOllama(prompt, l, { noHeader: true });
+        if (oRes.ok) await send(chatId, oRes.text);
+        else await send(chatId, t(l, "testFallbackFail", oRes.text));
+      } catch (e) {
+        await send(chatId, t(l, "testFallbackFail", e.message));
+      }
+      return;
+    }
     prevSessionId = state.sessionId; // /stop --reset 복원 대상 저장
     const res = await runClaude(prompt, state.sessionId, { modelHint: true, trackChild: true, injectMemory: true });
     if (res.sessionId) {
