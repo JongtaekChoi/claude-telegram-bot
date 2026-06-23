@@ -639,15 +639,20 @@ async function runOllama(prompt, lang = "en", opts = {}) {
     ? "🌙 Claude가 잠시 쉬고 있어요. 제가 대신 도와드릴게요. (세션은 이어지지 않아요)\n\n"
     : "🌙 Claude is resting right now. I'll help in the meantime. (Session won't continue)\n\n");
   const model = cfg.ollamaModel || "phi3:mini";
-  const r = await fetch("http://localhost:11434/api/generate", {
+  const brevity = "This reply is delivered over Telegram. Be concise — short paragraphs and lists, no filler intro/summary. Reply in the user's language.";
+  const systemParts = [cfg.persona, brevity].filter(Boolean);
+  const messages = [];
+  if (systemParts.length) messages.push({ role: "system", content: systemParts.join("\n\n") });
+  messages.push({ role: "user", content: prompt });
+  const r = await fetch("http://localhost:11434/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, prompt, stream: false }),
+    body: JSON.stringify({ model, messages, stream: false }),
     signal: AbortSignal.timeout(60_000),
   });
   if (!r.ok) return { ok: false, text: `Ollama HTTP ${r.status}` };
   const j = await r.json();
-  const text = (j.response || "").trim();
+  const text = (j.message?.content || "").trim();
   return text ? { ok: true, text: header + text } : { ok: false, text: "no response" };
 }
 

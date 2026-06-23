@@ -5,6 +5,10 @@
 - `/ollama` 명령어 — Ollama 채팅 모드 수동 토글
   - 켜는 동안 메시지는 Claude 없이 Ollama로 직접 처리 (Claude 세션은 유지)
   - 다시 `/ollama` 로 끄면 Claude 모드로 복귀
+### Changed
+- Ollama 요청을 `/api/generate` → `/api/chat` 으로 전환
+  - 시스템 프롬프트 지원: `cfg.persona` + 간결체 instruction 주입
+  - 응답 품질 개선 (특히 작은 모델에서 효과적)
 
 ## [0.3.24] - 2026-06-23
 ### Fixed
