@@ -151,8 +151,8 @@ async function main() {
 
 async function summarizeSession(sid, lang) {
   const langInstruction = lang && lang.startsWith("ko")
-    ? "---ctb:start--- 마커 이후에 이 터미널 세션에서 한 작업을 한국어로 짧은 구문(10단어 이내)으로 요약해줘. 마크다운 없이 텍스트만. 마커 이후 중요한 작업이 없으면 정확히 이렇게만 답해: SKIP"
-    : "After the ---ctb:start--- marker in this conversation, what was accomplished in this terminal session? One short phrase, 10 words max, plain text. If nothing significant after the marker, reply: SKIP";
+    ? "방금 로컬 터미널 코딩 세션이 끝났어. 이 대화에서 가장 최근에 나눈 내용(이 메시지 직전까지)을 바탕으로, 그 세션에서 무엇을 했는지 한국어로 짧은 구문(10단어 이내)으로 요약해줘. 마크다운 없이 텍스트만. 중요한 작업이 없었으면 정확히 이렇게만 답해: SKIP"
+    : "A local terminal coding session just ended. Based on the most recent exchanges in this conversation (just before this message), summarize in one short phrase (10 words max) what was accomplished. Plain text only. If nothing significant was done, reply exactly: SKIP";
   return new Promise((resolve) => {
     const child = spawn("claude", [
       "--resume", sid,
