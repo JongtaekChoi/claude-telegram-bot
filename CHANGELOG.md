@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.26] - 2026-06-24
+### Fixed
+- `"session limit"` 에러 미감지 문제 — `isFallbackError` / `classifyClaudeError` 에 추가
+- `"resets 7:20pm"` 형식 파싱 실패 — `parseResetTime` regex에서 `at` 없이도 시간 추출
+### Changed
+- 레이트리밋 에러 시 리셋 시간이 있으면 자동으로 재시도 예약 (`/reserve` 수동 입력 불필요)
+
 ## [0.3.25] - 2026-06-23
 ### Added
 - `/ollama` 명령어 — Ollama 채팅 모드 수동 토글

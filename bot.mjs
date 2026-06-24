@@ -208,6 +208,7 @@ const STR = {
     rememberUsage: "Usage: /remember <text to remember>",
     memoryUsage: "Usage: /memory · /memory clear",
     reserveHint: "\n\nTo retry when the limit resets, send `/reserve` (or `/reserve <different message>`).",
+    reserveAuto: (time) => `⏰ Auto-retry scheduled for ${time}. Cancel with /reserve rm.`,
     reserveOk: (time) => `⏰ Retry scheduled for ${time}. Cancel with /reserve rm.`,
     reserveRm: "🚫 Scheduled retry canceled.",
     reserveNone: "No retry is scheduled.",
@@ -285,6 +286,7 @@ const STR = {
     rememberUsage: "사용법: /remember <기억할 내용>",
     memoryUsage: "사용법: /memory · /memory clear",
     reserveHint: "\n\n리셋 후 재시도하려면 `/reserve` (또는 `/reserve <다른 메시지>`)를 입력하세요.",
+    reserveAuto: (time) => `⏰ ${time}에 자동 재시도 예약됨. 취소: /reserve rm`,
     reserveOk: (time) => `⏰ ${time}에 재시도 예약됨. 취소: /reserve rm`,
     reserveRm: "🚫 예약된 재시도를 취소했습니다.",
     reserveNone: "예약된 재시도가 없습니다.",
@@ -535,8 +537,8 @@ function parseResetTime(raw) {
   if (inMin) return new Date(Date.now() + parseInt(inMin[1]) * 60000);
   const inHour = raw.match(/in (\d+)\s*hour/i);
   if (inHour) return new Date(Date.now() + parseInt(inHour[1]) * 3600000);
-  // "resets at HH:MM" or "available at HH:MM"
-  const atTime = raw.match(/(?:resets?|reset|available|retry)\s+at\s+(\d{1,2}):(\d{2})(?:\s*(AM|PM))?/i);
+  // "resets at HH:MM" / "resets HH:MM" / "available at HH:MM"
+  const atTime = raw.match(/(?:resets?|available|retry)(?:\s+at)?\s+(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
   if (atTime) {
     let h = parseInt(atTime[1]);
     const m = parseInt(atTime[2]);
@@ -552,7 +554,7 @@ function isFallbackError(raw, code) {
   const t = (raw || "").toLowerCase();
   return t.includes("credit") || t.includes("balance") || t.includes("billing") || t.includes("payment")
     || t.includes("rate_limit") || t.includes("rate limit") || t.includes("too many requests") || code === 429
-    || t.includes("usage limit") || t.includes("monthly limit")
+    || t.includes("usage limit") || t.includes("monthly limit") || t.includes("session limit")
     || t.includes("overloaded") || code === 529;
 }
 
@@ -561,7 +563,7 @@ function classifyClaudeError(raw, code) {
   if (t.includes("credit") || t.includes("balance") || t.includes("billing") || t.includes("payment"))
     return "💳 API 크레딧이 부족합니다. console.anthropic.com 에서 충전해주세요.";
   if (t.includes("rate_limit") || t.includes("rate limit") || t.includes("too many requests") || code === 429
-      || t.includes("usage limit") || t.includes("monthly limit"))
+      || t.includes("usage limit") || t.includes("monthly limit") || t.includes("session limit"))
     return "⏱️ 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.";
   if (t.includes("overloaded") || code === 529)
     return "🔄 Claude 서버가 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해주세요.";
@@ -1190,8 +1192,6 @@ async function handle(msg) {
     }
     const secs = Math.round((Date.now() - started) / 1000);
     if (!res.ok) {
-      // 레이트 리밋이고 리셋 시간을 알면 /reserve 힌트 추가
-      const hint = res.resetAt ? t(l, "reserveHint") : "";
       rateLimitState = res.resetAt ? { prompt, resetAt: res.resetAt } : null;
       // Ollama 폴백: 레이트리밋·크레딧 에러이고 ollamaFallback 켜져 있으면 Ollama로 재시도
       if (cfg.ollamaFallback && res.canFallback && !stopping) {
@@ -1200,7 +1200,24 @@ async function handle(msg) {
           if (oRes.ok) { await send(chatId, oRes.text); return; }
         } catch {}
       }
-      const errMsg = res.text === "contextTooLong" ? t(l, "contextTooLong") : `⚠️ ${res.text}${hint}`;
+      // 리셋 시간을 알면 자동으로 재시도 예약 (사용자가 /reserve 를 따로 입력할 필요 없음)
+      let autoRetryMsg = "";
+      if (res.resetAt && !pendingRetry && !stopping) {
+        const capturedPrompt = prompt;
+        const capturedMsg = msg;
+        const delay = Math.max(res.resetAt - Date.now(), 1000);
+        pendingRetry = {
+          resetAt: res.resetAt,
+          timer: setTimeout(() => {
+            pendingRetry = null;
+            handle({ ...capturedMsg, text: capturedPrompt, caption: undefined });
+          }, delay),
+        };
+        const timeStr = res.resetAt.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
+        autoRetryMsg = "\n\n" + t(l, "reserveAuto", timeStr);
+      }
+      const hint = res.resetAt && !pendingRetry ? t(l, "reserveHint") : "";
+      const errMsg = res.text === "contextTooLong" ? t(l, "contextTooLong") : `⚠️ ${res.text}${autoRetryMsg || hint}`;
       if (!stopping) await send(chatId, errMsg);
     } else {
       rateLimitState = null;
