@@ -5,7 +5,9 @@
 - `"session limit"` 에러 미감지 문제 — `isFallbackError` / `classifyClaudeError` 에 추가
 - `"resets 7:20pm"` 형식 파싱 실패 — `parseResetTime` regex에서 `at` 없이도 시간 추출
 ### Changed
-- 레이트리밋 에러 시 리셋 시간이 있으면 자동으로 재시도 예약 (`/reserve` 수동 입력 불필요)
+- 레이트리밋 에러 시 메시지를 큐에 보관 후 리셋 시간에 자동 재시도 (busy 큐와 동일 메커니즘)
+  - 제한 중 추가로 보내는 메시지도 큐에 쌓임
+  - `/reserve` → 대기 현황 보기, `/reserve rm` → 큐 전체 취소
 
 ## [0.3.25] - 2026-06-23
 ### Added

@@ -207,12 +207,11 @@ const STR = {
     remembered: "💾 Saved to memory.",
     rememberUsage: "Usage: /remember <text to remember>",
     memoryUsage: "Usage: /memory · /memory clear",
-    reserveHint: "\n\nTo retry when the limit resets, send `/reserve` (or `/reserve <different message>`).",
+    rateLimitQueued: (n, time) => `⏳ Queued (#${n}). Will retry at ${time}. /reserve rm to cancel.`,
+    reserveStatus: (n, time) => `⏳ ${n} message(s) queued. Retrying at ${time}. /reserve rm to cancel.`,
     reserveAuto: (time) => `⏰ Auto-retry scheduled for ${time}. Cancel with /reserve rm.`,
-    reserveOk: (time) => `⏰ Retry scheduled for ${time}. Cancel with /reserve rm.`,
-    reserveRm: "🚫 Scheduled retry canceled.",
+    reserveRm: "🚫 Queue cleared. No retry scheduled.",
     reserveNone: "No retry is scheduled.",
-    reserveNoLimit: "No recent usage limit error. Send a message first.",
     contextTooLong: "⚠️ Prompt is too long. Use `/compact` to compress context, or `/new` to start fresh.",
   },
   ko: {
@@ -285,12 +284,11 @@ const STR = {
     remembered: "💾 메모리에 저장했습니다.",
     rememberUsage: "사용법: /remember <기억할 내용>",
     memoryUsage: "사용법: /memory · /memory clear",
-    reserveHint: "\n\n리셋 후 재시도하려면 `/reserve` (또는 `/reserve <다른 메시지>`)를 입력하세요.",
+    rateLimitQueued: (n, time) => `⏳ 대기열에 추가됨 (${n}번째). ${time}에 자동 재시도. 취소: /reserve rm`,
+    reserveStatus: (n, time) => `⏳ 대기 중인 메시지 ${n}개. ${time}에 재시도 예약됨. 취소: /reserve rm`,
     reserveAuto: (time) => `⏰ ${time}에 자동 재시도 예약됨. 취소: /reserve rm`,
-    reserveOk: (time) => `⏰ ${time}에 재시도 예약됨. 취소: /reserve rm`,
-    reserveRm: "🚫 예약된 재시도를 취소했습니다.",
+    reserveRm: "🚫 대기열을 비웠습니다. 예약 취소됨.",
     reserveNone: "예약된 재시도가 없습니다.",
-    reserveNoLimit: "최근 한도 초과 에러가 없습니다. 먼저 메시지를 보내주세요.",
     compactOk: "🗜️ 컨텍스트를 압축했습니다. 대화가 요약본으로 이어집니다.",
     compactFail: (m) => `⚠️ compact 실패: ${m}`,
     compactNoSession: "압축할 활성 세션이 없습니다. 메시지를 보내 세션을 시작하세요.",
@@ -938,8 +936,8 @@ let currentChild = null;    // 실행 중인 claude child process (/stop 용)
 let currentTyping = null;   // 타이핑 인터벌 (/stop 시 정리용)
 let prevSessionId;          // /stop --reset 복원 대상
 let stopping = false;       // /stop 처리 중 오류 메시지 억제 플래그
-let rateLimitState = null;  // 마지막 레이트 리밋 { prompt, resetAt } — /reserve 용
-let pendingRetry = null;    // /reserve 로 예약된 재시도 { timer, resetAt }
+let rateLimitUntil = null;  // 레이트 리밋 활성 시 리셋 Date — 이 시간까지 메시지를 큐에 쌓음
+let rateLimitTimer = null;  // 리셋 시간에 큐를 드레인하는 타이머
 
 async function handle(msg) {
   const chatId = msg.chat?.id;
@@ -956,6 +954,14 @@ async function handle(msg) {
   }
   if (!allowedIds.includes(String(chatId))) {
     console.warn(`Ignoring unauthorized chatId ${chatId}`);
+    return;
+  }
+
+  // 레이트리밋 활성 중: 일반 메시지는 큐에 추가, 명령어는 통과
+  if (rateLimitUntil && Date.now() < rateLimitUntil && !text.startsWith("/")) {
+    msgQueue.push({ msg, receivedAt: Date.now() });
+    const timeStr = rateLimitUntil.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
+    await send(chatId, t(l, "rateLimitQueued", msgQueue.length, timeStr));
     return;
   }
 
@@ -1105,27 +1111,16 @@ async function handle(msg) {
   if (text === "/reserve" || text.startsWith("/reserve ")) {
     const arg = text.slice(8).trim();
     if (arg === "rm") {
-      if (!pendingRetry) { await send(chatId, t(l, "reserveNone")); return; }
-      clearTimeout(pendingRetry.timer); pendingRetry = null;
+      if (!rateLimitUntil && !rateLimitTimer) { await send(chatId, t(l, "reserveNone")); return; }
+      if (rateLimitTimer) { clearTimeout(rateLimitTimer); rateLimitTimer = null; }
+      rateLimitUntil = null;
+      msgQueue.length = 0;
       await send(chatId, t(l, "reserveRm"));
       return;
     }
-    if (!rateLimitState) { await send(chatId, t(l, "reserveNoLimit")); return; }
-    const { resetAt } = rateLimitState;
-    const reservePrompt = arg || rateLimitState.prompt;
-    if (pendingRetry) clearTimeout(pendingRetry.timer);
-    const capturedPrompt = reservePrompt;
-    const capturedMsg = msg;
-    const delay = Math.max(resetAt - Date.now(), 1000);
-    pendingRetry = {
-      resetAt,
-      timer: setTimeout(() => {
-        pendingRetry = null;
-        handle({ ...capturedMsg, text: capturedPrompt, caption: undefined });
-      }, delay),
-    };
-    const timeStr = resetAt.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
-    await send(chatId, t(l, "reserveOk", timeStr));
+    if (!rateLimitUntil) { await send(chatId, t(l, "reserveNone")); return; }
+    const timeStr = rateLimitUntil.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
+    await send(chatId, t(l, "reserveStatus", msgQueue.length, timeStr));
     return;
   }
 
@@ -1192,7 +1187,6 @@ async function handle(msg) {
     }
     const secs = Math.round((Date.now() - started) / 1000);
     if (!res.ok) {
-      rateLimitState = res.resetAt ? { prompt, resetAt: res.resetAt } : null;
       // Ollama 폴백: 레이트리밋·크레딧 에러이고 ollamaFallback 켜져 있으면 Ollama로 재시도
       if (cfg.ollamaFallback && res.canFallback && !stopping) {
         try {
@@ -1200,27 +1194,23 @@ async function handle(msg) {
           if (oRes.ok) { await send(chatId, oRes.text); return; }
         } catch {}
       }
-      // 리셋 시간을 알면 자동으로 재시도 예약 (사용자가 /reserve 를 따로 입력할 필요 없음)
+      // 리셋 시간을 알면 현재 메시지를 큐 앞에 다시 넣고 타이머 설정
       let autoRetryMsg = "";
-      if (res.resetAt && !pendingRetry && !stopping) {
-        const capturedPrompt = prompt;
-        const capturedMsg = msg;
-        const delay = Math.max(res.resetAt - Date.now(), 1000);
-        pendingRetry = {
-          resetAt: res.resetAt,
-          timer: setTimeout(() => {
-            pendingRetry = null;
-            handle({ ...capturedMsg, text: capturedPrompt, caption: undefined });
-          }, delay),
-        };
+      if (res.resetAt && !stopping) {
+        msgQueue.unshift({ msg, receivedAt: Date.now() });
+        rateLimitUntil = res.resetAt;
+        if (rateLimitTimer) clearTimeout(rateLimitTimer);
+        rateLimitTimer = setTimeout(() => {
+          rateLimitTimer = null;
+          rateLimitUntil = null;
+          if (msgQueue.length > 0) handle(drainQueue());
+        }, Math.max(res.resetAt - Date.now(), 1000));
         const timeStr = res.resetAt.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
         autoRetryMsg = "\n\n" + t(l, "reserveAuto", timeStr);
       }
-      const hint = res.resetAt && !pendingRetry ? t(l, "reserveHint") : "";
-      const errMsg = res.text === "contextTooLong" ? t(l, "contextTooLong") : `⚠️ ${res.text}${autoRetryMsg || hint}`;
+      const errMsg = res.text === "contextTooLong" ? t(l, "contextTooLong") : `⚠️ ${res.text}${autoRetryMsg}`;
       if (!stopping) await send(chatId, errMsg);
     } else {
-      rateLimitState = null;
       const footer = `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`;
       if (!stopping) await send(chatId, res.text + footer);
     }
@@ -1231,7 +1221,7 @@ async function handle(msg) {
     currentTyping = null;
     stopping = false;
     busy = false;
-    if (msgQueue.length > 0) setImmediate(() => handle(drainQueue()));
+    if (msgQueue.length > 0 && !rateLimitUntil) setImmediate(() => handle(drainQueue()));
   }
 }
 
