@@ -574,8 +574,7 @@ function classifyClaudeError(raw, code) {
 function runClaude(prompt, sessionId, opts = {}) {
   return new Promise((resolve) => {
     const args = [
-      "-p",
-      prompt,
+      `--print=${prompt}`,
       "--output-format",
       "json",
       "--permission-mode",

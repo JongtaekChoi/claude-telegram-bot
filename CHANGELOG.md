@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.28] - 2026-06-25
+### Fixed
+- `-`로 시작하는 메시지(예: `-9038502는 잔액이고…`)가 Claude CLI 옵션으로 오해되는 문제
+  - `-p <prompt>` → `--print=<prompt>` 방식으로 변경
+
 ## [0.3.26] - 2026-06-24
 ### Fixed
 - `"session limit"` 에러 미감지 문제 — `isFallbackError` / `classifyClaudeError` 에 추가
