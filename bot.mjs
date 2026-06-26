@@ -574,7 +574,7 @@ function classifyClaudeError(raw, code) {
 function runClaude(prompt, sessionId, opts = {}) {
   return new Promise((resolve) => {
     const args = [
-      "-p" + prompt,  // 붙여쓰기로 -로 시작하는 값도 플래그로 오해 안 함
+      "-p",
       "--output-format",
       "json",
       "--permission-mode",
@@ -596,6 +596,8 @@ function runClaude(prompt, sessionId, opts = {}) {
     if (appendSys) args.push("--append-system-prompt", appendSys);
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
+    // 프롬프트는 반드시 맨 끝에 `--` 뒤로 — `-`로 시작해도 옵션으로 오해 안 함
+    args.push("--", prompt);
 
     const child = spawn(cfg.claudeBin || "claude", args, {
       cwd: cfg.projectDir,
