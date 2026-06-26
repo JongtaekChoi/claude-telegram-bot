@@ -570,11 +570,33 @@ function classifyClaudeError(raw, code) {
   return `Execution error (exit ${code}):\n${raw}`;
 }
 
+// ── Claude CLI 버전 탐지 ──────────────────────────────────────────────────
+// --print=<value> 는 구버전 CLI에 없음. 시작 시 한 번 probe해서 폴백 결정.
+let claudePrintStyle = "new"; // "new" = --print=<val>  |  "old" = -p <val>
+
+function probeClaude() {
+  return new Promise((resolve) => {
+    const bin = cfg.claudeBin || "claude";
+    const child = spawn(bin, ["--help"], { env: process.env });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (out += d));
+    child.on("close", () => {
+      claudePrintStyle = out.includes("--print") ? "new" : "old";
+      if (claudePrintStyle === "old")
+        console.warn(`[warn] claude CLI does not support --print; falling back to -p (messages starting with '-' may fail)`);
+      resolve();
+    });
+    child.on("error", () => resolve()); // 탐지 실패 시 기본값(new) 유지
+  });
+}
+
 // ── Claude 실행 ───────────────────────────────────────────────────────────
 function runClaude(prompt, sessionId, opts = {}) {
   return new Promise((resolve) => {
+    const printArgs = claudePrintStyle === "new" ? [`--print=${prompt}`] : ["-p", prompt];
     const args = [
-      `--print=${prompt}`,
+      ...printArgs,
       "--output-format",
       "json",
       "--permission-mode",
@@ -1263,6 +1285,7 @@ function dispatch(msg) {
 // ── 롱폴링 루프 ───────────────────────────────────────────────────────────
 async function main() {
   console.log("Bot started. Polling Telegram...");
+  await probeClaude();
   // /restart 로 재시작했으면 완료 알림 1회 (플래그는 즉시 비움)
   if (state.restartNotify) {
     const to = state.restartNotify;

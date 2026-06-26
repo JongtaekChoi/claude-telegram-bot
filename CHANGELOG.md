@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.29] - 2026-06-26
+### Fixed
+- 구버전 `claude` CLI에서 `--print` 미지원으로 발생하는 "unknown option" 에러
+  - 시작 시 `claude --help` 로 지원 여부 탐지 → 구버전이면 `-p <prompt>` 자동 폴백
+
 ## [0.3.28] - 2026-06-25
 ### Fixed
 - `-`로 시작하는 메시지(예: `-9038502는 잔액이고…`)가 Claude CLI 옵션으로 오해되는 문제
