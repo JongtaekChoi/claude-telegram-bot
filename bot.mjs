@@ -150,6 +150,7 @@ const STR = {
     compactOk: "🗜️ Context compacted. The conversation continues with a summary.",
     compactFail: (m) => `⚠️ Compact failed: ${m}`,
     compactNoSession: "No active session to compact. Just send a message to start one.",
+    autoCompact: "🗜️ Auto-compacted context (conversation was getting long).",
     testFallbackDisabled: "⚠️ Ollama fallback is not enabled. Set `\"ollamaFallback\": true` in config.json.",
     testFallbackFail: (m) => `⚠️ Ollama test failed: ${m}`,
     ollamaOn: "🌙 Ollama mode on. Messages will now go to Ollama. Your Claude session is preserved.",
@@ -292,6 +293,7 @@ const STR = {
     compactOk: "🗜️ 컨텍스트를 압축했습니다. 대화가 요약본으로 이어집니다.",
     compactFail: (m) => `⚠️ compact 실패: ${m}`,
     compactNoSession: "압축할 활성 세션이 없습니다. 메시지를 보내 세션을 시작하세요.",
+    autoCompact: "🗜️ 대화가 길어져 컨텍스트를 자동 압축했습니다.",
     contextTooLong: "⚠️ 프롬프트가 너무 깁니다. `/compact` 로 컨텍스트를 압축하거나 `/new` 로 새 세션을 시작하세요.",
     testFallbackDisabled: "⚠️ Ollama 폴백이 비활성화 상태입니다. config.json에 `\"ollamaFallback\": true` 를 추가하세요.",
     testFallbackFail: (m) => `⚠️ Ollama 테스트 실패: ${m}`,
@@ -574,11 +576,8 @@ function classifyClaudeError(raw, code) {
 function runClaude(prompt, sessionId, opts = {}) {
   return new Promise((resolve) => {
     const args = [
-      "-p",
-      "--output-format",
-      "json",
-      "--permission-mode",
-      cfg.permissionMode || "acceptEdits",
+      "--output-format", "json",
+      "--permission-mode", cfg.permissionMode || "acceptEdits",
     ];
     const model = state.model || cfg.model; // /model 로 바꾸면 state.model 우선
     const brevity =
@@ -596,8 +595,9 @@ function runClaude(prompt, sessionId, opts = {}) {
     if (appendSys) args.push("--append-system-prompt", appendSys);
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
-    // 프롬프트는 반드시 맨 끝에 `--` 뒤로 — `-`로 시작해도 옵션으로 오해 안 함
-    args.push("--", prompt);
+    // -p와 프롬프트는 맨 끝에 — 터미널 테스트에서 검증된 순서
+    // `--` 구분자로 `-`로 시작하는 프롬프트도 옵션으로 오해 안 함
+    args.push("-p", "--", prompt);
 
     const child = spawn(cfg.claudeBin || "claude", args, {
       cwd: cfg.projectDir,
@@ -625,7 +625,8 @@ function runClaude(prompt, sessionId, opts = {}) {
         const text = j.is_error ? classifyClaudeError(rawErr, code) : (rawErr || "(empty response)");
         const resetAt = j.is_error ? parseResetTime(rawErr) : null;
         const canFallback = j.is_error && isFallbackError(rawErr, code);
-        resolve({ ok: !j.is_error, text, sessionId: j.session_id, cost: j.total_cost_usd, resetAt, canFallback });
+        const cacheTokens = j.usage?.cache_read_input_tokens || 0;
+        resolve({ ok: !j.is_error, text, sessionId: j.session_id, cost: j.total_cost_usd, cacheTokens, resetAt, canFallback });
       } catch {
         const raw = (err || out || "no output").slice(0, 3500);
         resolve({ ok: false, text: classifyClaudeError(raw, code), resetAt: parseResetTime(raw), canFallback: isFallbackError(raw, code) });
@@ -1214,6 +1215,15 @@ async function handle(msg) {
     } else {
       const footer = `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`;
       if (!stopping) await send(chatId, res.text + footer);
+      // 자동 컴팩션: cache_read_input_tokens 가 임계값 초과 시 자동 /compact
+      const compactThreshold = cfg.autoCompactThreshold ?? 100000;
+      if (compactThreshold > 0 && res.cacheTokens > compactThreshold && state.sessionId && !stopping) {
+        try {
+          const cr = await runClaude("/compact", state.sessionId);
+          if (cr.sessionId) { state.sessionId = cr.sessionId; saveState(state); }
+          if (cr.ok !== false) await send(chatId, t(l, "autoCompact"));
+        } catch {}
+      }
     }
   } catch (e) {
     if (!stopping) await send(chatId, t(l, "botError", e.message));
