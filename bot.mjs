@@ -572,6 +572,27 @@ function classifyClaudeError(raw, code) {
   return `Execution error (exit ${code}):\n${raw}`;
 }
 
+// ── 커스텀 명령어 스크립트 실행 ──────────────────────────────────────────
+function runCustomCommand(run, args) {
+  return new Promise((resolve) => {
+    const cmd = args ? `${run} ${args}` : run;
+    const child = spawn(cmd, [], {
+      shell: true,
+      cwd: cfg.projectDir,
+      env: { ...process.env, ...(cfg.env || {}) },
+    });
+    let out = "", err = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
+    child.on("close", (code) => {
+      const text = (out + (err ? `\n[stderr]\n${err}` : "")).trim() || "(no output)";
+      resolve({ ok: code === 0, text, code });
+    });
+    child.on("error", (e) => resolve({ ok: false, text: e.message, code: -1 }));
+    setTimeout(() => { try { child.kill(); } catch {} resolve({ ok: false, text: "timeout (60s)", code: -1 }); }, 60_000);
+  });
+}
+
 // ── Claude 실행 ───────────────────────────────────────────────────────────
 function runClaude(prompt, sessionId, opts = {}) {
   return new Promise((resolve) => {
@@ -1126,6 +1147,22 @@ async function handle(msg) {
     return;
   }
 
+  // 커스텀 명령어 (config.commands) — Claude와 독립 실행
+  if (text.startsWith("/")) {
+    const cmdName = text.slice(1).split(" ")[0];
+    const def = (cfg.commands || {})[cmdName];
+    if (def) {
+      const run = typeof def === "object" ? def.run : null;
+      if (run) {
+        const args = text.length > cmdName.length + 1 ? text.slice(cmdName.length + 2) : "";
+        const res = await runCustomCommand(run, args || undefined);
+        const out = res.text.length > 4000 ? res.text.slice(0, 3990) + "\n…(truncated)" : res.text;
+        await send(chatId, `${res.ok ? "" : "⚠️ "}${out}`);
+        return;
+      }
+    }
+  }
+
   if (busy) {
     msgQueue.push({ msg, receivedAt: Date.now() });
     await send(chatId, t(l, "queued", msgQueue.length));
@@ -1284,9 +1321,14 @@ async function main() {
   }
   // 텔레그램 명령어 자동완성(/ 입력 시 뜨는 메뉴) 등록. 직접 파싱과 별개로 한 번 알려줘야 함.
   // 기본 목록(BOT_LANG) + 한국어 변형(language_code: ko) → ko 클라이언트는 한국어, 그 외 기본.
-  tg("setMyCommands", { commands: COMMANDS[BOT_LANG] || COMMANDS.en }).catch(() => {});
+  // config.commands 에 정의된 커스텀 명령어도 목록에 추가.
+  const customCmdEntries = Object.entries(cfg.commands || {}).map(([name, def]) => ({
+    command: name,
+    description: (typeof def === "object" ? (def.description || name) : name).slice(0, 256),
+  }));
+  tg("setMyCommands", { commands: [...(COMMANDS[BOT_LANG] || COMMANDS.en), ...customCmdEntries] }).catch(() => {});
   if (!FORCE_LANG) {
-    tg("setMyCommands", { commands: COMMANDS.ko, language_code: "ko" }).catch(() => {});
+    tg("setMyCommands", { commands: [...COMMANDS.ko, ...customCmdEntries], language_code: "ko" }).catch(() => {});
   }
 
   // 시작 시 밀린 메시지 건너뛰기

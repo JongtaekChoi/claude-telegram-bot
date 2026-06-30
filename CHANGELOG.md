@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.34] - 2026-06-27
+### Added
+- 커스텀 명령어 — `config.json`의 `commands` 필드로 프로젝트별 `/명령어` 정의
+  - `run`: 쉘 명령어 실행, 출력을 텔레그램으로 전송
+  - `/cmd arg1 arg2` 형태로 인자 전달 가능
+  - Telegram `/` 자동완성 메뉴에 자동 등록
+  - Claude 와 독립 실행 (busy 상태와 무관)
+  - 60초 타임아웃, 4000자 초과 시 truncate
+
+```json
+"commands": {
+  "deploy": { "run": "npm run deploy", "description": "프로젝트 배포" },
+  "logs":   { "run": "tail -n 50 ./app.log", "description": "최근 로그" }
+}
+```
+
 ## [0.3.33] - 2026-06-27
 ### Fixed
 - 0.3.31 에서 `-p`를 args 맨 앞에 두어 `--output-format`이 `-p`의 값으로 먹히는 버그
