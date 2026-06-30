@@ -107,6 +107,10 @@ claude-telegram-bot ~/botconfigs/myproj/mybot.json
 | `appendSystemPrompt` | (선택) 기본 "간결하게 답하기" 지침을 직접 덮어쓸 때 |
 | `env` | (선택) `claude` 프로세스에 넘길 환경 변수 |
 | `schedule` | (선택) 정해진 시각에 프롬프트를 실행하는 cron 작업 — [예약 작업](#예약-작업-cron) 참고 |
+| `commands` | (선택) 쉘 스크립트를 실행하는 커스텀 `/명령어` — [커스텀 명령어](#커스텀-명령어) 참고 |
+| `ollamaFallback` | (선택) `true`로 설정하면 Claude 레이트 리밋·크레딧 부족 시 로컬 Ollama로 자동 대체 |
+| `ollamaModel` | (선택) 폴백에 쓸 Ollama 모델 (기본값: `"phi3:mini"`) |
+| `autoCompactThreshold` | (선택) 캐시된 입력 토큰이 이 값을 초과하면 컨텍스트 자동 압축 (기본값: `100000`). `0`이면 비활성화 |
 
 `state`와 첨부 파일은 config 파일 옆 **`.claude-bot/` 숨김 폴더**에 저장됩니다(프로젝트 격리). 구버전에서 올리면 첫 시작 때 기존 `state.json`·`attachments/`를 `.claude-bot/`로 **자동 이동**합니다(무손실). 로그는 launchd plist가 가리키는 위치 그대로입니다.
 
@@ -118,7 +122,7 @@ claude-telegram-bot ~/botconfigs/myproj/mybot.json
    - `테스트 돌려보고 통과하면 커밋하고 push 해줘`
    - `api.ts 에 에러 핸들링 추가해줘`
 
-명령어: `/new`(맥락 초기화) · `/stop`(작업 중단; `--reset`으로 세션도 롤백) · `/cron`(예약 작업 보기·추가·삭제) · `/reserve`(한도 리셋 시 재시도 예약) · `/restart`(문법 검사 후 재시작) · `/status`(봇 상태·버전) · `/model`(모델 보기·전환) · `/id`(채팅 ID 확인) · `/help`(도움말)
+명령어: `/new`(맥락 초기화) · `/compact`(컨텍스트 압축, 세션 유지) · `/stop`(작업 중단; `--reset`으로 세션도 롤백) · `/ollama`(Ollama 채팅 모드 토글) · `/cron`(예약 작업 보기·추가·삭제) · `/reserve`(대기 큐 상태 확인 · `/reserve rm`으로 취소) · `/restart`(문법 검사 후 재시작) · `/status`(봇 상태·버전) · `/model`(모델 보기·전환) · `/id`(채팅 ID 확인) · `/help`(도움말)
 
 > **`/stop`** 은 실행 중인 Claude 프로세스를 즉시 종료하고 대기 중인 메시지 큐도 비웁니다. `--reset`을 붙이면 세션을 작업 시작 이전 상태로 되돌려 중단된 작업이 대화 맥락에 남지 않습니다.
 
@@ -129,11 +133,31 @@ claude-telegram-bot ~/botconfigs/myproj/mybot.json
 - **세션 유지** — 대화는 `--resume`으로 자동으로 이어집니다. 마지막 세션 ID가 `state.json`에 저장되므로 봇을 재시작해도 맥락이 남습니다. 새로 시작하려면 `/new`.
 - **메시지 큐** — 작업 중에 새 메시지가 오면 버리지 않고 큐에 쌓아둡니다. 작업이 끝나면 대기 중인 메시지를 모두 하나의 프롬프트로 합쳐서 처리합니다(예: "A 해줘" → "아니다 B 해줘"를 한 번에 처리). `/stop`으로 실행 중인 작업과 큐를 동시에 취소할 수 있습니다.
 - **모델 권유** — 봇이 Claude에게 현재 모델을 알려줍니다. 질문 난이도가 현재 모델 수준을 넘는다고 판단되면 답변 끝에 전환 권유 한 줄이 붙습니다(예: 💡 `/model sonnet`). `/model <이름>`으로 전환(`haiku`, `sonnet`, `opus`, `fable`, 또는 전체 모델 ID) — `state.json`에 저장돼 재시작 후에도 유지됩니다.
-- **한도 초과 재시도** — Claude Max / API 레이트 리밋 에러에 리셋 시간이 포함되면 `/reserve` 힌트를 표시합니다. `/reserve`를 입력하면 마지막 메시지를 해당 시각에 자동 재전송 예약. `/reserve <다른 메시지>`로 내용 변경, `/reserve rm`으로 취소.
+- **한도 초과 큐** — Claude Max / API 레이트 리밋 에러에 리셋 시간이 포함되면, 해당 메시지를 자동으로 큐에 넣고 리셋 시각에 재시도합니다 — 작업 중 큐와 같은 방식입니다. 한도가 걸린 동안 추가로 보내는 메시지도 자동으로 큐에 쌓입니다. `/reserve`로 대기 현황과 리셋 시각 확인, `/reserve rm`으로 큐 전체 취소.
+- **Ollama 폴백** — `"ollamaFallback": true`로 설정하고 `"ollamaModel"`에 로컬 [Ollama](https://ollama.ai) 모델을 지정하면(기본값: `"phi3:mini"`), Claude 레이트 리밋·크레딧 부족 시 자동으로 Ollama로 대체 응답합니다. `/ollama`로 Claude와 관계없이 Ollama를 기본 채팅 상대로 수동 전환할 수도 있습니다 (가벼운 질문에 유용).
+- **자동 컴팩션** — 세션의 캐시된 입력 토큰이 `autoCompactThreshold`(기본값 100,000)를 초과하면 `/compact`를 자동 실행하고 알림을 보냅니다. config에서 임계값을 조정하거나 `0`으로 비활성화. 수동으로 `/compact`를 써도 됩니다.
 - **간결한 답변** — 텔레그램에 맞게 짧게 답하도록 시스템 프롬프트가 기본으로 붙습니다. 바꾸려면 `appendSystemPrompt`에 직접 넣으세요 (빈 문자열이면 끔).
 - **언어** — 봇 자체 문구(`/help`, 명령 메뉴, 상태 메시지)는 **기본 영어**, 텔레그램이 한국어인 사용자에겐 한국어로 나옵니다. `lang`(`"en"`/`"ko"`)으로 고정할 수 있습니다. Claude의 실제 답변은 **사용자가 쓴 언어**를 따라갑니다. `/` 명령 메뉴는 `setMyCommands`로 언어별 등록됩니다.
 - **서식 변환** — 답변의 마크다운(굵게·코드·표 등)을 텔레그램 HTML로 바꿔 보냅니다. 변환이 깨지는 경우엔 평문으로 다시 보냅니다.
 - **첨부 파일** — 사진·문서·음성·영상을 보내면 `attachments/`에 내려받고, 그 경로를 Claude에게 전달합니다(캡션도 함께). 이미지는 Read로 열어볼 수 있습니다.
+
+## 커스텀 명령어
+
+config에 `commands`를 정의하면 프로젝트별 `/명령어`로 쉘 스크립트를 실행하고 결과를 채팅으로 받을 수 있습니다. 정의한 명령어는 텔레그램 `/` 자동완성 메뉴에 자동 등록됩니다.
+
+```json
+"commands": {
+  "deploy": { "run": "npm run deploy", "description": "프로덕션 배포" },
+  "logs":   { "run": "tail -n 50 ./app.log", "description": "최근 로그" },
+  "status": { "run": "git status && git log --oneline -5", "description": "Git 상태" }
+}
+```
+
+- **`run`** — 실행할 쉘 명령어. `projectDir`에서 실행됩니다.
+- **`description`** — 텔레그램 `/` 자동완성 메뉴에 표시되는 설명
+- **인자 전달**: `/deploy staging`처럼 뒤에 붙이면 명령어에 그대로 추가됩니다 (`npm run deploy staging`)
+- Claude와 독립적으로 실행 — Claude 작업 중에도 동작합니다
+- 출력은 최대 4,000자, 타임아웃 60초
 
 ## 예약 작업 (cron)
 

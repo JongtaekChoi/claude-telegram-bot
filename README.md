@@ -162,7 +162,7 @@ auth layer.)
 - `run the solver tests and commit + push if they pass`
 - `add an edge case to solve-2nd-floor-edges.ts`
 
-Commands: `/new` (reset context / new session) · `/stop` (stop current task; `--reset` to also roll back the session) · `/cron` (list / add / remove scheduled tasks) · `/reserve` (schedule retry at usage-limit reset) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/model` (view / switch the model) · `/id` (show chat ID) · `/help`.
+Commands: `/new` (reset context / new session) · `/compact` (compress context, keep session) · `/stop` (stop current task; `--reset` to also roll back the session) · `/ollama` (toggle Ollama chat mode) · `/cron` (list / add / remove scheduled tasks) · `/reserve` (show queue status at usage-limit · `/reserve rm` to cancel) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/model` (view / switch the model) · `/id` (show chat ID) · `/help`.
 
 > **`/stop`** kills the running Claude process immediately and clears any queued messages.
 > Add `--reset` to also restore the session to the state it was in *before* the task started,
@@ -203,6 +203,10 @@ Edit `mybot.json`:
 | `appendSystemPrompt` | (optional) Override the default "be concise for Telegram" instruction |
 | `env` | (optional) Extra environment variables passed to the `claude` process |
 | `schedule` | (optional) Cron jobs that run a prompt on a timer — see [Scheduled tasks](#scheduled-tasks-cron) |
+| `commands` | (optional) Custom `/commands` that run shell scripts — see [Custom commands](#custom-commands) |
+| `ollamaFallback` | (optional) `true` to enable Ollama as a fallback when Claude is rate-limited or out of credits |
+| `ollamaModel` | (optional) Ollama model to use for fallback (default: `"phi3:mini"`) |
+| `autoCompactThreshold` | (optional) Auto-compact context when cached input tokens exceed this value (default: `100000`). Set to `0` to disable. |
 
 State and downloaded attachments live in a hidden **`.claude-bot/`** folder next to the config
 file, so projects stay isolated. Upgrading from an older version **auto-moves** an existing
@@ -225,7 +229,27 @@ your launchd plist points them.
   `state.json`, so context survives restarts. Use `/new` to start fresh.
 - **Message queue**: if you send a message while a task is running, it is queued (not dropped). When the task finishes, all queued messages are merged into a single prompt so Claude can resolve corrections and follow-ups in one pass (e.g. "do X" then "never mind, do Y" → handled together). Use `/stop` to cancel the running task and discard the queue.
 - **Model hint**: the bot tells Claude which model it is running as. If Claude judges a question to be beyond its current tier, it appends a one-line suggestion at the end of the reply (e.g. 💡 `/model sonnet`). Switch with `/model <name>` — `haiku`, `sonnet`, `opus`, `fable`, or a full model id. The choice persists in `state.json` across restarts.
-- **Usage-limit retry**: when a Claude Max / API rate-limit error includes a reset time, the bot shows a `/reserve` hint. `/reserve` schedules your last message to be resent automatically at that time. Use `/reserve <different text>` to change what's sent, or `/reserve rm` to cancel.
+- **Usage-limit queue**: when a Claude Max / API rate-limit error includes a reset time, the triggering message is automatically queued and retried at that time — just like messages queued while Claude is busy. Any additional messages you send during the limit window are also added to the queue. Use `/reserve` to check queue status and reset time, `/reserve rm` to cancel and clear the queue.
+- **Ollama fallback**: set `"ollamaFallback": true` and point `"ollamaModel"` at a locally-running [Ollama](https://ollama.ai) model (default: `"phi3:mini"`). When Claude is rate-limited or out of credits, the bot automatically falls back to Ollama and prepends a notice to the reply. Use `/ollama` to toggle Ollama as your primary chat partner at any time, even when Claude is working fine — useful for lightweight queries.
+- **Auto-compact**: the bot tracks how many cached tokens are in the session context. When `cache_read_input_tokens` exceeds `autoCompactThreshold` (default 100 000), it automatically runs `/compact` and notifies you. Tune the threshold in config or set it to `0` to disable. You can also run `/compact` manually at any time.
+
+### Custom commands
+
+Define project-specific `/commands` in config that run shell scripts and return their output to the chat. Commands appear in Telegram's `/` autocomplete menu automatically.
+
+```json
+"commands": {
+  "deploy": { "run": "npm run deploy", "description": "Deploy to production" },
+  "logs":   { "run": "tail -n 50 ./app.log", "description": "Recent logs" },
+  "status": { "run": "git status && git log --oneline -5", "description": "Git status" }
+}
+```
+
+- **`run`** — any shell command, executed in `projectDir`
+- **`description`** — shown in the Telegram `/` autocomplete menu
+- **Arguments**: `/deploy staging` appends `staging` to the command (`npm run deploy staging`)
+- Scripts run independently of Claude — they work even when Claude is busy
+- Output capped at 4 000 characters; 60-second timeout
 
 ### Scheduled tasks (cron)
 
