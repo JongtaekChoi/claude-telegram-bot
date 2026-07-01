@@ -135,12 +135,13 @@ const STR = {
       "• Just send a message and Claude works in the project.\n" +
       "• /new — reset conversation context (new session)\n" +
       "• /compact — compress context to free up space (keeps the session)\n" +
+      "• /plan <request> — plan only (no edits), then approve/cancel to run for real\n" +
       "• /ollama — toggle Ollama chat mode (bypass Claude, use local LLM)\n" +
       "• /stop — stop the current task · /stop --reset to also roll back the session\n" +
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
       "• /remember <text> — save to persistent memory (survives /new)\n" +
       "• /memory — view memory · /memory clear to wipe\n" +
-      "• /reserve — retry at usage-limit reset time · /reserve <msg> for a different message · /reserve rm to cancel\n" +
+      "• /reserve — show retry queue status at usage-limit reset · /reserve rm to cancel\n" +
       "• /restart — restart the bot (after a syntax check)\n" +
       "• /status — bot status & version\n" +
       "• /model — view / switch the model\n" +
@@ -151,6 +152,11 @@ const STR = {
     compactFail: (m) => `⚠️ Compact failed: ${m}`,
     compactNoSession: "No active session to compact. Just send a message to start one.",
     autoCompact: "🗜️ Auto-compacted context (conversation was getting long).",
+    planUsage: "Usage: `/plan <request>` — e.g. `/plan add input validation to the signup form`",
+    planApprove: "✅ Proceed",
+    planCancel: "❌ Cancel",
+    planCancelled: "❌ Plan cancelled. No changes were made.",
+    planNoPending: "No pending plan to approve (it may have expired after /new). Send /plan again.",
     testFallbackDisabled: "⚠️ Ollama fallback is not enabled. Set `\"ollamaFallback\": true` in config.json.",
     testFallbackFail: (m) => `⚠️ Ollama test failed: ${m}`,
     ollamaOn: "🌙 Ollama mode on. Messages will now go to Ollama. Your Claude session is preserved.",
@@ -221,12 +227,13 @@ const STR = {
       "• 그냥 메시지를 보내면 Claude가 프로젝트에서 작업합니다.\n" +
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
       "• /compact — 컨텍스트 압축 (세션 유지, 공간 확보)\n" +
+      "• /plan <요청> — 계획만 세우기 (편집 없음) → 승인/취소로 실제 실행\n" +
       "• /ollama — Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM 사용)\n" +
       "• /stop — 진행 중인 작업 중단 · /stop --reset 으로 세션도 되돌리기\n" +
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
       "• /remember <내용> — 퍼시스턴트 메모리에 저장 (/new 로 초기화해도 유지)\n" +
       "• /memory — 메모리 보기 · /memory clear 로 삭제\n" +
-      "• /reserve — 한도 리셋 시 재시도 예약 · /reserve <다른 메시지> 로 내용 변경 · /reserve rm 으로 취소\n" +
+      "• /reserve — 한도 리셋 시 대기열 상태 확인 · /reserve rm 으로 취소\n" +
       "• /restart — 봇 재시작 (문법 검사 후 안전하게)\n" +
       "• /status — 봇 상태·버전 보기\n" +
       "• /model — 모델 보기·전환\n" +
@@ -294,6 +301,11 @@ const STR = {
     compactFail: (m) => `⚠️ compact 실패: ${m}`,
     compactNoSession: "압축할 활성 세션이 없습니다. 메시지를 보내 세션을 시작하세요.",
     autoCompact: "🗜️ 대화가 길어져 컨텍스트를 자동 압축했습니다.",
+    planUsage: "사용법: `/plan <요청>` — 예: `/plan 회원가입 폼에 입력값 검증 추가해줘`",
+    planApprove: "✅ 진행",
+    planCancel: "❌ 취소",
+    planCancelled: "❌ 계획을 취소했습니다. 아무 변경도 없습니다.",
+    planNoPending: "승인할 계획이 없습니다 (/new 이후 만료됐을 수 있음). /plan 을 다시 보내세요.",
     contextTooLong: "⚠️ 프롬프트가 너무 깁니다. `/compact` 로 컨텍스트를 압축하거나 `/new` 로 새 세션을 시작하세요.",
     testFallbackDisabled: "⚠️ Ollama 폴백이 비활성화 상태입니다. config.json에 `\"ollamaFallback\": true` 를 추가하세요.",
     testFallbackFail: (m) => `⚠️ Ollama 테스트 실패: ${m}`,
@@ -314,6 +326,7 @@ const COMMANDS = {
   en: [
     { command: "new", description: "Reset context (new session)" },
     { command: "compact", description: "Compress context to free up space (keeps session)" },
+    { command: "plan", description: "Plan only (no edits), then approve/cancel to run for real" },
     { command: "ollama", description: "Toggle Ollama chat mode (bypass Claude, use local LLM)" },
     { command: "stop", description: "Stop the current task (--reset to roll back session)" },
     { command: "remember", description: "Save to persistent memory (survives /new)" },
@@ -329,6 +342,7 @@ const COMMANDS = {
   ko: [
     { command: "new", description: "대화 맥락 초기화 (새 세션)" },
     { command: "compact", description: "컨텍스트 압축 (세션 유지, 공간 확보)" },
+    { command: "plan", description: "계획만 세우기 (편집 없음) → 승인/취소로 실제 실행" },
     { command: "ollama", description: "Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM)" },
     { command: "stop", description: "작업 중단 (--reset 으로 세션 되돌리기)" },
     { command: "remember", description: "퍼시스턴트 메모리에 저장 (/new 후에도 유지)" },
@@ -512,19 +526,30 @@ function mdToTelegramHtml(md) {
   return out.join("\n").replace(/ CB(\d+) /g, (_, i) => codeBlocks[Number(i)]);
 }
 
-async function send(chatId, text) {
-  for (const c of chunks(text)) {
-    const r = await tg("sendMessage", {
+// opts.replyMarkup: 인라인 키보드 — 여러 청크로 나뉘면 마지막 청크에만 붙음.
+// 반환값: 마지막으로 보낸 메시지의 message_id (버튼 클릭 후 편집용, 실패 시 null).
+async function send(chatId, text, opts = {}) {
+  const cs = chunks(text);
+  let lastId = null;
+  for (let i = 0; i < cs.length; i++) {
+    const isLast = i === cs.length - 1;
+    const body = {
       chat_id: chatId,
-      text: mdToTelegramHtml(c),
+      text: mdToTelegramHtml(cs[i]),
       parse_mode: "HTML",
       disable_web_page_preview: true,
-    });
+    };
+    if (isLast && opts.replyMarkup) body.reply_markup = opts.replyMarkup;
+    let r = await tg("sendMessage", body);
     // If our HTML is malformed for some edge case, resend as plain text.
     if (!r || r.ok === false) {
-      await tg("sendMessage", { chat_id: chatId, text: c, disable_web_page_preview: true });
+      const plain = { chat_id: chatId, text: cs[i], disable_web_page_preview: true };
+      if (isLast && opts.replyMarkup) plain.reply_markup = opts.replyMarkup;
+      r = await tg("sendMessage", plain);
     }
+    if (r?.ok) lastId = r.result?.message_id;
   }
+  return lastId;
 }
 
 // ── Claude 에러 분류 ──────────────────────────────────────────────────────
@@ -598,7 +623,7 @@ function runClaude(prompt, sessionId, opts = {}) {
   return new Promise((resolve) => {
     const args = [
       "--output-format", "json",
-      "--permission-mode", cfg.permissionMode || "acceptEdits",
+      "--permission-mode", opts.permissionMode || cfg.permissionMode || "acceptEdits",
     ];
     const model = state.model || cfg.model; // /model 로 바꾸면 state.model 우선
     const brevity =
@@ -960,7 +985,119 @@ let currentTyping = null;   // 타이핑 인터벌 (/stop 시 정리용)
 let prevSessionId;          // /stop --reset 복원 대상
 let stopping = false;       // /stop 처리 중 오류 메시지 억제 플래그
 let rateLimitUntil = null;  // 레이트 리밋 활성 시 리셋 Date — 이 시간까지 메시지를 큐에 쌓음
+const pendingPlans = new Map(); // chatId → { sessionId, messageId } — /plan 승인 대기
+const PLAN_PROCEED_PROMPT = "Proceed with the plan you just approved above. Implement it now.";
 let rateLimitTimer = null;  // 리셋 시간에 큐를 드레인하는 타이머
+
+// runClaude 결과를 답장으로 변환 — 폴백/큐잉/자동 컴팩션 처리. handle()과 /plan 승인 실행이 공유.
+async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
+  const secs = Math.round((Date.now() - started) / 1000);
+  if (!res.ok) {
+    // Ollama 폴백: 레이트리밋·크레딧 에러이고 ollamaFallback 켜져 있으면 Ollama로 재시도
+    if (cfg.ollamaFallback && res.canFallback && !stopping) {
+      try {
+        const oRes = await runOllama(prompt, l);
+        if (oRes.ok) { await send(chatId, oRes.text); return; }
+      } catch {}
+    }
+    // 리셋 시간을 알면 현재 메시지를 큐 앞에 다시 넣고 타이머 설정
+    let autoRetryMsg = "";
+    if (res.resetAt && !stopping) {
+      msgQueue.unshift({ msg, receivedAt: Date.now() });
+      rateLimitUntil = res.resetAt;
+      if (rateLimitTimer) clearTimeout(rateLimitTimer);
+      rateLimitTimer = setTimeout(() => {
+        rateLimitTimer = null;
+        rateLimitUntil = null;
+        if (msgQueue.length > 0) handle(drainQueue());
+      }, Math.max(res.resetAt - Date.now(), 1000));
+      const timeStr = res.resetAt.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
+      autoRetryMsg = "\n\n" + t(l, "reserveAuto", timeStr);
+    }
+    const errMsg = res.text === "contextTooLong" ? t(l, "contextTooLong") : `⚠️ ${res.text}${autoRetryMsg}`;
+    if (!stopping) await send(chatId, errMsg);
+  } else {
+    const footer = `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`;
+    if (!stopping) await send(chatId, res.text + footer);
+    // 자동 컴팩션: cache_read_input_tokens 가 임계값 초과 시 자동 /compact
+    const compactThreshold = cfg.autoCompactThreshold ?? 100000;
+    if (compactThreshold > 0 && res.cacheTokens > compactThreshold && state.sessionId && !stopping) {
+      try {
+        const cr = await runClaude("/compact", state.sessionId);
+        if (cr.sessionId) { state.sessionId = cr.sessionId; saveState(state); }
+        if (cr.ok !== false) await send(chatId, t(l, "autoCompact"));
+      } catch {}
+    }
+  }
+}
+
+// /plan 승인 후 실행 — busy 락·타이핑 표시를 handle()과 동일한 패턴으로 자체 처리.
+async function runApprovedPlan(chatId, l) {
+  const pending = pendingPlans.get(chatId);
+  pendingPlans.delete(chatId);
+  // /new 등으로 세션이 바뀌었으면 이 계획은 더 이상 유효하지 않음
+  if (!pending || pending.sessionId !== state.sessionId) {
+    await send(chatId, t(l, "planNoPending"));
+    return;
+  }
+  if (busy) {
+    msgQueue.push({ msg: { chat: { id: chatId }, text: PLAN_PROCEED_PROMPT }, receivedAt: Date.now() });
+    await send(chatId, t(l, "queued", msgQueue.length));
+    return;
+  }
+  if (checkLocalLock()) {
+    await send(chatId, t(l, "localBusy"));
+    return;
+  }
+  busy = true;
+  await tg("sendChatAction", { chat_id: chatId, action: "typing" });
+  const started = Date.now();
+  currentTyping = setInterval(
+    () => tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {}),
+    5000,
+  );
+  const syntheticMsg = { chat: { id: chatId }, text: PLAN_PROCEED_PROMPT };
+  try {
+    prevSessionId = state.sessionId;
+    const res = await runClaude(PLAN_PROCEED_PROMPT, pending.sessionId, { modelHint: true, trackChild: true, injectMemory: true });
+    if (res.sessionId) {
+      state.sessionId = res.sessionId;
+      saveState(state);
+    }
+    await replyWithClaudeResult(chatId, l, PLAN_PROCEED_PROMPT, syntheticMsg, res, started);
+  } catch (e) {
+    if (!stopping) await send(chatId, t(l, "botError", e.message));
+  } finally {
+    clearInterval(currentTyping);
+    currentTyping = null;
+    stopping = false;
+    busy = false;
+    if (msgQueue.length > 0 && !rateLimitUntil) setImmediate(() => handle(drainQueue()));
+  }
+}
+
+// 텔레그램 인라인 버튼(✅/❌) 클릭 처리
+async function handleCallback(cq) {
+  const chatId = cq.message?.chat?.id;
+  if (!chatId || !allowedIds.includes(String(chatId))) {
+    await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
+    return;
+  }
+  const l = langOf({ from: cq.from });
+  await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
+  // 중복 클릭 방지 — 원본 메시지의 버튼 제거
+  tg("editMessageReplyMarkup", {
+    chat_id: chatId,
+    message_id: cq.message.message_id,
+    reply_markup: { inline_keyboard: [] },
+  }).catch(() => {});
+  if (cq.data === "plan:yes") {
+    runApprovedPlan(chatId, l).catch((e) => console.error("Plan approval error:", e.message));
+  } else if (cq.data === "plan:no") {
+    pendingPlans.delete(chatId);
+    await send(chatId, t(l, "planCancelled"));
+  }
+}
 
 async function handle(msg) {
   const chatId = msg.chat?.id;
@@ -1185,6 +1322,32 @@ async function handle(msg) {
   );
 
   try {
+    // /plan <요청> — permission-mode를 강제로 plan으로 실행해 편집 없이 계획만 받고,
+    // 승인 버튼을 눌러야 실제 permissionMode로 이어서 실행 (runApprovedPlan).
+    if (text === "/plan" || text.startsWith("/plan ")) {
+      const planReq = text.slice(5).trim();
+      if (!planReq) { await send(chatId, t(l, "planUsage")); return; }
+      prevSessionId = state.sessionId;
+      const res = await runClaude(planReq, state.sessionId, { permissionMode: "plan", modelHint: true, trackChild: true, injectMemory: true });
+      if (res.sessionId) {
+        state.sessionId = res.sessionId;
+        saveState(state);
+      }
+      if (!res.ok) {
+        await send(chatId, `⚠️ ${res.text}`);
+        return;
+      }
+      const messageId = await send(chatId, res.text, {
+        replyMarkup: {
+          inline_keyboard: [[
+            { text: t(l, "planApprove"), callback_data: "plan:yes" },
+            { text: t(l, "planCancel"), callback_data: "plan:no" },
+          ]],
+        },
+      });
+      pendingPlans.set(chatId, { sessionId: state.sessionId, messageId });
+      return;
+    }
     let prompt = text;
     if (msg._mediaGroup?.length) {
       const notes = [];
@@ -1224,44 +1387,7 @@ async function handle(msg) {
       state.sessionId = res.sessionId;
       saveState(state);
     }
-    const secs = Math.round((Date.now() - started) / 1000);
-    if (!res.ok) {
-      // Ollama 폴백: 레이트리밋·크레딧 에러이고 ollamaFallback 켜져 있으면 Ollama로 재시도
-      if (cfg.ollamaFallback && res.canFallback && !stopping) {
-        try {
-          const oRes = await runOllama(prompt, l);
-          if (oRes.ok) { await send(chatId, oRes.text); return; }
-        } catch {}
-      }
-      // 리셋 시간을 알면 현재 메시지를 큐 앞에 다시 넣고 타이머 설정
-      let autoRetryMsg = "";
-      if (res.resetAt && !stopping) {
-        msgQueue.unshift({ msg, receivedAt: Date.now() });
-        rateLimitUntil = res.resetAt;
-        if (rateLimitTimer) clearTimeout(rateLimitTimer);
-        rateLimitTimer = setTimeout(() => {
-          rateLimitTimer = null;
-          rateLimitUntil = null;
-          if (msgQueue.length > 0) handle(drainQueue());
-        }, Math.max(res.resetAt - Date.now(), 1000));
-        const timeStr = res.resetAt.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
-        autoRetryMsg = "\n\n" + t(l, "reserveAuto", timeStr);
-      }
-      const errMsg = res.text === "contextTooLong" ? t(l, "contextTooLong") : `⚠️ ${res.text}${autoRetryMsg}`;
-      if (!stopping) await send(chatId, errMsg);
-    } else {
-      const footer = `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`;
-      if (!stopping) await send(chatId, res.text + footer);
-      // 자동 컴팩션: cache_read_input_tokens 가 임계값 초과 시 자동 /compact
-      const compactThreshold = cfg.autoCompactThreshold ?? 100000;
-      if (compactThreshold > 0 && res.cacheTokens > compactThreshold && state.sessionId && !stopping) {
-        try {
-          const cr = await runClaude("/compact", state.sessionId);
-          if (cr.sessionId) { state.sessionId = cr.sessionId; saveState(state); }
-          if (cr.ok !== false) await send(chatId, t(l, "autoCompact"));
-        } catch {}
-      }
-    }
+    await replyWithClaudeResult(chatId, l, prompt, msg, res, started);
   } catch (e) {
     if (!stopping) await send(chatId, t(l, "botError", e.message));
   } finally {
@@ -1352,6 +1478,7 @@ async function main() {
       for (const upd of res.result) {
         offset = upd.update_id + 1;
         if (upd.message) dispatch(upd.message);
+        else if (upd.callback_query) handleCallback(upd.callback_query).catch((e) => console.error("Callback error:", e.message));
       }
     } catch (e) {
       console.error("Polling error:", e.message);

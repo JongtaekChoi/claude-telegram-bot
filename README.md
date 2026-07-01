@@ -162,7 +162,14 @@ auth layer.)
 - `run the solver tests and commit + push if they pass`
 - `add an edge case to solve-2nd-floor-edges.ts`
 
-Commands: `/new` (reset context / new session) · `/compact` (compress context, keep session) · `/stop` (stop current task; `--reset` to also roll back the session) · `/ollama` (toggle Ollama chat mode) · `/cron` (list / add / remove scheduled tasks) · `/reserve` (show queue status at usage-limit · `/reserve rm` to cancel) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/model` (view / switch the model) · `/id` (show chat ID) · `/help`.
+Commands: `/new` (reset context / new session) · `/compact` (compress context, keep session) · `/plan <request>` (plan only, then approve/cancel) · `/stop` (stop current task; `--reset` to also roll back the session) · `/ollama` (toggle Ollama chat mode) · `/cron` (list / add / remove scheduled tasks) · `/reserve` (show queue status at usage-limit · `/reserve rm` to cancel) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/model` (view / switch the model) · `/id` (show chat ID) · `/help`.
+
+> **`/plan <request>`** runs the request in read-only plan mode (no edits, no shell) regardless of
+> the bot's configured `permissionMode`, and replies with the plan plus **✅ Proceed / ❌ Cancel**
+> buttons. Tapping **Proceed** resumes the same session with the bot's normal `permissionMode` and
+> tells Claude to implement the approved plan; **Cancel** leaves the session untouched. This gives
+> you a review step before a `bypassPermissions` bot touches anything. The pending approval expires
+> if you start a new session with `/new` first.
 
 > **`/stop`** kills the running Claude process immediately and clears any queued messages.
 > Add `--reset` to also restore the session to the state it was in *before* the task started,
