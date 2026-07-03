@@ -526,32 +526,20 @@ function mdToTelegramHtml(md) {
   return out.join("\n").replace(/ CB(\d+) /g, (_, i) => codeBlocks[Number(i)]);
 }
 
-// opts.replyMarkup: 인라인 키보드 — 여러 청크로 나뉘면 마지막 청크에만 붙음.
-// 반환값: 마지막으로 보낸 메시지의 message_id (버튼 클릭 후 편집용, 실패 시 null).
-async function send(chatId, text, opts = {}) {
-  const cs = chunks(text);
-  let lastId = null;
-  for (let i = 0; i < cs.length; i++) {
-    const isLast = i === cs.length - 1;
-    const body = {
+async function send(chatId, text) {
+  for (const c of chunks(text)) {
+    const r = await tg("sendMessage", {
       chat_id: chatId,
-      text: mdToTelegramHtml(cs[i]),
+      text: mdToTelegramHtml(c),
       parse_mode: "HTML",
       disable_web_page_preview: true,
-    };
-    if (isLast && opts.replyMarkup) body.reply_markup = opts.replyMarkup;
-    let r = await tg("sendMessage", body);
+    });
     // If our HTML is malformed for some edge case, resend as plain text.
     if (!r || r.ok === false) {
-      const plain = { chat_id: chatId, text: cs[i], disable_web_page_preview: true };
-      if (isLast && opts.replyMarkup) plain.reply_markup = opts.replyMarkup;
-      r = await tg("sendMessage", plain);
+      await tg("sendMessage", { chat_id: chatId, text: c, disable_web_page_preview: true });
     }
-    if (r?.ok) lastId = r.result?.message_id;
   }
-  return lastId;
 }
-
 // ── Claude 에러 분류 ──────────────────────────────────────────────────────
 function parseResetTime(raw) {
   // ISO timestamp: 2026-06-17T14:00:00Z
