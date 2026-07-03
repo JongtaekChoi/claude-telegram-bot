@@ -529,7 +529,7 @@ function mdToTelegramHtml(md) {
 // opts.replyMarkup: 인라인 키보드 — 여러 청크로 나뉘면 마지막 청크에만 붙음.
 // 반환값: 마지막으로 보낸 메시지의 message_id (버튼 클릭 후 편집용, 실패 시 null).
 async function send(chatId, text, opts = {}) {
-  const cs = chunks(text);
+  const cs = [...chunks(text)];
   let lastId = null;
   for (let i = 0; i < cs.length; i++) {
     const isLast = i === cs.length - 1;

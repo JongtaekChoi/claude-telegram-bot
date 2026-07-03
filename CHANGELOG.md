@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.36] - 2026-07-03
+### Fixed
+- `/plan`(0.3.35)에서 `send()`가 제너레이터 `chunks()`를 배열처럼 `.length`로 인덱싱해
+  모든 메시지가 무응답으로 사라지던 버그
+  - `chunks()`는 `function*`이라 `.length`가 `undefined` → 루프 조건이 항상 false로 평가되어
+    본문이 한 번도 실행되지 않음 (예외도 로그도 없이 조용히 실패)
+  - `const cs = chunks(text)` → `const cs = [...chunks(text)]`로 배열 변환하여 수정
+  - 자세한 원인 분석: `docs/incidents/2026-07-03-plan-send-silent-failure.md`
+
 ## [0.3.35] - 2026-06-27
 ### Added
 - `/plan <요청>` — Plan Mode
