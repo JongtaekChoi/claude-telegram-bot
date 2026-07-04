@@ -873,8 +873,8 @@ async function handleCron(chatId, rest, l) {
       return;
     }
     busy = true;
-    await tg("sendChatAction", { chat_id: chatId, action: "typing" });
     try {
+      await tg("sendChatAction", { chat_id: chatId, action: "typing" });
       const r = await extractCron(input, l);
       if (r.error) {
         await send(chatId, `⚠️ ${r.error}`);
@@ -1050,7 +1050,6 @@ async function runApprovedPlan(chatId, l) {
     return;
   }
   busy = true;
-  await tg("sendChatAction", { chat_id: chatId, action: "typing" });
   const started = Date.now();
   currentTyping = setInterval(
     () => tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {}),
@@ -1058,6 +1057,7 @@ async function runApprovedPlan(chatId, l) {
   );
   const syntheticMsg = { chat: { id: chatId }, text: PLAN_PROCEED_PROMPT };
   try {
+    await tg("sendChatAction", { chat_id: chatId, action: "typing" });
     prevSessionId = state.sessionId;
     const res = await runClaude(PLAN_PROCEED_PROMPT, pending.sessionId, { modelHint: true, trackChild: true, injectMemory: true });
     if (res.sessionId) {
@@ -1310,7 +1310,6 @@ async function handle(msg) {
     return;
   }
   busy = true;
-  await tg("sendChatAction", { chat_id: chatId, action: "typing" });
   const started = Date.now();
   // 긴 작업 동안 타이핑 표시 유지
   currentTyping = setInterval(
@@ -1322,6 +1321,7 @@ async function handle(msg) {
   );
 
   try {
+    await tg("sendChatAction", { chat_id: chatId, action: "typing" });
     // /plan <요청> — permission-mode를 강제로 plan으로 실행해 편집 없이 계획만 받고,
     // 승인 버튼을 눌러야 실제 permissionMode로 이어서 실행 (runApprovedPlan).
     if (text === "/plan" || text.startsWith("/plan ")) {

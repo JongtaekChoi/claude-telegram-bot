@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.37] - 2026-07-04
+### Fixed
+- `busy` 플래그 교착(deadlock) 버그 — `/cron add`, `/plan` 승인 실행, 일반 메시지 처리 3곳에서
+  `busy = true` 직후의 `await tg("sendChatAction", ...)` 호출이 `try/catch` 밖에 있어,
+  일시적 네트워크 오류로 이 호출이 실패하면 `busy`가 영영 `true`로 남아버리는 문제
+  - `/stop`은 `currentChild`가 없어 "실행 중인 작업 없음"이라 답하지만, 새 메시지는 전부
+    무한 대기열에만 쌓이는 모순된 멈춤 상태가 발생
+  - `sendChatAction` 호출을 각 `try` 블록 안으로 이동해, 실패해도 기존 `catch`/`finally`가
+    `busy`/`currentTyping`을 정상적으로 초기화하도록 수정
+
 ## [0.3.36] - 2026-07-03
 ### Fixed
 - `/plan`(0.3.35)에서 `send()`가 제너레이터 `chunks()`를 배열처럼 `.length`로 인덱싱해
