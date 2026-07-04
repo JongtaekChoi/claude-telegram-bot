@@ -1410,7 +1410,18 @@ function drainQueue() {
       return i === 0 ? `[1] ${text}` : `[${i + 1}, +${dt}s] ${text}`;
     })
     .join("\n");
-  return { ...group[group.length - 1].msg, text: merged, caption: undefined };
+  // 마지막 메시지 필드만 남기면 앞서 온 메시지의 사진/첨부가 유실되므로, 전체 첨부를 순서대로 모아 둠
+  const fileIds = group.flatMap((item) => {
+    if (item.msg._mediaGroup?.length) return item.msg._mediaGroup;
+    const att = pickAttachment(item.msg);
+    return att ? [att.fileId] : [];
+  });
+  return {
+    ...group[group.length - 1].msg,
+    text: merged,
+    caption: undefined,
+    _mediaGroup: fileIds.length ? fileIds : undefined,
+  };
 }
 
 // 미디어 그룹(여러 장 동시 전송) — 1초 대기 후 일괄 처리
