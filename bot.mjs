@@ -1154,7 +1154,7 @@ async function handle(msg) {
   }
   if (text === "/status") {
     const latest = await fetchLatestVersion();
-    const versionStr = !latest || latest === VERSION
+    const versionStr = !latest || !isNewer(latest, VERSION)
       ? VERSION
       : `${VERSION} → ${latest} ✨`;
     await send(
