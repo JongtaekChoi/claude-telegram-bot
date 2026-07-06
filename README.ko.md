@@ -110,7 +110,7 @@ claude-telegram-bot ~/botconfigs/myproj/mybot.json
 | `commands` | (선택) 쉘 스크립트를 실행하는 커스텀 `/명령어` — [커스텀 명령어](#커스텀-명령어) 참고 |
 | `ollamaFallback` | (선택) `true`로 설정하면 Claude 레이트 리밋·크레딧 부족 시 로컬 Ollama로 자동 대체 |
 | `ollamaModel` | (선택) 폴백에 쓸 Ollama 모델 (기본값: `"phi3:mini"`) |
-| `autoCompactThreshold` | (선택) 캐시된 입력 토큰이 이 값을 초과하면 컨텍스트 자동 압축 (기본값: `100000`). `0`이면 비활성화 |
+| `autoCompactThreshold` | (선택) 캐시된 입력 토큰이 이 값을 초과하면 컨텍스트 자동 압축 (기본값: `100000`). `0`이면 비활성화. 런타임에 `/autocompact`로 전환 가능(state에 저장) |
 
 `state`와 첨부 파일은 config 파일 옆 **`.claude-bot/` 숨김 폴더**에 저장됩니다(프로젝트 격리). 구버전에서 올리면 첫 시작 때 기존 `state.json`·`attachments/`를 `.claude-bot/`로 **자동 이동**합니다(무손실). 로그는 launchd plist가 가리키는 위치 그대로입니다.
 
@@ -122,7 +122,7 @@ claude-telegram-bot ~/botconfigs/myproj/mybot.json
    - `테스트 돌려보고 통과하면 커밋하고 push 해줘`
    - `api.ts 에 에러 핸들링 추가해줘`
 
-명령어: `/new`(맥락 초기화) · `/compact`(컨텍스트 압축, 세션 유지) · `/plan <요청>`(계획만 세우고 승인/취소) · `/stop`(작업 중단; `--reset`으로 세션도 롤백) · `/ollama`(Ollama 채팅 모드 토글) · `/cron`(예약 작업 보기·추가·삭제) · `/reserve`(대기 큐 상태 확인 · `/reserve rm`으로 취소) · `/restart`(문법 검사 후 재시작) · `/status`(봇 상태·버전) · `/model`(모델 보기·전환) · `/id`(채팅 ID 확인) · `/help`(도움말)
+명령어: `/new`(맥락 초기화) · `/compact`(컨텍스트 압축, 세션 유지) · `/plan <요청>`(계획만 세우고 승인/취소) · `/stop`(작업 중단; `--reset`으로 세션도 롤백) · `/ollama`(Ollama 채팅 모드 토글) · `/cron`(예약 작업 보기·추가·삭제) · `/reserve`(대기 큐 상태 확인 · `/reserve rm`으로 취소) · `/restart`(문법 검사 후 재시작) · `/status`(봇 상태·버전) · `/model`(모델 보기·전환) · `/autocompact`(자동 압축 임계값 보기·설정) · `/id`(채팅 ID 확인) · `/help`(도움말)
 
 > **`/plan <요청>`** 은 봇에 설정된 `permissionMode`와 무관하게 강제로 읽기 전용 plan 모드(편집·쉘 없음)로 요청을 실행하고, 계획 내용과 함께 **✅ 진행 / ❌ 취소** 버튼을 보냅니다. **진행**을 누르면 같은 세션을 봇의 실제 `permissionMode`로 이어서 승인된 계획을 실행하고, **취소**를 누르면 세션은 그대로 유지됩니다. `bypassPermissions` 봇이 뭔가 건드리기 전에 검토 단계를 두고 싶을 때 유용합니다. `/new`로 새 세션을 시작하면 대기 중인 승인은 만료됩니다.
 
@@ -137,7 +137,7 @@ claude-telegram-bot ~/botconfigs/myproj/mybot.json
 - **모델 권유** — 봇이 Claude에게 현재 모델을 알려줍니다. 질문 난이도가 현재 모델 수준을 넘는다고 판단되면 답변 끝에 전환 권유 한 줄이 붙습니다(예: 💡 `/model sonnet`). `/model <이름>`으로 전환(`haiku`, `sonnet`, `opus`, `fable`, 또는 전체 모델 ID) — `state.json`에 저장돼 재시작 후에도 유지됩니다.
 - **한도 초과 큐** — Claude Max / API 레이트 리밋 에러에 리셋 시간이 포함되면, 해당 메시지를 자동으로 큐에 넣고 리셋 시각에 재시도합니다 — 작업 중 큐와 같은 방식입니다. 한도가 걸린 동안 추가로 보내는 메시지도 자동으로 큐에 쌓입니다. `/reserve`로 대기 현황과 리셋 시각 확인, `/reserve rm`으로 큐 전체 취소.
 - **Ollama 폴백** — `"ollamaFallback": true`로 설정하고 `"ollamaModel"`에 로컬 [Ollama](https://ollama.ai) 모델을 지정하면(기본값: `"phi3:mini"`), Claude 레이트 리밋·크레딧 부족 시 자동으로 Ollama로 대체 응답합니다. `/ollama`로 Claude와 관계없이 Ollama를 기본 채팅 상대로 수동 전환할 수도 있습니다 (가벼운 질문에 유용).
-- **자동 컴팩션** — 세션의 캐시된 입력 토큰이 `autoCompactThreshold`(기본값 100,000)를 초과하면 `/compact`를 자동 실행하고 알림을 보냅니다. config에서 임계값을 조정하거나 `0`으로 비활성화. 수동으로 `/compact`를 써도 됩니다.
+- **자동 컴팩션** — 세션의 캐시된 입력 토큰이 `autoCompactThreshold`(기본값 100,000)를 초과하면 `/compact`를 자동 실행하고 알림을 보냅니다. config에서 임계값을 조정하거나, 런타임에 `/autocompact <숫자>`로 설정(`/autocompact off`로 비활성화, `/autocompact default`로 초기화) — `state.json`에 저장돼 재시작 후에도 유지됩니다. 수동으로 `/compact`를 써도 됩니다.
 - **간결한 답변** — 텔레그램에 맞게 짧게 답하도록 시스템 프롬프트가 기본으로 붙습니다. 바꾸려면 `appendSystemPrompt`에 직접 넣으세요 (빈 문자열이면 끔).
 - **언어** — 봇 자체 문구(`/help`, 명령 메뉴, 상태 메시지)는 **기본 영어**, 텔레그램이 한국어인 사용자에겐 한국어로 나옵니다. `lang`(`"en"`/`"ko"`)으로 고정할 수 있습니다. Claude의 실제 답변은 **사용자가 쓴 언어**를 따라갑니다. `/` 명령 메뉴는 `setMyCommands`로 언어별 등록됩니다.
 - **서식 변환** — 답변의 마크다운(굵게·코드·표 등)을 텔레그램 HTML로 바꿔 보냅니다. 변환이 깨지는 경우엔 평문으로 다시 보냅니다.

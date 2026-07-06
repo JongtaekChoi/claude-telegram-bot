@@ -145,6 +145,7 @@ const STR = {
       "• /restart — restart the bot (after a syntax check)\n" +
       "• /status — bot status & version\n" +
       "• /model — view / switch the model\n" +
+      "• /autocompact — view / set the auto-compact token threshold\n" +
       "• /id — show this chat ID\n" +
       `\nWorking dir: ${cfg.projectDir}\nPermission mode: ${cfg.permissionMode}`,
     newSession: "🆕 Started a new conversation (previous context cleared).",
@@ -208,6 +209,13 @@ const STR = {
       `/model default — clear the override`,
     modelSet: (m) => `🧠 Model set to: ${m}`,
     modelReset: (def) => `🧠 Model reset to default (${def}).`,
+    autoCompactStatus: (cur, def) =>
+      `🗜️ Auto-compact threshold: ${cur} tokens${cur === def ? " (default)" : ""}\n` +
+      "Set: `/autocompact <number>` · `/autocompact off` to disable · `/autocompact default` to reset",
+    autoCompactSet: (n) => `🗜️ Auto-compact threshold set to ${n} tokens.`,
+    autoCompactOff: "🗜️ Auto-compact disabled.",
+    autoCompactReset: (def) => `🗜️ Auto-compact threshold reset to default (${def}).`,
+    autoCompactUsage: "Usage: `/autocompact <number>` · `/autocompact off` · `/autocompact default`",
     memoryEmpty: "No memory yet. Use `/remember <text>` to add.",
     memoryShow: (m) => `💾 Memory:\n\`\`\`\n${m}\n\`\`\``,
     memoryCleared: "🧹 Memory cleared.",
@@ -237,6 +245,7 @@ const STR = {
       "• /restart — 봇 재시작 (문법 검사 후 안전하게)\n" +
       "• /status — 봇 상태·버전 보기\n" +
       "• /model — 모델 보기·전환\n" +
+      "• /autocompact — 자동 압축 임계값 보기·설정\n" +
       "• /id — 이 채팅 ID 확인\n" +
       `\n작업 폴더: ${cfg.projectDir}\n권한 모드: ${cfg.permissionMode}`,
     newSession: "🆕 새 대화를 시작합니다 (이전 맥락 초기화).",
@@ -286,6 +295,13 @@ const STR = {
       `/model default — 오버라이드 해제`,
     modelSet: (m) => `🧠 모델을 ${m} (으)로 설정했습니다.`,
     modelReset: (def) => `🧠 모델을 기본값(${def})으로 되돌렸습니다.`,
+    autoCompactStatus: (cur, def) =>
+      `🗜️ 자동 압축 임계값: ${cur} 토큰${cur === def ? " (기본값)" : ""}\n` +
+      "설정: `/autocompact <숫자>` · `/autocompact off` 로 끄기 · `/autocompact default` 로 초기화",
+    autoCompactSet: (n) => `🗜️ 자동 압축 임계값을 ${n} 토큰으로 설정했습니다.`,
+    autoCompactOff: "🗜️ 자동 압축을 껐습니다.",
+    autoCompactReset: (def) => `🗜️ 자동 압축 임계값을 기본값(${def})으로 되돌렸습니다.`,
+    autoCompactUsage: "사용법: `/autocompact <숫자>` · `/autocompact off` · `/autocompact default`",
     memoryEmpty: "저장된 메모리가 없습니다. `/remember <내용>`으로 추가하세요.",
     memoryShow: (m) => `💾 메모리:\n\`\`\`\n${m}\n\`\`\``,
     memoryCleared: "🧹 메모리를 삭제했습니다.",
@@ -335,6 +351,7 @@ const COMMANDS = {
     { command: "restart", description: "Restart the bot (after syntax check)" },
     { command: "status", description: "Bot status / version" },
     { command: "model", description: "View / switch the model" },
+    { command: "autocompact", description: "View / set the auto-compact token threshold" },
     { command: "reserve", description: "Schedule retry when usage limit resets · /reserve rm to cancel" },
     { command: "id", description: "Show this chat ID" },
     { command: "help", description: "Help" },
@@ -351,6 +368,7 @@ const COMMANDS = {
     { command: "restart", description: "봇 재시작 (문법 검사 후)" },
     { command: "status", description: "봇 상태·버전 보기" },
     { command: "model", description: "모델 보기·전환" },
+    { command: "autocompact", description: "자동 압축 임계값 보기·설정" },
     { command: "reserve", description: "한도 리셋 시 재시도 예약 · /reserve rm 으로 취소" },
     { command: "id", description: "이 채팅 ID 확인" },
     { command: "help", description: "도움말" },
@@ -1020,7 +1038,7 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
     const footer = `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`;
     if (!stopping) await send(chatId, res.text + footer);
     // 자동 컴팩션: cache_read_input_tokens 가 임계값 초과 시 자동 /compact
-    const compactThreshold = cfg.autoCompactThreshold ?? 100000;
+    const compactThreshold = state.autoCompactThreshold ?? cfg.autoCompactThreshold ?? 100000;
     if (compactThreshold > 0 && res.cacheTokens > compactThreshold && state.sessionId && !stopping) {
       try {
         const cr = await runClaude("/compact", state.sessionId);
@@ -1169,6 +1187,36 @@ async function handle(msg) {
     state.model = arg;
     saveState(state);
     await send(chatId, t(l, "modelSet", arg));
+    return;
+  }
+  if (text === "/autocompact" || text.startsWith("/autocompact ")) {
+    const arg = text.slice(13).trim();
+    const def = cfg.autoCompactThreshold ?? 100000;
+    if (!arg) {
+      const cur = state.autoCompactThreshold ?? def;
+      await send(chatId, t(l, "autoCompactStatus", cur, def));
+      return;
+    }
+    if (arg === "default" || arg === "reset") {
+      state.autoCompactThreshold = undefined;
+      saveState(state);
+      await send(chatId, t(l, "autoCompactReset", def));
+      return;
+    }
+    if (arg === "off") {
+      state.autoCompactThreshold = 0;
+      saveState(state);
+      await send(chatId, t(l, "autoCompactOff"));
+      return;
+    }
+    const n = Number(arg);
+    if (!Number.isFinite(n) || n < 0) {
+      await send(chatId, t(l, "autoCompactUsage"));
+      return;
+    }
+    state.autoCompactThreshold = n;
+    saveState(state);
+    await send(chatId, t(l, "autoCompactSet", n));
     return;
   }
   if (text === "/cron" || text.startsWith("/cron ")) {

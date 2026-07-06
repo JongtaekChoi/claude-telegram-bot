@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.39] - 2026-07-06
+### Added
+- `/autocompact` 명령어 — 자동 컴팩션 토큰 임계값(`autoCompactThreshold`)을 런타임에 확인·변경
+  - `/autocompact` — 현재 임계값 확인
+  - `/autocompact <숫자>` — 임계값 변경 (state에 저장, 재시작 후에도 유지)
+  - `/autocompact off` — 자동 컴팩션 비활성화 (`0`으로 설정)
+  - `/autocompact default` — config.json의 값(또는 기본값 100000)으로 초기화
+  - 기존에는 config.json을 직접 수정하고 봇을 재시작해야만 값을 바꿀 수 있었음
+
 ## [0.3.38] - 2026-07-04
 ### Fixed
 - 봇이 busy 상태일 때 사진(첨부)이 포함된 메시지가 연달아 들어오면, 대기열을 합치는 과정에서

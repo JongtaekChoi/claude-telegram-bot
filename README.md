@@ -162,7 +162,7 @@ auth layer.)
 - `run the solver tests and commit + push if they pass`
 - `add an edge case to solve-2nd-floor-edges.ts`
 
-Commands: `/new` (reset context / new session) · `/compact` (compress context, keep session) · `/plan <request>` (plan only, then approve/cancel) · `/stop` (stop current task; `--reset` to also roll back the session) · `/ollama` (toggle Ollama chat mode) · `/cron` (list / add / remove scheduled tasks) · `/reserve` (show queue status at usage-limit · `/reserve rm` to cancel) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/model` (view / switch the model) · `/id` (show chat ID) · `/help`.
+Commands: `/new` (reset context / new session) · `/compact` (compress context, keep session) · `/plan <request>` (plan only, then approve/cancel) · `/stop` (stop current task; `--reset` to also roll back the session) · `/ollama` (toggle Ollama chat mode) · `/cron` (list / add / remove scheduled tasks) · `/reserve` (show queue status at usage-limit · `/reserve rm` to cancel) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/model` (view / switch the model) · `/autocompact` (view / set the auto-compact token threshold) · `/id` (show chat ID) · `/help`.
 
 > **`/plan <request>`** runs the request in read-only plan mode (no edits, no shell) regardless of
 > the bot's configured `permissionMode`, and replies with the plan plus **✅ Proceed / ❌ Cancel**
@@ -213,7 +213,7 @@ Edit `mybot.json`:
 | `commands` | (optional) Custom `/commands` that run shell scripts — see [Custom commands](#custom-commands) |
 | `ollamaFallback` | (optional) `true` to enable Ollama as a fallback when Claude is rate-limited or out of credits |
 | `ollamaModel` | (optional) Ollama model to use for fallback (default: `"phi3:mini"`) |
-| `autoCompactThreshold` | (optional) Auto-compact context when cached input tokens exceed this value (default: `100000`). Set to `0` to disable. |
+| `autoCompactThreshold` | (optional) Auto-compact context when cached input tokens exceed this value (default: `100000`). Set to `0` to disable. Override at runtime with `/autocompact` (persists in state). |
 
 State and downloaded attachments live in a hidden **`.claude-bot/`** folder next to the config
 file, so projects stay isolated. Upgrading from an older version **auto-moves** an existing
@@ -238,7 +238,7 @@ your launchd plist points them.
 - **Model hint**: the bot tells Claude which model it is running as. If Claude judges a question to be beyond its current tier, it appends a one-line suggestion at the end of the reply (e.g. 💡 `/model sonnet`). Switch with `/model <name>` — `haiku`, `sonnet`, `opus`, `fable`, or a full model id. The choice persists in `state.json` across restarts.
 - **Usage-limit queue**: when a Claude Max / API rate-limit error includes a reset time, the triggering message is automatically queued and retried at that time — just like messages queued while Claude is busy. Any additional messages you send during the limit window are also added to the queue. Use `/reserve` to check queue status and reset time, `/reserve rm` to cancel and clear the queue.
 - **Ollama fallback**: set `"ollamaFallback": true` and point `"ollamaModel"` at a locally-running [Ollama](https://ollama.ai) model (default: `"phi3:mini"`). When Claude is rate-limited or out of credits, the bot automatically falls back to Ollama and prepends a notice to the reply. Use `/ollama` to toggle Ollama as your primary chat partner at any time, even when Claude is working fine — useful for lightweight queries.
-- **Auto-compact**: the bot tracks how many cached tokens are in the session context. When `cache_read_input_tokens` exceeds `autoCompactThreshold` (default 100 000), it automatically runs `/compact` and notifies you. Tune the threshold in config or set it to `0` to disable. You can also run `/compact` manually at any time.
+- **Auto-compact**: the bot tracks how many cached tokens are in the session context. When `cache_read_input_tokens` exceeds `autoCompactThreshold` (default 100 000), it automatically runs `/compact` and notifies you. Tune the threshold in config, or at runtime with `/autocompact <number>` (`/autocompact off` to disable, `/autocompact default` to reset) — the override persists in `state.json` across restarts. You can also run `/compact` manually at any time.
 
 ### Custom commands
 
