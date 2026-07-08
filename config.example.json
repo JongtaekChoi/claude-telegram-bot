@@ -4,7 +4,7 @@
   "allowedChatId": "",
   "projectDir": "/ABSOLUTE/PATH/TO/PROJECT",
   "claudeBin": "/ABSOLUTE/PATH/TO/claude",
-  "permissionMode": "bypassPermissions",
+  "permissionMode": "acceptEdits",
   "model": "",
   "lang": "",
   "persona": "System prompt defining this bot's role/voice (optional). Used to differentiate persona bots (developer/planner/...).",
