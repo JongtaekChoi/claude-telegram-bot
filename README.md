@@ -6,187 +6,122 @@
 [![npm downloads](https://img.shields.io/npm/dm/claude-telegram-bot.svg)](https://www.npmjs.com/package/claude-telegram-bot)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Use Claude Code from Telegram — run it anywhere, from any device.
+Use Claude Code from Telegram — run tests, edit files, review plans, and keep working from your phone.
 
-**A zero-dependency, single-file, daemonized Claude Code bot — no Bun, no Python, no open session.**
-
-A tiny bridge that takes your Telegram messages, runs `claude -p` (Claude Code headless mode)
-in a project folder, and sends the result back to the chat. One `.mjs` file on Node 18+ built-ins —
-nothing to `npm install`, nothing to audit but under 1 000 readable lines.
+**A zero-dependency, daemonized Claude Code bot for people who already use the `claude` CLI.**
+It runs headless `claude -p` in your project folder and sends the result back to Telegram. No web dashboard, no database, no Python/Bun service to maintain.
 
 ```
 [you] → Telegram → bot.mjs → claude -p (config.projectDir) → result → Telegram
 ```
 
-Drive Claude Code from your phone: run tests, edit files, commit, push — all from a chat.
-It runs as a **background daemon** (launchd), so there's no interactive session to keep open.
+> ### ⚠️ Remote code execution by design
+> A Telegram message can make the host machine run code. Start with `permissionMode: acceptEdits`, always set `allowedChatId`, and read [Security](#security) before leaving the bot always-on.
 
-> ### ⚠️ This is a remote code-execution tool by design. Read the [Security](#security) section before running it.
-> A message you send from Telegram is executed as a command on the machine running the bot.
-> With `permissionMode: bypassPermissions`, a one-line message can run **anything** as your user.
+## 3-minute quick start
 
-**Highlights**
+Prerequisites: **Node.js 18+**, the **Claude Code `claude` CLI installed and authenticated**, and a Telegram bot token from `@BotFather`.
 
-- **Zero dependencies** — just Node 18+. No npm install, no supply chain.
-- **Multi-project** — one codebase drives many projects via per-project config files.
-- **Multi-persona** — split the *same* project into role-based bots (e.g. Developer + Planner)
-  with per-bot system prompts and **differentiated permission levels**.
-- **Session continuity** — conversations resume across restarts (`--resume`); `/new` to reset.
-- **Attachments** — send photos/docs/voice/video; they're saved locally and handed to Claude.
-- **Always-on** — ships with a launchd template for macOS (auto-start, auto-restart).
+```sh
+npm i -g claude-telegram-bot
+claude-telegram-bot init ~/botconfigs/my-project
+```
+
+Edit `~/botconfigs/my-project/mybot.json`:
+
+```json
+{
+  "token": "BOT_TOKEN_FROM_BOTFATHER",
+  "allowedChatId": "",
+  "projectDir": "/ABSOLUTE/PATH/TO/PROJECT",
+  "claudeBin": "/ABSOLUTE/PATH/TO/claude",
+  "permissionMode": "acceptEdits"
+}
+```
+
+Start once to discover your chat ID:
+
+```sh
+claude-telegram-bot ~/botconfigs/my-project/mybot.json
+```
+
+Send any message to the Telegram bot. It replies with your `chatId`. Put that value into `allowedChatId`, restart the bot, then send something useful:
+
+```text
+run the tests and summarize any failures
+```
+
+For a no-install trial, use `npx claude-telegram-bot init` and `npx claude-telegram-bot` instead.
+
+## Why this exists
+
+Sometimes you are away from your desk but still want to ask Claude Code to inspect a repo, run tests, make a small edit, or prepare a commit. Remote desktop and SSH are heavy for that; a Telegram chat is enough.
+
+This project is intentionally small: a CLI/daemon that reuses the `claude` CLI already authenticated on your machine. It is best for a Mac mini, home server, dev box, or personal VPS that you already trust.
+
+## Highlights
+
+- **Zero dependencies** — Node 18+ built-ins only.
+- **Daemon-friendly** — ships with a macOS `launchd` template for always-on use.
+- **Headless Claude Code** — runs `claude -p` per message in `projectDir`.
+- **Session continuity** — resumes conversations across restarts; `/new` starts fresh.
+- **Plan approval flow** — `/plan <request>` runs read-only first, then you approve or cancel.
+- **Multi-project / multi-persona** — use one config per project or role.
+- **Attachments** — photos, docs, voice, and video are saved locally and passed to Claude.
+- **Queueing and recovery** — busy messages are queued; rate-limit resets can be reserved and retried.
+- **Local fallback** — optional Ollama mode/fallback for lightweight or rate-limited moments.
 
 ## How it compares
-
-This space is crowded, and Anthropic now ships an official solution. Here's an honest map so you
-can pick the right tool:
 
 | | This bot | [Official Claude Code Channels](https://code.claude.com/docs/en/channels) | [claude-code-telegram](https://github.com/RichardAtCT/claude-code-telegram) |
 |---|---|---|---|
 | Runtime | **Node built-ins only** | Bun + MCP plugin | Python 3.11+ + libs |
 | Execution model | headless `claude -p` per message | events pushed into an **open** `claude --channels` session | Claude SDK / CLI |
-| Stays running as | **background daemon** (no session open) | a live interactive session you keep running | service / daemon |
-| Multi-persona, permission-scoped bots on one repo | **yes** (dev=`bypass`, planner=`plan`) | no | no |
-| Per-action permission approval (inline buttons) | no (set `permissionMode`) | **yes** | partial |
-| Feature breadth (webhooks, cron, voice, export) | minimal | medium | **large** |
-| Lines of code to read/fork | **~400, one file** | larger | large |
+| Stays running as | **background daemon** | live interactive session | service / daemon |
+| Multi-persona, permission-scoped bots | **yes** | no | no |
+| Per-action permission approval | `/plan` review flow; config-level permission | **yes** | partial |
+| Feature breadth | focused | medium | large |
 
-**Use the official Channels** if you want per-action approvals and don't mind keeping a session
-open. **Use claude-code-telegram** if you want maximum features. **Use this** if you want a
-minimal, auditable, zero-dependency daemon — and especially if you want **role-split persona bots**
-with different permission levels on the same project.
-
----
-
-## Security
-
-**Treat this tool like an SSH key into your machine that lives in a chat app.** It is designed
-to execute commands; that power is the point, and also the risk. Read this before exposing it.
-
-### Threat model — who can run commands on your machine
-
-1. **The allowed chat.** Anyone with access to the Telegram account whose `chatId` you allow can
-   run commands. Lock your phone and Telegram account (2FA).
-2. **Whoever holds the bot token.** The token is the bot's password. With it, an attacker can read
-   incoming messages and impersonate the bot. The `allowedChatId` whitelist still blocks command
-   *execution* (Telegram-supplied `chatId`s can't be forged), but **treat a leaked token as an
-   incident**: revoke it via `@BotFather` → `/revoke` and issue a new one.
-3. **Prompt-injected content.** If you forward a webpage, file, or repo issue and ask the bot to act
-   on it, malicious instructions inside that content can steer Claude. Don't pipe untrusted content
-   into a `bypassPermissions` bot.
-
-### Non-negotiables
-
-- **Always set `allowedChatId`.** Until you do, the bot refuses to run anything and just replies
-  with the chat's ID. Once set, only that chat can issue commands — this is your only auth layer,
-  so it must be set.
-- **Guard the token like a credential.** `config.json` and `state.json` are in `.gitignore` so you
-  don't commit it — keep it that way. Never paste the token into issues, logs, or screenshots. The
-  startup log redacts it (`token: <redacted>`); don't add it back.
-- **There is no sandbox.** The bot runs `claude` as *your* user, with your filesystem, your SSH/git
-  credentials, and your Claude OAuth/keychain session. It can do anything you can.
-
-### Choose the least permission you can live with
-
-`permissionMode` is the main safety dial:
-
-| Mode | What it allows | Use when |
-|---|---|---|
-| `plan` | Read & plan only, no edits | Q&A, code review, a "planner" persona |
-| `acceptEdits` | Auto-approve file edits; other actions (shell, etc.) still gated | **Recommended default** — useful but bounded |
-| `bypassPermissions` | Everything auto-runs, **including arbitrary shell** | You accept that one chat message = arbitrary code execution |
-
-Practical hardening:
-
-- Prefer `acceptEdits` over `bypassPermissions` unless you specifically need autonomous shell/git.
-- Point `projectDir` at a **specific project**, not your home directory — limit the blast radius.
-- For multi-persona setups, give only **one** bot `bypassPermissions`; keep the rest on `plan`.
-- Consider running on a dedicated user account or VM if you'll leave it always-on.
-
-### Reporting a vulnerability
-
-Found a security issue? Please open a GitHub issue (or contact the maintainer privately for
-sensitive reports) rather than posting exploit details publicly.
-
----
+Use the official Channels if you want per-action approvals and do not mind keeping a live session open. Use `claude-code-telegram` if you want a larger feature set. Use this bot if you want a minimal, auditable, zero-dependency daemon that is easy to read and fork.
 
 ## Install & run
 
-This is a standalone CLI/daemon, **not a library** — you don't `import` it. Install it globally (or
-run via `npx`), point a config file at any project, and run it. `projectDir` in the config decides
-which folder Claude works in, independent of where the bot is installed.
-
-Prerequisites: **Node 18+** and the **`claude` CLI installed and authenticated** on the host.
-
-**Option A — npx (no install)**
-
-```sh
-npx claude-telegram-bot init             # writes ./mybot.json
-npx claude-telegram-bot init myapp.json  # or pick your own filename
-# edit the config (token, projectDir, …)
-npx claude-telegram-bot                  # runs ./mybot.json (falls back to config.json)
-```
-
-**Option B — global install (recommended for an always-on daemon)**
+### Option A — global install, recommended for always-on use
 
 ```sh
 npm i -g claude-telegram-bot
-
-claude-telegram-bot init ~/botconfigs/myproj             # writes ~/botconfigs/myproj/mybot.json
-claude-telegram-bot init ~/botconfigs/myproj/myapp.json  # or a custom filename
-# edit the config (token, projectDir, …)
+claude-telegram-bot init ~/botconfigs/myproj
+# edit token, allowedChatId, projectDir, claudeBin, permissionMode
 claude-telegram-bot ~/botconfigs/myproj/mybot.json
 ```
 
-Run several projects/personas by making one config file each and passing its path —
-`state.json` and `attachments/` live next to that config, so they don't mix.
+### Option B — npx, no install
 
-> **Keep your config out of git.** The config file holds your bot token. If you drop one inside a git
-> repo, add it (plus `state*.json` and `attachments/`) to *that* project's `.gitignore`. This repo
-> already ignores `config.json`, `config.*.json`, `*.config.json`, `state*.json`, and `attachments/`,
-> so any name like `claudebot.config.json` is covered here — but your own project won't ignore them
-> until you say so.
+```sh
+npx claude-telegram-bot init
+# edit ./mybot.json
+npx claude-telegram-bot
+```
 
-### First-run steps
+Run several projects/personas by making one config file each and passing its path. State and attachments live in `.claude-bot/` next to the config, so projects do not mix.
 
-**1) Create a bot token** — In Telegram, open `@BotFather` → `/newbot` → pick a name and a
-`username` ending in `_bot` → copy the token (looks like `123456789:AA...`). Put it in `config.json`,
-leave `allowedChatId` empty for now.
+> **Keep your config out of git.** It contains your Telegram bot token. If you store a config inside another repo, add the config, `.claude-bot/`, `state*.json`, and `attachments/` to that repo's `.gitignore`.
 
-**2) Find your chatId and lock the bot to it** — Start the bot (`claude-telegram-bot …`), send it any
-message in Telegram; it replies with this chat's `chatId`. Put that number into `mybot.json`
-`allowedChatId` and restart. Now only you can use it. (See [Security](#security) — this is your only
-auth layer.)
+## Common commands
 
-**3) Use it** — just send messages:
-
-- `run the solver tests and commit + push if they pass`
-- `add an edge case to solve-2nd-floor-edges.ts`
-
-Commands: `/new` (reset context / new session) · `/compact` (compress context, keep session) · `/plan <request>` (plan only, then approve/cancel) · `/stop` (stop current task; `--reset` to also roll back the session) · `/ollama` (toggle Ollama chat mode) · `/cron` (list / add / remove scheduled tasks) · `/reserve` (show queue status at usage-limit · `/reserve rm` to cancel) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/model` (view / switch the model) · `/autocompact` (view / set the auto-compact token threshold) · `/id` (show chat ID) · `/help`.
-
-> **`/plan <request>`** runs the request in read-only plan mode (no edits, no shell) regardless of
-> the bot's configured `permissionMode`, and replies with the plan plus **✅ Proceed / ❌ Cancel**
-> buttons. Tapping **Proceed** resumes the same session with the bot's normal `permissionMode` and
-> tells Claude to implement the approved plan; **Cancel** leaves the session untouched. This gives
-> you a review step before a `bypassPermissions` bot touches anything. The pending approval expires
-> if you start a new session with `/new` first.
-
-> **`/stop`** kills the running Claude process immediately and clears any queued messages.
-> Add `--reset` to also restore the session to the state it was in *before* the task started,
-> so the conversation history doesn't include the interrupted work.
-
-> **`/restart`** runs `node --check` on `bot.mjs` first and **aborts the restart if it has a syntax
-> error** (so a bad edit can't crash-loop the bot), then exits — relying on a process supervisor
-> to relaunch it. Works out of the box with the [launchd setup](#always-on-with-launchd-macos)
-> (`KeepAlive`); under a bare `node bot.mjs` with no supervisor it just stops. Your session resumes
-> after the restart (the id lives in `state.json`).
-
-**4) Keep it always on (optional)** — see [Always-on with launchd](#always-on-with-launchd-macos).
-
-> **From source** (for hacking on the bot): clone the repo, `cp config.example.json mybot.json`,
-> then `node bot.mjs [mybot.json]`. Same behavior as the CLI.
-
----
+- `/new` — reset conversation context and start a new session.
+- `/compact` — compress context while keeping the session.
+- `/plan <request>` — ask Claude to plan read-only, then approve/cancel with buttons.
+- `/stop` — stop the running Claude process; `/stop --reset` also rolls back the session.
+- `/cron` — list/add/remove scheduled prompt jobs.
+- `/reserve` — show or cancel the retry queue after usage-limit resets.
+- `/restart` — syntax-check `bot.mjs`, then restart under your process supervisor.
+- `/status` — show bot status, version, project, session, and permission mode.
+- `/model` — view or switch model.
+- `/autocompact` — view or tune the auto-compaction threshold.
+- `/ollama` — toggle local Ollama chat mode.
+- `/id` — show the current Telegram chat ID.
+- `/help` — show the command list.
 
 ## Configuration
 
@@ -194,55 +129,38 @@ Commands: `/new` (reset context / new session) · `/compact` (compress context, 
 cp config.example.json mybot.json
 ```
 
-Edit `mybot.json`:
-
 | Key | Description |
 |---|---|
-| `token` | Bot token from BotFather |
-| `allowedChatId` | **Leave empty at first** → the bot tells you (step 3). Required before it runs anything. |
-| `projectDir` | Absolute path to the working folder Claude runs in |
-| `claudeBin` | Output of `which claude` (absolute path recommended) |
-| `permissionMode` | `plan` / `acceptEdits` / `bypassPermissions` — see [Security](#security) |
-| `model` | Empty = default. Or `opus` / `sonnet`, etc. Override at runtime with `/model` (persists in state). |
-| `lang` | (optional) UI language. Empty = auto-detect per user (English default, Korean for Korean Telegram clients). Force with `"en"` / `"ko"`. |
-| `name` | (optional) Bot name shown in `/help` — handy for telling multiple bots apart |
-| `persona` | (optional) Role system prompt — defines a persona (developer/planner/…). See below |
-| `appendSystemPrompt` | (optional) Override the default "be concise for Telegram" instruction |
-| `env` | (optional) Extra environment variables passed to the `claude` process |
-| `schedule` | (optional) Cron jobs that run a prompt on a timer — see [Scheduled tasks](#scheduled-tasks-cron) |
-| `commands` | (optional) Custom `/commands` that run shell scripts — see [Custom commands](#custom-commands) |
-| `ollamaFallback` | (optional) `true` to enable Ollama as a fallback when Claude is rate-limited or out of credits |
-| `ollamaModel` | (optional) Ollama model to use for fallback (default: `"phi3:mini"`) |
-| `autoCompactThreshold` | (optional) Auto-compact context when cached input tokens exceed this value (default: `100000`). Set to `0` to disable. Override at runtime with `/autocompact` (persists in state). |
+| `token` | Bot token from `@BotFather` |
+| `allowedChatId` | Leave empty on first run; the bot replies with the chat ID. Required before commands run. |
+| `projectDir` | Absolute path to the project Claude should work in |
+| `claudeBin` | Absolute path to `claude` (`which claude`) |
+| `permissionMode` | `plan` / `acceptEdits` / `bypassPermissions` |
+| `model` | Empty = Claude default; or `haiku`, `sonnet`, `opus`, `fable`, or a full model id |
+| `lang` | Empty = auto; or force `en` / `ko` |
+| `name` | Optional bot name shown in `/help` |
+| `persona` | Optional role system prompt for persona bots |
+| `appendSystemPrompt` | Optional override for the default concise Telegram instruction |
+| `env` | Extra environment variables passed to Claude |
+| `schedule` | Cron jobs that run prompts on a timer |
+| `commands` | Custom `/commands` that run shell scripts |
+| `ollamaFallback` | Enable Ollama fallback on Claude rate-limit/credit errors |
+| `ollamaModel` | Ollama model name, default `phi3:mini` |
+| `autoCompactThreshold` | Cached-token threshold for automatic `/compact`; `0` disables |
 
-State and downloaded attachments live in a hidden **`.claude-bot/`** folder next to the config
-file, so projects stay isolated. Upgrading from an older version **auto-moves** an existing
-`state.json` / `attachments/` into `.claude-bot/` on first start (no data loss). Logs stay wherever
-your launchd plist points them.
+## Permission modes
 
-### Usage details
+| Mode | What it allows | Use when |
+|---|---|---|
+| `plan` | Read and plan only, no edits | Q&A, code review, planning/persona bots |
+| `acceptEdits` | Auto-approve file edits; shell and other actions stay gated | **Recommended default** |
+| `bypassPermissions` | Auto-runs everything, including arbitrary shell | You accept that one chat message can execute code as your user |
 
-- **Concise mode**: a `--append-system-prompt` is applied by default so replies stay short for
-  Telegram. Override it via `appendSystemPrompt` (empty string disables it).
-- **Language**: the bot's own messages (`/help`, command menu, status text) are English by default
-  and switch to Korean for users whose Telegram client is Korean. Force one language with `lang`
-  (`"en"`/`"ko"`). Claude's actual replies follow the language you write in, regardless. The `/`
-  command menu is registered per-language via `setMyCommands`.
-- **Formatting**: the reply's Markdown (bold/code/headings/tables) is converted to Telegram-safe
-  HTML. If conversion ever produces invalid HTML, the message is automatically resent as plain text.
-- **Attachments**: send a photo/document/voice/video and it's downloaded into `attachments/`; the
-  absolute path is handed to Claude (caption included as the message). Images can be opened with Read.
-- **Sessions**: conversations resume automatically (`--resume`); the last session id is saved in
-  `state.json`, so context survives restarts. Use `/new` to start fresh.
-- **Message queue**: if you send a message while a task is running, it is queued (not dropped). When the task finishes, all queued messages are merged into a single prompt so Claude can resolve corrections and follow-ups in one pass (e.g. "do X" then "never mind, do Y" → handled together). Use `/stop` to cancel the running task and discard the queue.
-- **Model hint**: the bot tells Claude which model it is running as. If Claude judges a question to be beyond its current tier, it appends a one-line suggestion at the end of the reply (e.g. 💡 `/model sonnet`). Switch with `/model <name>` — `haiku`, `sonnet`, `opus`, `fable`, or a full model id. The choice persists in `state.json` across restarts.
-- **Usage-limit queue**: when a Claude Max / API rate-limit error includes a reset time, the triggering message is automatically queued and retried at that time — just like messages queued while Claude is busy. Any additional messages you send during the limit window are also added to the queue. Use `/reserve` to check queue status and reset time, `/reserve rm` to cancel and clear the queue.
-- **Ollama fallback**: set `"ollamaFallback": true` and point `"ollamaModel"` at a locally-running [Ollama](https://ollama.ai) model (default: `"phi3:mini"`). When Claude is rate-limited or out of credits, the bot automatically falls back to Ollama and prepends a notice to the reply. Use `/ollama` to toggle Ollama as your primary chat partner at any time, even when Claude is working fine — useful for lightweight queries.
-- **Auto-compact**: the bot tracks how many cached tokens are in the session context. When `cache_read_input_tokens` exceeds `autoCompactThreshold` (default 100 000), it automatically runs `/compact` and notifies you. Tune the threshold in config, or at runtime with `/autocompact <number>` (`/autocompact off` to disable, `/autocompact default` to reset) — the override persists in `state.json` across restarts. You can also run `/compact` manually at any time.
+Prefer `acceptEdits` unless you specifically need autonomous shell/git. If you run multiple persona bots on the same project, keep at most one bot on `bypassPermissions`.
 
-### Custom commands
+## Custom commands
 
-Define project-specific `/commands` in config that run shell scripts and return their output to the chat. Commands appear in Telegram's `/` autocomplete menu automatically.
+Define project-specific `/commands` in config that run shell scripts and return output to Telegram:
 
 ```json
 "commands": {
@@ -252,187 +170,104 @@ Define project-specific `/commands` in config that run shell scripts and return 
 }
 ```
 
-- **`run`** — any shell command, executed in `projectDir`
-- **`description`** — shown in the Telegram `/` autocomplete menu
-- **Arguments**: `/deploy staging` appends `staging` to the command (`npm run deploy staging`)
-- Scripts run independently of Claude — they work even when Claude is busy
-- Output capped at 4 000 characters; 60-second timeout
+Commands run in `projectDir`, work independently of Claude, accept trailing arguments, time out after 60 seconds, and cap output at 4,000 characters.
 
-### Scheduled tasks (cron)
+## Scheduled tasks
 
-Add a `schedule` array to the config to run prompts on a timer — daily briefings, periodic
-checks, reminders. Each entry runs the prompt and sends the result to `allowedChatId`.
+Add a `schedule` array to run prompts on a timer — daily briefings, checks, reminders, or conditional alerts.
 
 ```json
 "schedule": [
   { "cron": "0 9 * * 1-5", "label": "Morning brief", "prompt": "Summarize today's open issues and TODOs" },
-  { "cron": "*/30 * * * *", "prompt": "Check CI status; only reply if something is red" }
+  { "cron": "*/30 * * * *", "prompt": "Check CI status; reply only if something is red, otherwise output SKIP" }
 ]
 ```
 
-- **`cron`** — standard 5-field expression `minute hour day-of-month month day-of-week`
-  (e.g. `0 9 * * 1-5` = 09:00 on weekdays). Supports `*`, lists (`1,3,5`), ranges (`1-5`),
-  and steps (`*/15`). Day-of-week `0` and `7` both mean Sunday. Times use the **host's local
-  timezone**. No external dependency — the parser lives in `bot.mjs`.
-- **`prompt`** (required) — the message sent to Claude. **`label`** (optional) — a short name
-  shown in the reply footer and in `/cron`.
-- **Fresh session**: scheduled jobs run in their **own session** so they never pollute your
-  interactive conversation context (`state.json` stays yours). They share the single-task lock,
-  so a job is **skipped** (logged) if a task is already running when it fires.
-- **Silent jobs (conditional alerts)**: if Claude's output is **empty or exactly `SKIP`**, that run
-  sends **nothing** to Telegram. To get "alert only when it matters, stay quiet otherwise," tell the
-  prompt to *output just `SKIP` when the condition isn't met*. This lets even frequent jobs (e.g.
-  every 5 minutes) run without spamming the chat.
+Cron uses standard 5-field syntax: `minute hour day-of-month month day-of-week`, in the host's local timezone. If Claude outputs nothing or exactly `SKIP`, no Telegram message is sent.
 
-**Add jobs from the chat — in plain language:**
+You can also add dynamic jobs from chat:
 
-```
+```text
 /cron add summarize open issues every weekday at 9am
 ```
 
-The bot asks Claude to turn that into a cron expression, **echoes back what it understood**
-(so you can catch a misread), and saves it to `state.json` — **no restart needed**. Dynamic
-jobs get an id; manage them with:
+## Multiple projects and personas
 
-- `/cron` — list everything (config jobs are tagged `[config]`; dynamic ones show `#id`)
-- `/cron add <plain-language request>` — e.g. `/cron add every 30 min, ping me if CI is red`
-- `/cron rm <id>` — remove a dynamic job (config jobs are edited in the file)
+Use one config per project or role:
 
-Config-defined jobs still require a restart to change; only chat-added jobs are live.
-
----
-
-## Running multiple projects
-
-The code is project-agnostic: make **one config file per project** and run several at once.
-
-- Run: `node bot.mjs /absolute/path/to/project.config.json` (no arg → `./mybot.json`, fallback `./config.json`)
-- `state.json` and `attachments/` live in the **config file's folder**, so projects don't mix.
-- **Note**: Telegram allows only one poller per token → each project needs its **own BotFather
-  token**.
-- For always-on, copy the launchd template per project (see below).
-
-Example — two projects:
-
-```
-~/projects/A/claudebot.config.json   (token A, projectDir=~/projects/A)
-~/projects/B/claudebot.config.json   (token B, projectDir=~/projects/B)
-node bot.mjs ~/projects/A/claudebot.config.json   # instance A
-node bot.mjs ~/projects/B/claudebot.config.json   # instance B
+```sh
+claude-telegram-bot ~/projects/A/claudebot.config.json
+claude-telegram-bot ~/projects/B/claudebot.config.json
 ```
 
-## Multiple personas (roles)
+Telegram allows one poller per token, so each running bot needs its own BotFather token. State files are derived from config names, so contexts stay isolated.
 
-You can split the **same project** into role-based bots (e.g. **Developer** + **Planner**).
-One codebase, **a separate config file per role**.
-
-- **`persona`**: a role system prompt in the config becomes that bot's identity. The concise-Telegram
-  instruction is injected automatically, so `persona` only needs the role itself.
-- **Differentiated permissions via `permissionMode`**: since the bots share a folder, keep the
-  shell-using bot (`bypassPermissions`) to **just one** to avoid concurrent-edit conflicts. For
-  read/plan-only, use `plan`.
-- **Session isolation**: the `state` filename is derived from the config name
-  (`mybot.json` → `mybot.state.json`, `dev.config.json` → `dev.config.state.json`), so multiple configs
-  in one folder don't share context.
-- **One token per bot**: each bot needs its own BotFather token (`allowedChatId` can be the same).
-
-Example — Developer + Planner:
-
-```
-dev.config.json       (permissionMode: bypassPermissions, persona: "Senior developer...")
-planner.config.json   (permissionMode: plan,              persona: "Product/UX planner...")
-node bot.mjs dev.config.json
-node bot.mjs planner.config.json
-```
+For the same project, split roles with `persona` and `permissionMode`:
 
 | Bot | permissionMode | Role |
 |---|---|---|
-| Developer | `bypassPermissions` | Implement, edit, test, git |
-| Planner | `plan` (read/plan only) | Feature proposals, specs, UX direction |
+| Developer | `acceptEdits` or `bypassPermissions` | Implement, test, commit |
+| Planner | `plan` | Specs, UX, issue triage |
 
-> For always-on, copy `com.claudebot.example.plist` **per bot** and register each with a distinct
-> `Label`, config argument, and log paths (see below).
+## Always-on with launchd on macOS
 
----
+The included `com.claudebot.example.plist` keeps the bot alive across reboots and crashes as a LaunchAgent, reusing your normal Claude keychain/OAuth session.
 
-## How to run
-
-| Method | When terminal closes | After reboot | On crash | Use for |
-|---|---|---|---|---|
-| `node bot.mjs` | stops | ✗ | ✗ | testing, finding chatId |
-| `nohup node bot.mjs > bot.log 2>&1 &` | survives | ✗ | ✗ | quick background run |
-| **launchd (LaunchAgent)** | survives | ✅ auto-start | ✅ auto-restart | **always-on (recommended)** |
-
-> `node bot.mjs &` also backgrounds it, but closing the terminal kills it (SIGHUP). Use `nohup` to
-> survive that, and launchd to survive reboots/crashes.
-
-## Always-on with launchd (macOS)
-
-Keeps the bot alive across reboots and crashes. It runs as a **LaunchAgent** in your login session,
-so it reuses Claude's keychain/OAuth auth.
-
-### 1. Check the plist (paths / node version)
-
-`com.claudebot.example.plist` assumes certain paths — fix them first if yours differ:
+Check paths first:
 
 ```sh
-which node     # must match the node path in ProgramArguments
-which claude   # its directory must be on PATH (EnvironmentVariables)
+which node
+which claude
 ```
 
-Items to verify in the plist:
-
-- `ProgramArguments` [0] — absolute path to `node`
-- `ProgramArguments` [1] — absolute path to `bot.mjs`
-- `WorkingDirectory` — the project folder
-- `EnvironmentVariables > PATH` — includes your node/claude directories
-- `StandardOutPath` / `StandardErrorPath` — log file paths
-
-### 2. Register & start
+Then copy, edit, and register:
 
 ```sh
 cp com.claudebot.example.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.plist
+
+launchctl list | grep claudebot
+tail -f bot.log
+tail -f bot.error.log
+
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.plist
 ```
 
-> Modern macOS prefers `bootstrap`/`bootout`. The old `load`/`unload` still works but may print a
-> deprecation warning. If `bootstrap` fails, fall back to
-> `launchctl load ~/Library/LaunchAgents/com.claudebot.example.plist`.
+Use a distinct plist `Label`, config path, and log path for each bot.
 
-### 3. Manage
+## Troubleshooting
+
+- **`launchctl list` shows an error code with no PID** — check `bot.error.log`; usually a node/claude path or config issue.
+- **Bot does not respond** — run the bot directly and confirm the `claude` CLI is still authenticated.
+- **Mac sleeps** — polling stops while the host sleeps; disable sleep for always-on use.
+- **Repeated `ETIMEDOUT` polling errors** — some networks break IPv6 routes. The bot prefers IPv4 already, but check firewall/network with `curl https://api.telegram.org`.
+- **Nothing runs on first start** — set `allowedChatId`; before that the bot only replies with the chat ID.
+
+## Security
+
+Treat this tool like an SSH key into your machine that lives in Telegram.
+
+- Anyone with access to the allowed Telegram chat can ask the bot to act.
+- Anyone with the bot token can read/impersonate bot messages; revoke leaked tokens via `@BotFather`.
+- Prompt-injected files, webpages, or issues can steer Claude. Do not feed untrusted content to a high-permission bot.
+- There is no sandbox. Claude runs as your user, with your filesystem, git/SSH credentials, and Claude auth.
+
+Practical hardening:
+
+- Always set `allowedChatId`.
+- Prefer `acceptEdits` over `bypassPermissions`.
+- Point `projectDir` at one project, not your home directory.
+- Consider a dedicated user account or VM for always-on use.
+
+## Development
 
 ```sh
-launchctl list | grep claudebot      # registered/running? (a PID means it's up)
-tail -f bot.log                      # run log
-tail -f bot.error.log                # error log
-
-# stop
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.plist
-
-# restart after editing code (bootout → bootstrap)
-launchctl bootout   gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.plist
+npm test
 ```
 
-### Troubleshooting
+The smoke test runs `node --check` on the CLI files and verifies both binaries can print their version. CI runs the same checks on Node 18, 20, and 22.
 
-- **`launchctl list` shows an error code with no PID** → check `bot.error.log`. Usually a node/claude
-  path issue (`command not found`) or a missing `config.json`.
-- **Bot doesn't respond** → Claude auth may have expired. Run `node bot.mjs` directly and confirm
-  `claude` is logged in.
-- **Mac is asleep → polling stops** → disable sleep in System Settings > Battery/Power.
-- **Repeated "polling error" (ETIMEDOUT)** → some networks block IPv6, so Node's fetch times out
-  against api.telegram.org (which has an IPv6 address). `bot.mjs` already works around this by
-  preferring IPv4 (`dns.setDefaultResultOrder('ipv4first')` + disabling auto-select). If it still
-  fails, check the network/firewall with `curl https://api.telegram.org`.
-
----
-
-## Requirements
-
-- Node.js 18+ (for built-in `fetch`)
-- The `claude` CLI installed and authenticated on the host
-- A Telegram bot token from `@BotFather`
+See [CHANGELOG.md](./CHANGELOG.md) for recent changes.
 
 ## License
 
