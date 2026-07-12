@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.4.1] - 2026-07-10
+### Changed
+- `ctb`의 provider 결정 우선순위(`--provider` → `config.provider` → `claude`)를 도움말에 명시했다.
+- `/model` 상태·설정 안내를 provider별로 분리했다. Claude에서는 모델 별칭을 제안하고, Codex에서는
+  Claude 별칭을 노출하지 않고 전체 Codex 모델 ID와 `codexModel`/CLI 기본값 사용법을 안내한다.
+### Fixed
+- `ctb`가 provider를 고를 때 `state.json`의 `provider`(텔레그램 `/provider`로 전환한 값)를 무시하고
+  `config.provider`만 보던 버그. 텔레그램에서 `/provider codex`로 전환해둔 상태에서 `ctb`를 실행하면
+  엉뚱하게 Claude 세션을 resume해 로컬 대화가 텔레그램 쪽 세션과 분리되던 문제였음 — 우선순위를
+  `--provider` → `state.provider` → `config.provider` → `claude`로 수정해 bot.mjs의 `currentProvider()`와
+  동일하게 맞췄다.
+- `ctb` 세션 종료 알림(`notifyTelegram`)이 `allowedChatId`가 배열일 때 `chat_id`에 배열을 그대로 넣어
+  텔레그램 API가 `400 Bad Request`로 거부하던 버그 — 각 chat_id를 순회하며 개별 전송하도록 수정.
+
+## [0.4.0] - 2026-07-10
+### Added
+- `config.json`의 `provider`로 Claude 또는 Codex를 텔레그램 봇의 메인 실행자로 선택할 수 있다.
+- `ctb <config> --provider codex`가 `state.codexSessionId`를 읽어 대화형 `codex resume` 세션을 실행한다.
+- `/provider`로 현재 Telegram provider를 확인하고 `/provider claude`, `/provider codex`로 state override를
+  저장하거나 `/provider default`로 config 기본값을 복원할 수 있다. config 파일은 수정하지 않으며,
+  Claude와 Codex의 세션·모델 override는 각각 보존된다.
+- README에 마지막으로 함께 검증한 Claude Code, Codex CLI, Ollama 버전과 호환성 확인 절차를 기록했다.
+- `/status`에서 봇 호스트에 실제 설치된 세 CLI 버전을 함께 표시한다.
+- 기존 Codex 폴백 재설계 — Claude 레이트 리밋·크레딧 부족 시 `"codexFallback": true`이면 reserve 큐로 넘기기 전에
+  `codex exec`를 실행한다. Codex 세션은 `state.codexSessionId`에 별도로 저장하고 이후
+  `codex exec resume <세션ID>`로 이어간다.
+- Claude와 Codex 세션은 서로 호환되지 않으므로, 성공한 Codex 폴백 내용을
+  `.claude-bot/codex-handoff.md`에 누적하고 이후 Claude 호출의 시스템 프롬프트에 최근 handoff를 주입한다.
+### Changed
+- minor 버전을 `0.4.0`으로 올렸다.
+- 한도 초과 처리 순서 변경: Codex 폴백 성공 시 `/reserve` 자동 재시도를 예약하지 않고, Codex가 꺼져 있거나
+  실패했을 때만 기존 Ollama 폴백/ reserve 흐름으로 내려간다.
+- 일반 메시지, 첨부 파일, 예약 작업과 cron 자연어 해석이 선택된 provider를 사용한다. `/plan`, `/compact`,
+  자동 compact는 Claude provider에서만 동작한다.
+- `/status`가 활성 provider에 맞는 모델·세션·fallback 상태를 표시하고 세 CLI 버전을 함께 확인한다.
+- Codex fallback 응답 머리말을 짧은 `Codex fallback`/`Codex 폴백` 표시로 줄였다.
+- 로컬 lock 안내에서 특정 provider를 뜻하는 `ctb claude` 표현을 중립적인 `ctb`로 변경했다.
+- 기본 설정 예시의 Claude 권한을 `bypassPermissions`에서 `acceptEdits`로 낮췄다.
+
+## [0.3.41] - 2026-07-09
+### Changed
+- Ollama 폴백이 이제 **대화 맥락을 이어받는다** — 기존에는 `localhost:11434/api/chat` HTTP API를
+  직접 호출해 직전 프롬프트 1개만 단발로 처리했고, 헤더에도 "세션은 이어지지 않아요"라고 안내했음.
+  이제 `ollama launch claude --model <m> --yes -- … --resume <세션ID>` 로 **Claude Code CLI 자체를
+  로컬 모델로 구동**해, 폴백·`/ollama` 모드 응답이 Claude와 나누던 대화 스레드를 이어감
+  - 반환된 `session_id`를 `state.sessionId`에 저장해 다음 턴까지 체이닝
+  - 기본 모델 `phi3:mini` → `qwen3.5:4b` (실제 세션 resume 테스트로 검증된 모델)
+  - config 옵션 추가: `ollamaBin`(실행 파일 경로), `ollamaTimeout`(응답 대기 ms, 기본 360000 —
+    로컬 4B 모델 콜드스타트가 첫 응답까지 수 분 걸릴 수 있어 넉넉히 설정)
+  - ⚠️ 완전한 세션 승계가 아니라 **최선 노력(best-effort)**임을 문서에 명시. 로컬 모델의 런타임
+    컨텍스트 창(`num_ctx`)은 Ollama 기본값이 ~4K라 긴 Claude 세션(관측상 ~15K)은 잘려 들어감.
+    `Modelfile`로 `num_ctx`를 키운 변형 모델을 만들어 `ollamaModel`로 지정하면 완화되지만, KV 캐시가
+    RAM을 잡아먹으므로 크기는 머신에 맞춰야 함 — 8GB 머신에선 ~6K가 안전 상한(32K는 스왑으로 먹통).
+    README(영/국문)의 `ollamaModel` 항목과 Ollama 폴백 설명에 관련 안내·한계 추가
+  - 폴백 포지셔닝 정직화: 작은 로컬 모델은 코딩·도구 호출을 Claude처럼 못 하므로
+    "완전한 코딩 대체재"가 아니라 **경량 텍스트 조수**로 명시. 잘하는 역할(Claude 복귀 후
+    시킬 요청을 미리 정리·초안 작성, 요약, 메모 정리)을 안내로 추가
+### Fixed
+- launchd로 뜬 봇에서 Ollama 폴백이 `spawn ollama ENOENT`로 실패하던 문제 — launchd 데몬은
+  로그인 셸을 거치지 않아 `.zshrc`/`brew shellenv`가 설정한 PATH(`/opt/homebrew/bin` 등)를
+  상속받지 못함(`claudeBin`과 동일 원인). `ollamaBin` 미지정 시 흔한 Homebrew/시스템 설치
+  경로를 자동으로 탐색하도록 수정
+
 ## [0.3.40] - 2026-07-06
 ### Fixed
 - `/status`가 npm에 아직 배포되지 않은 로컬 버전을 npm 레지스트리의 구버전과 비교해

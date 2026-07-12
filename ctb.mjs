@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // ctb — short-form CLI for claude-telegram-bot
 //
-// ctb [config.json] [...claude args]   Run Claude, resuming the shared Telegram session
+// ctb [config.json] [--provider claude|codex] [...provider args]
+//                                      Resume the provider's Telegram session
 // ctb bot [config.json]                Start the Telegram bot daemon (delegates to bot.mjs)
 // ctb init [dir]                       Create a config.json template
 // ctb --help | --version
@@ -10,7 +11,7 @@
 // package directory (where bot configs typically live alongside bot.mjs).
 // Absolute or explicitly relative paths (/ or ./) resolve as-is.
 //
-// While Claude runs, .claude-bot/local.lock (PID) is created so the bot defers
+// While a provider runs, .claude-bot/local.lock (PID) is created so the bot defers
 // incoming Telegram messages until the local session ends.
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
@@ -66,17 +67,20 @@ async function main() {
     console.log(
       `ctb v${VERSION} — claude-telegram-bot short CLI\n\n` +
       `Usage:\n` +
-      `  ctb [config.json] [...args]   Resume Telegram session and run Claude\n` +
+      `  ctb [config.json] [--provider claude|codex] [...args]\n` +
+      `                                Resume the provider's Telegram session\n` +
       `  ctb bot [config.json]         Start the Telegram bot daemon\n` +
       `  ctb init [dir]                Create a config.json template\n` +
       `  ctb --help | --version\n\n` +
       `config.json defaults to $BOT_CONFIG or the package's own config.json.\n` +
       `A bare name like "planner.json" resolves relative to the package directory.\n\n` +
+      `Provider precedence: --provider flag → config.provider → claude.\n\n` +
       `Examples:\n` +
-      `  ctb                           Interactive Claude, continuing the Telegram session\n` +
-      `  ctb -p "what did we do?"      Headless Claude with session context\n` +
+      `  ctb                           Interactive configured provider, continuing its session\n` +
+      `  ctb -p "what did we do?"      Headless configured provider with session context\n` +
       `  ctb planner.json              Resume planner persona session interactively\n` +
       `  ctb planner.json -p "..."     Headless with planner session\n` +
+      `  ctb planner.json --provider codex  Interactive Codex with its Telegram session\n` +
       `  ctb bot                       Start the bot with default config\n` +
       `  ctb bot planner.json          Start the bot with planner config`,
     );
@@ -98,17 +102,42 @@ async function main() {
     return;
   }
 
-  // Run Claude, resuming the bot's session
+  // Run the selected provider, resuming that provider's bot session.
   const looksLikeConfig = a && a.endsWith(".json");
   const configPath = resolveConfig(looksLikeConfig ? a : undefined);
-  const claudeArgs = looksLikeConfig ? args.slice(1) : args;
-
+  const providerArgs = looksLikeConfig ? args.slice(1) : args;
+  const cfg = JSON.parse(readFileSync(configPath, "utf8"));
+  let providerOverride;
+  const forwardedArgs = [];
+  for (let i = 0; i < providerArgs.length; i++) {
+    const arg = providerArgs[i];
+    if (arg === "--provider") {
+      providerOverride = providerArgs[++i];
+      if (!providerOverride) throw new Error("--provider requires claude or codex");
+    } else if (arg.startsWith("--provider=")) {
+      providerOverride = arg.slice("--provider=".length);
+    } else {
+      forwardedArgs.push(arg);
+    }
+  }
   const dataDir = dirname(configPath);
   const botDir = join(dataDir, ".claude-bot");
   const stateBase = basename(configPath, ".json");
   const stateFile = stateBase === "config" ? "state.json" : `${stateBase}.state.json`;
   const statePath = join(botDir, stateFile);
   const lockPath = join(botDir, "local.lock");
+
+  // 봇이 텔레그램에서 /provider 로 전환했을 수 있으니 state.json 의 provider 를
+  // cfg.provider 보다 우선한다 (bot.mjs의 currentProvider()와 동일한 우선순위).
+  let stateProvider;
+  try {
+    const p = JSON.parse(readFileSync(statePath, "utf8")).provider;
+    if (["claude", "codex"].includes(p)) stateProvider = p;
+  } catch {}
+  const provider = providerOverride || stateProvider || cfg.provider || "claude";
+  if (!["claude", "codex"].includes(provider)) {
+    throw new Error(`Unsupported provider: ${provider} (expected claude or codex)`);
+  }
 
   mkdirSync(botDir, { recursive: true });
   writeFileSync(lockPath, String(process.pid));
@@ -122,48 +151,79 @@ async function main() {
   process.on("SIGINT", () => { signalExitCode = 130; });
   process.on("SIGTERM", () => { signalExitCode = 143; });
 
+  const sessionKey = provider === "codex" ? "codexSessionId" : "sessionId";
   let sessionId;
   try {
-    sessionId = JSON.parse(readFileSync(statePath, "utf8")).sessionId;
+    sessionId = JSON.parse(readFileSync(statePath, "utf8"))[sessionKey];
   } catch {}
 
   if (sessionId) {
-    process.stderr.write(`Resuming session: ${sessionId}\n`);
-    // 텔레그램 이전 대화와 구분하기 위해 세션에 시작 마커 삽입
-    await new Promise((resolve) => {
-      const marker = spawn("claude", [
-        "--resume", sessionId, "-p", "---ctb:start---", "--output-format", "json",
-      ], { stdio: ["ignore", "ignore", "ignore"] });
-      marker.on("close", resolve);
-      marker.on("error", resolve);
-      setTimeout(() => { marker.kill(); resolve(); }, 15000);
-    });
+    process.stderr.write(`Resuming ${provider} session: ${sessionId}\n`);
+    if (provider === "claude") {
+      // 텔레그램 이전 대화와 구분하기 위해 Claude 세션에 시작 마커 삽입
+      await new Promise((resolve) => {
+        const marker = spawn(cfg.claudeBin || "claude", [
+          "--resume", sessionId, "-p", "---ctb:start---", "--output-format", "json",
+        ], { cwd: cfg.projectDir, env: { ...process.env, ...(cfg.env || {}) }, stdio: ["ignore", "ignore", "ignore"] });
+        marker.on("close", resolve);
+        marker.on("error", resolve);
+        setTimeout(() => { marker.kill(); resolve(); }, 15000);
+      });
+    }
   }
 
-  const finalArgs = sessionId ? ["--resume", sessionId, ...claudeArgs] : claudeArgs;
-  const child = spawn("claude", finalArgs, { stdio: "inherit" });
+  const bin = provider === "codex" ? (cfg.codexBin || "codex") : (cfg.claudeBin || "claude");
+  const finalArgs = provider === "codex"
+    ? (sessionId ? ["resume", sessionId, ...forwardedArgs] : forwardedArgs)
+    : (sessionId ? ["--resume", sessionId, ...forwardedArgs] : forwardedArgs);
+  const child = spawn(bin, finalArgs, {
+    cwd: cfg.projectDir,
+    env: { ...process.env, ...(cfg.env || {}) },
+    stdio: "inherit",
+  });
   child.on("close", async (code) => {
     cleanup();
-    if (sessionId) await notifyTelegram(configPath, sessionId);
+    if (sessionId) await notifyTelegram(configPath, provider, sessionId);
     process.exit(signalExitCode ?? code ?? 0);
+  });
+  child.on("error", (e) => {
+    cleanup();
+    process.stderr.write(`ctb: failed to start ${provider}: ${e.message}\n`);
+    process.exit(1);
   });
 }
 
-async function summarizeSession(sid, lang) {
+async function summarizeSession(provider, sid, lang, cfg) {
   const langInstruction = lang && lang.startsWith("ko")
     ? "방금 로컬 터미널 코딩 세션이 끝났어. 이 대화에서 가장 최근에 나눈 내용(이 메시지 직전까지)을 바탕으로, 그 세션에서 무엇을 했는지 한국어로 짧은 구문(10단어 이내)으로 요약해줘. 마크다운 없이 텍스트만. 중요한 작업이 없었으면 정확히 이렇게만 답해: SKIP"
     : "A local terminal coding session just ended. Based on the most recent exchanges in this conversation (just before this message), summarize in one short phrase (10 words max) what was accomplished. Plain text only. If nothing significant was done, reply exactly: SKIP";
   return new Promise((resolve) => {
-    const child = spawn("claude", [
-      "--resume", sid,
-      "-p", langInstruction,
-      "--output-format", "json",
-    ], { stdio: ["ignore", "pipe", "ignore"] });
+    const isCodex = provider === "codex";
+    const bin = isCodex ? (cfg.codexBin || "codex") : (cfg.claudeBin || "claude");
+    const args = isCodex
+      ? ["exec", "resume", "--json", sid, langInstruction]
+      : ["--resume", sid, "-p", langInstruction, "--output-format", "json"];
+    const child = spawn(bin, args, {
+      cwd: cfg.projectDir,
+      env: { ...process.env, ...(cfg.env || {}) },
+      stdio: ["ignore", "pipe", "ignore"],
+    });
     let out = "";
     child.stdout.on("data", (d) => { out += d; });
     child.on("close", () => {
       try {
-        const text = (JSON.parse(out).result || "").trim();
+        let text = "";
+        if (isCodex) {
+          for (const line of out.split("\n")) {
+            try {
+              const event = JSON.parse(line);
+              if (event.type === "item.completed" && event.item?.type === "agent_message") text = event.item.text || text;
+            } catch {}
+          }
+        } else {
+          text = JSON.parse(out).result || "";
+        }
+        text = text.trim();
         resolve(/^skip$/i.test(text) ? null : text);
       } catch { resolve(null); }
     });
@@ -172,26 +232,33 @@ async function summarizeSession(sid, lang) {
   });
 }
 
-async function notifyTelegram(configPath, sessionId) {
+async function notifyTelegram(configPath, provider, sessionId) {
   try {
     const cfg = JSON.parse(readFileSync(configPath, "utf8"));
-    if (!cfg.token || !cfg.allowedChatId || cfg.ctbNotify === false) return;
+    // allowedChatId 는 문자열 또는 배열 모두 허용 (bot.mjs의 allowedIds와 동일 규칙).
+    const chatIds = [].concat(cfg.allowedChatId).filter(Boolean).map(String);
+    if (!cfg.token || !chatIds.length || cfg.ctbNotify === false) return;
     const lang = cfg.lang || process.env.LANG || "";
     process.stderr.write("ctb: summarizing session...\n");
-    const summary = await summarizeSession(sessionId, lang);
+    const summary = await summarizeSession(provider, sessionId, lang, cfg);
     if (!summary) { process.stderr.write("ctb: nothing to summarize (SKIP)\n"); return; }
     process.stderr.write(`ctb: sending to Telegram — ${summary}\n`);
     const label = lang.startsWith("ko") ? "[터미널]" : "[local]";
-    const r = await fetch(`https://api.telegram.org/bot${cfg.token}/sendMessage`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: cfg.allowedChatId, text: `💻 ${label} ${summary}` }),
-    });
-    const json = await r.json();
-    if (!json.ok) process.stderr.write(`ctb: Telegram error — ${JSON.stringify(json)}\n`);
+    for (const chatId of chatIds) {
+      const r = await fetch(`https://api.telegram.org/bot${cfg.token}/sendMessage`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text: `💻 ${label} ${summary}` }),
+      });
+      const json = await r.json();
+      if (!json.ok) process.stderr.write(`ctb: Telegram error — ${JSON.stringify(json)}\n`);
+    }
   } catch (e) {
     process.stderr.write(`ctb: notify error — ${e.message}\n`);
   }
 }
 
-main();
+main().catch((e) => {
+  process.stderr.write(`ctb: ${e.message}\n`);
+  process.exit(1);
+});

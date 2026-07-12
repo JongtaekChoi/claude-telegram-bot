@@ -6,19 +6,26 @@
 [![npm downloads](https://img.shields.io/npm/dm/claude-telegram-bot.svg)](https://www.npmjs.com/package/claude-telegram-bot)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Use Claude Code from Telegram — run it anywhere, from any device.
+Use Claude Code or Codex from Telegram — run coding agents anywhere, from any device.
 
-**A zero-dependency, single-file, daemonized Claude Code bot — no Bun, no Python, no open session.**
+**A zero-dependency, daemonized Telegram bridge for Claude Code and Codex — no Bun, no Python, no open session.**
 
-A tiny bridge that takes your Telegram messages, runs `claude -p` (Claude Code headless mode)
-in a project folder, and sends the result back to the chat. One `.mjs` file on Node 18+ built-ins —
-nothing to `npm install`, nothing to audit but under 1 000 readable lines.
+A small bridge that takes your Telegram messages, runs the selected coding provider in a project
+folder, and sends the result back to the chat. It uses only Node 18+ built-ins, with no runtime
+dependencies to install.
 
+```text
+[you] → Telegram → bot.mjs
+                     ├─ Claude provider → state.sessionId
+                     ├─ Codex provider  → state.codexSessionId
+                     └─ Ollama mode/fallback
+                              ↓
+                  result → Telegram
+
+Claude limit → Codex fallback → codex-handoff.md → next Claude call
 ```
-[you] → Telegram → bot.mjs → claude -p (config.projectDir) → result → Telegram
-```
 
-Drive Claude Code from your phone: run tests, edit files, commit, push — all from a chat.
+Drive a coding agent from your phone: run tests, edit files, commit, push — all from a chat.
 It runs as a **background daemon** (launchd), so there's no interactive session to keep open.
 
 > ### ⚠️ This is a remote code-execution tool by design. Read the [Security](#security) section before running it.
@@ -32,7 +39,9 @@ It runs as a **background daemon** (launchd), so there's no interactive session 
 - **Multi-persona** — split the *same* project into role-based bots (e.g. Developer + Planner)
   with per-bot system prompts and **differentiated permission levels**.
 - **Session continuity** — conversations resume across restarts (`--resume`); `/new` to reset.
-- **Attachments** — send photos/docs/voice/video; they're saved locally and handed to Claude.
+- **Provider switching** — use Claude or Codex as the main agent and switch with `/provider`.
+- **Fallback handoff** — Codex can take over when Claude hits a limit and leave handoff notes.
+- **Attachments** — send photos/docs/voice/video; they're saved locally and handed to the active provider.
 - **Always-on** — ships with a launchd template for macOS (auto-start, auto-restart).
 
 ## How it compares
@@ -43,12 +52,12 @@ can pick the right tool:
 | | This bot | [Official Claude Code Channels](https://code.claude.com/docs/en/channels) | [claude-code-telegram](https://github.com/RichardAtCT/claude-code-telegram) |
 |---|---|---|---|
 | Runtime | **Node built-ins only** | Bun + MCP plugin | Python 3.11+ + libs |
-| Execution model | headless `claude -p` per message | events pushed into an **open** `claude --channels` session | Claude SDK / CLI |
+| Execution model | headless Claude or Codex process per message | events pushed into an **open** `claude --channels` session | Claude SDK / CLI |
 | Stays running as | **background daemon** (no session open) | a live interactive session you keep running | service / daemon |
 | Multi-persona, permission-scoped bots on one repo | **yes** (dev=`bypass`, planner=`plan`) | no | no |
 | Per-action permission approval (inline buttons) | no (set `permissionMode`) | **yes** | partial |
 | Feature breadth (webhooks, cron, voice, export) | minimal | medium | **large** |
-| Lines of code to read/fork | **~400, one file** | larger | large |
+| Runtime dependencies | **none (Node built-ins)** | plugin runtime | Python packages |
 
 **Use the official Channels** if you want per-action approvals and don't mind keeping a session
 open. **Use claude-code-telegram** if you want maximum features. **Use this** if you want a
@@ -82,12 +91,16 @@ to execute commands; that power is the point, and also the risk. Read this befor
 - **Guard the token like a credential.** `config.json` and `state.json` are in `.gitignore` so you
   don't commit it — keep it that way. Never paste the token into issues, logs, or screenshots. The
   startup log redacts it (`token: <redacted>`); don't add it back.
-- **There is no sandbox.** The bot runs `claude` as *your* user, with your filesystem, your SSH/git
-  credentials, and your Claude OAuth/keychain session. It can do anything you can.
+- **The bot itself is not a security boundary.** Provider controls reduce risk but do not isolate
+  Telegram, custom commands, or the daemon process. Claude runs with `permissionMode`; Codex uses
+  `codexSandbox`. Both processes still inherit the daemon user's environment and credentials.
 
 ### Choose the least permission you can live with
 
-`permissionMode` is the main safety dial:
+Claude and Codex use different safety controls. Switching provider can therefore change the
+effective permission boundary.
+
+For Claude, `permissionMode` is the main safety dial:
 
 | Mode | What it allows | Use when |
 |---|---|---|
@@ -101,6 +114,10 @@ Practical hardening:
 - Point `projectDir` at a **specific project**, not your home directory — limit the blast radius.
 - For multi-persona setups, give only **one** bot `bypassPermissions`; keep the rest on `plan`.
 - Consider running on a dedicated user account or VM if you'll leave it always-on.
+- For Codex, keep `codexSandbox: "workspace-write"` unless you understand the implications of a
+  broader sandbox setting. `/plan`, `/compact`, and automatic compact are currently Claude-only.
+- Custom `/commands` run directly as the daemon user; neither `permissionMode` nor `codexSandbox`
+  restricts them.
 
 ### Reporting a vulnerability
 
@@ -115,7 +132,9 @@ This is a standalone CLI/daemon, **not a library** — you don't `import` it. In
 run via `npx`), point a config file at any project, and run it. `projectDir` in the config decides
 which folder Claude works in, independent of where the bot is installed.
 
-Prerequisites: **Node 18+** and the **`claude` CLI installed and authenticated** on the host.
+Prerequisites: **Node 18+**, a Telegram bot token, and at least one configured provider. Install and
+authenticate the **Claude CLI** for Claude, the **Codex CLI** for Codex or Codex fallback, and
+**Ollama plus a local model** only if you enable Ollama mode/fallback.
 
 **Option A — npx (no install)**
 
@@ -162,7 +181,22 @@ auth layer.)
 - `run the solver tests and commit + push if they pass`
 - `add an edge case to solve-2nd-floor-edges.ts`
 
-Commands: `/new` (reset context / new session) · `/compact` (compress context, keep session) · `/plan <request>` (plan only, then approve/cancel) · `/stop` (stop current task; `--reset` to also roll back the session) · `/ollama` (toggle Ollama chat mode) · `/cron` (list / add / remove scheduled tasks) · `/reserve` (show queue status at usage-limit · `/reserve rm` to cancel) · `/restart` (syntax-check & restart the bot) · `/status` (bot status & version) · `/model` (view / switch the model) · `/autocompact` (view / set the auto-compact token threshold) · `/id` (show chat ID) · `/help`.
+Core commands:
+
+| Command | Purpose |
+|---|---|
+| `/provider [claude\|codex\|default]` | View or switch the Telegram bot's provider override |
+| `/model [name\|default]` | View or switch the active provider's model; suggestions are provider-specific |
+| `/new` | Reset the active provider's conversation session |
+| `/plan <request>` | Produce a plan and wait for approval (Claude only) |
+| `/compact` | Compact the current context (Claude only) |
+| `/stop [--reset]` | Stop the task; optionally restore its previous session ID |
+| `/ollama` | Toggle local Ollama chat mode |
+| `/testfallback` | Test the configured Codex or Ollama fallback |
+| `/status` | Show version, provider, CLI versions, model, fallback, and session state |
+| `/remember <text>` · `/memory` | Save or inspect persistent memory |
+| `/cron` · `/reserve` | Manage scheduled jobs and usage-limit retries |
+| `/autocompact` · `/restart` · `/id` · `/help` | Maintenance and help commands |
 
 > **`/plan <request>`** runs the request in read-only plan mode (no edits, no shell) regardless of
 > the bot's configured `permissionMode`, and replies with the plan plus **✅ Proceed / ❌ Cancel**
@@ -171,7 +205,7 @@ Commands: `/new` (reset context / new session) · `/compact` (compress context, 
 > you a review step before a `bypassPermissions` bot touches anything. The pending approval expires
 > if you start a new session with `/new` first.
 
-> **`/stop`** kills the running Claude process immediately and clears any queued messages.
+> **`/stop`** kills the running provider process immediately and clears any queued messages.
 > Add `--reset` to also restore the session to the state it was in *before* the task started,
 > so the conversation history doesn't include the interrupted work.
 
@@ -188,6 +222,22 @@ Commands: `/new` (reset context / new session) · `/compact` (compress context, 
 
 ---
 
+## Compatibility
+
+The bot depends on CLI flags and machine-readable output that may change between releases. These are
+the development-environment versions recorded as the compatibility baseline on 2026-07-10; they are
+reference versions, not strict pins or a claim that every path passes. Use `/status` to see the
+versions actually installed on the bot host.
+
+| CLI | Recorded version | Relevant integration |
+|---|---:|---|
+| Claude Code | `2.1.206` | JSON output, session resume, permission mode |
+| Codex CLI | `0.144.1` | `exec`, `exec resume`, JSONL events, workspace sandbox |
+| Ollama | `0.31.1` | `ollama launch claude`, model selection, session handoff |
+
+When upgrading one of these CLIs, run `/testfallback` and a normal Claude message before relying on
+the bot unattended. Update this table after recording the new environment and checking those paths.
+
 ## Configuration
 
 ```sh
@@ -200,20 +250,44 @@ Edit `mybot.json`:
 |---|---|
 | `token` | Bot token from BotFather |
 | `allowedChatId` | **Leave empty at first** → the bot tells you (step 3). Required before it runs anything. |
-| `projectDir` | Absolute path to the working folder Claude runs in |
+| `projectDir` | Absolute path to the working folder the selected provider runs in |
+| `provider` | (optional) Main provider for Telegram messages and scheduled jobs: `"claude"` (default) or `"codex"` |
 | `claudeBin` | Output of `which claude` (absolute path recommended) |
-| `permissionMode` | `plan` / `acceptEdits` / `bypassPermissions` — see [Security](#security) |
-| `model` | Empty = default. Or `opus` / `sonnet`, etc. Override at runtime with `/model` (persists in state). |
+| `permissionMode` | Claude-only: `plan` / `acceptEdits` / `bypassPermissions` — see [Security](#security) |
+| `model` | Claude model. Empty = CLI default. Override with `/model` while Claude is active. |
 | `lang` | (optional) UI language. Empty = auto-detect per user (English default, Korean for Korean Telegram clients). Force with `"en"` / `"ko"`. |
 | `name` | (optional) Bot name shown in `/help` — handy for telling multiple bots apart |
 | `persona` | (optional) Role system prompt — defines a persona (developer/planner/…). See below |
 | `appendSystemPrompt` | (optional) Override the default "be concise for Telegram" instruction |
-| `env` | (optional) Extra environment variables passed to the `claude` process |
+| `env` | (optional) Extra environment variables passed to provider processes |
 | `schedule` | (optional) Cron jobs that run a prompt on a timer — see [Scheduled tasks](#scheduled-tasks-cron) |
 | `commands` | (optional) Custom `/commands` that run shell scripts — see [Custom commands](#custom-commands) |
-| `ollamaFallback` | (optional) `true` to enable Ollama as a fallback when Claude is rate-limited or out of credits |
-| `ollamaModel` | (optional) Ollama model to use for fallback (default: `"phi3:mini"`) |
+| `codexFallback` | (optional) `true` to enable Codex as the preferred fallback when Claude is rate-limited or out of credits |
+| `codexBin` | (optional) Path to the `codex` binary. Defaults to `"codex"` on `PATH`; use an absolute path for launchd |
+| `codexModel` | (optional) Codex model passed with `--model`; override while Codex is active with `/model <full-id>` |
+| `codexSandbox` | (optional) Codex sandbox for a new `codex exec` session (default: `"workspace-write"`) |
+| `codexTimeout` | (optional) Milliseconds to wait for Codex before falling back to reserve/Ollama (default: `600000`) |
+| `ollamaFallback` | (optional) `true` to enable Ollama as a secondary fallback when Claude is rate-limited or out of credits |
+| `ollamaModel` | (optional) Ollama model to use for fallback (default: `"qwen3.5:4b"`). The context a session carries over is capped by this model's runtime context window (`num_ctx`), which Ollama defaults to ~4K regardless of the model's architectural max — too small for a long Claude session. Bake a larger window into a variant with a `Modelfile` (`FROM qwen3.5:4b` + `PARAMETER num_ctx 6144`, `ollama create qwen3.5:4b-ctx6k -f Modelfile`) and point this at it. Size it to your RAM — on an 8 GB machine ~6K is the safe ceiling; 32K swaps the machine to death. |
+| `ollamaBin` | (optional) Path to the `ollama` binary. Auto-detected at `/opt/homebrew/bin/ollama`, `/usr/local/bin/ollama`, `/usr/bin/ollama`, falling back to `"ollama"` on `PATH` — set this explicitly if your install lives elsewhere, since a launchd-run bot doesn't inherit your shell's `PATH` |
+| `ollamaTimeout` | (optional) Milliseconds to wait for an Ollama reply before giving up (default: `360000` — local models can be slow to cold-start) |
 | `autoCompactThreshold` | (optional) Auto-compact context when cached input tokens exceed this value (default: `100000`). Set to `0` to disable. Override at runtime with `/autocompact` (persists in state). |
+
+The same config also drives local interactive sessions. `ctb mybot.json` uses `config.provider`,
+while an explicit flag overrides it for that invocation:
+
+```sh
+ctb mybot.json --provider claude
+ctb mybot.json --provider codex
+```
+
+Claude resumes `state.sessionId`; Codex resumes `state.codexSessionId` with
+`codex resume <session-id>`. The sessions remain separate. The `/plan` approval workflow currently
+requires `provider: "claude"`; normal messages, attachments, and scheduled jobs support both.
+
+`/provider` stores a Telegram-only override in state, survives bot restarts, and does not rewrite
+the config. The local `ctb` command intentionally continues to use `config.provider` or its explicit
+`--provider` flag.
 
 State and downloaded attachments live in a hidden **`.claude-bot/`** folder next to the config
 file, so projects stay isolated. Upgrading from an older version **auto-moves** an existing
@@ -231,13 +305,15 @@ your launchd plist points them.
 - **Formatting**: the reply's Markdown (bold/code/headings/tables) is converted to Telegram-safe
   HTML. If conversion ever produces invalid HTML, the message is automatically resent as plain text.
 - **Attachments**: send a photo/document/voice/video and it's downloaded into `attachments/`; the
-  absolute path is handed to Claude (caption included as the message). Images can be opened with Read.
-- **Sessions**: conversations resume automatically (`--resume`); the last session id is saved in
-  `state.json`, so context survives restarts. Use `/new` to start fresh.
+  absolute path is handed to the active provider (caption included as the message).
+- **Sessions**: Claude and Codex keep separate session IDs, so switching providers preserves both
+  conversations. `/new` resets only the active provider's session.
 - **Message queue**: if you send a message while a task is running, it is queued (not dropped). When the task finishes, all queued messages are merged into a single prompt so Claude can resolve corrections and follow-ups in one pass (e.g. "do X" then "never mind, do Y" → handled together). Use `/stop` to cancel the running task and discard the queue.
-- **Model hint**: the bot tells Claude which model it is running as. If Claude judges a question to be beyond its current tier, it appends a one-line suggestion at the end of the reply (e.g. 💡 `/model sonnet`). Switch with `/model <name>` — `haiku`, `sonnet`, `opus`, `fable`, or a full model id. The choice persists in `state.json` across restarts.
-- **Usage-limit queue**: when a Claude Max / API rate-limit error includes a reset time, the triggering message is automatically queued and retried at that time — just like messages queued while Claude is busy. Any additional messages you send during the limit window are also added to the queue. Use `/reserve` to check queue status and reset time, `/reserve rm` to cancel and clear the queue.
-- **Ollama fallback**: set `"ollamaFallback": true` and point `"ollamaModel"` at a locally-running [Ollama](https://ollama.ai) model (default: `"phi3:mini"`). When Claude is rate-limited or out of credits, the bot automatically falls back to Ollama and prepends a notice to the reply. Use `/ollama` to toggle Ollama as your primary chat partner at any time, even when Claude is working fine — useful for lightweight queries.
+- **Models**: `/model` follows the active provider and stores separate Claude/Codex overrides. Claude shows the `haiku`, `sonnet`, `opus`, and `fable` aliases; Codex asks for a full Codex model ID instead of displaying Claude aliases. `/model default` clears only the active provider's override.
+- **Usage-limit queue**: when a Claude Max / API rate-limit error includes a reset time, the bot first tries enabled fallbacks. If no fallback is enabled or every fallback fails, the triggering message is queued and retried at that time — just like messages queued while Claude is busy. Any additional messages you send during the limit window are also added to the queue. Use `/reserve` to check queue status and reset time, `/reserve rm` to cancel and clear the queue.
+- **Codex fallback**: set `"codexFallback": true` to run `codex exec` when Claude is rate-limited or out of credits. Codex keeps its own session in `state.codexSessionId` using `codex exec resume <id>`, but Claude and Codex sessions are not interoperable. Each successful Codex fallback appends a summary to `.claude-bot/codex-handoff.md`, and future Claude calls receive the recent handoff notes as context.
+- **Runtime provider switching**: use `/provider` to view the active provider, `/provider claude` or `/provider codex` to store a bot-state override, and `/provider default` to return to the config value. Each provider's session is preserved separately.
+- **Ollama fallback**: set `"ollamaFallback": true` and point `"ollamaModel"` at a locally-installed [Ollama](https://ollama.ai) model (default: `"qwen3.5:4b"`). Ollama is now a secondary automatic fallback when Codex is disabled or fails, and `/ollama` still toggles local chat mode manually. It runs Claude Code through the local model via `ollama launch claude … --resume <session>`, but this remains best-effort because local model context windows are much smaller than Claude's.
 - **Auto-compact**: the bot tracks how many cached tokens are in the session context. When `cache_read_input_tokens` exceeds `autoCompactThreshold` (default 100 000), it automatically runs `/compact` and notifies you. Tune the threshold in config, or at runtime with `/autocompact <number>` (`/autocompact off` to disable, `/autocompact default` to reset) — the override persists in `state.json` across restarts. You can also run `/compact` manually at any time.
 
 ### Custom commands
@@ -431,8 +507,9 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.pl
 ## Requirements
 
 - Node.js 18+ (for built-in `fetch`)
-- The `claude` CLI installed and authenticated on the host
 - A Telegram bot token from `@BotFather`
+- At least one provider: authenticated Claude CLI or authenticated Codex CLI
+- Optional: Codex CLI for Codex fallback; Ollama and a downloaded model for Ollama mode/fallback
 
 ## License
 

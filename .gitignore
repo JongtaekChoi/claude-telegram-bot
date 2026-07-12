@@ -9,3 +9,4 @@ state.*.json
 attachments/
 bot.log
 bot.error.log
+npmSecKey

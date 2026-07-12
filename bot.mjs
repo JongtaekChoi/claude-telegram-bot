@@ -84,6 +84,7 @@ const BOT_DIR = join(DATA_DIR, ".claude-bot");
 const STATE_PATH = join(BOT_DIR, stateFile);
 const ATTACH_DIR = join(BOT_DIR, "attachments");
 const MEMORY_PATH = join(BOT_DIR, "memory.md"); // /new 로 초기화해도 유지되는 퍼시스턴트 메모리
+const CODEX_HANDOFF_PATH = join(BOT_DIR, "codex-handoff.md"); // Codex fallback 작업을 Claude에 넘길 요약
 const LEGACY_STATE_PATH = join(DATA_DIR, stateFile); // 구버전(루트 직하) 호환
 const LEGACY_ATTACH_DIR = join(DATA_DIR, "attachments");
 
@@ -112,6 +113,11 @@ if (!existsSync(CONFIG_PATH)) {
 }
 
 const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+const DEFAULT_PROVIDER = cfg.provider || "claude";
+if (!["claude", "codex"].includes(DEFAULT_PROVIDER)) {
+  console.error(`Invalid provider: ${DEFAULT_PROVIDER} (expected claude or codex)`);
+  process.exit(1);
+}
 console.log({ ...cfg, token: cfg.token ? "<redacted>" : "(none)" });
 const TG = `https://api.telegram.org/bot${cfg.token}`;
 // allowedChatId 는 문자열 또는 배열 모두 허용 (하위 호환)
@@ -136,6 +142,7 @@ const STR = {
       "• /new — reset conversation context (new session)\n" +
       "• /compact — compress context to free up space (keeps the session)\n" +
       "• /plan <request> — plan only (no edits), then approve/cancel to run for real\n" +
+      "• Codex fallback can run automatically when Claude hits a limit (if enabled)\n" +
       "• /ollama — toggle Ollama chat mode (bypass Claude, use local LLM)\n" +
       "• /stop — stop the current task · /stop --reset to also roll back the session\n" +
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
@@ -144,6 +151,7 @@ const STR = {
       "• /reserve — show retry queue status at usage-limit reset · /reserve rm to cancel\n" +
       "• /restart — restart the bot (after a syntax check)\n" +
       "• /status — bot status & version\n" +
+      "• /provider — view / switch the default provider\n" +
       "• /model — view / switch the model\n" +
       "• /autocompact — view / set the auto-compact token threshold\n" +
       "• /id — show this chat ID\n" +
@@ -152,14 +160,17 @@ const STR = {
     compactOk: "🗜️ Context compacted. The conversation continues with a summary.",
     compactFail: (m) => `⚠️ Compact failed: ${m}`,
     compactNoSession: "No active session to compact. Just send a message to start one.",
+    compactProviderUnsupported: "/compact is currently available only with provider=claude.",
     autoCompact: "🗜️ Auto-compacted context (conversation was getting long).",
     planUsage: "Usage: `/plan <request>` — e.g. `/plan add input validation to the signup form`",
     planApprove: "✅ Proceed",
     planCancel: "❌ Cancel",
     planCancelled: "❌ Plan cancelled. No changes were made.",
     planNoPending: "No pending plan to approve (it may have expired after /new). Send /plan again.",
-    testFallbackDisabled: "⚠️ Ollama fallback is not enabled. Set `\"ollamaFallback\": true` in config.json.",
-    testFallbackFail: (m) => `⚠️ Ollama test failed: ${m}`,
+    planProviderUnsupported: "/plan approval flow currently requires provider=claude.",
+    testFallbackDisabled: "⚠️ No fallback is enabled. Set `\"codexFallback\": true` (recommended) or `\"ollamaFallback\": true` in config.json.",
+    testFallbackFail: (m) => `⚠️ Fallback test failed: ${m}`,
+    ollamaDisabled: "⚠️ Ollama mode is not enabled. Set `\"ollamaFallback\": true` in config.json.",
     ollamaOn: "🌙 Ollama mode on. Messages will now go to Ollama. Your Claude session is preserved.",
     ollamaOff: "✅ Ollama mode off. Back to Claude.",
     busy: "⏳ A previous task is still running. Please try again when it finishes.",
@@ -167,7 +178,7 @@ const STR = {
     stopOk: "🛑 Task stopped.",
     stopReset: "🛑 Task stopped and session rolled back to before the task.",
     stopNoop: "No task is running.",
-    localBusy: "💻 A local `ctb claude` session is active. Send a message when it's done.",
+    localBusy: "💻 A local `ctb` session is active. Send a message when it's done.",
     needChatId: (id) => `Add this chat ID to "allowedChatId" in config.json:\n${id}`,
     cronEmpty:
       "No scheduled tasks yet.\nAdd one in plain language, e.g. `/cron add summarize open issues every weekday at 9am`.",
@@ -198,17 +209,28 @@ const STR = {
     status: (i) =>
       `🤖 ${i.name}\n` +
       `• Version: ${i.version}\n` +
+      `• Provider: ${i.provider}\n` +
+      `• CLIs: Claude ${i.cliVersions.claude} · Codex ${i.cliVersions.codex} · Ollama ${i.cliVersions.ollama}\n` +
       `• Model: ${i.model}\n` +
+      `• Fallback: ${i.fallback}\n` +
       `• Session: ${i.hasSession ? "active" : "none (fresh)"}\n` +
       `• Scheduled jobs: ${i.jobs}\n` +
       `• Project: ${i.projectDir}\n` +
       `• Permission: ${i.permissionMode}`,
-    modelStatus: (cur, list) =>
-      `🧠 Model: ${cur}\n` +
+    claudeModelStatus: (cur, list) =>
+      `🧠 Claude model: ${cur}\n` +
       `Switch: ${list.map((x) => `/model ${x}`).join(" · ")} (or a full model id)\n` +
       `/model default — clear the override`,
-    modelSet: (m) => `🧠 Model set to: ${m}`,
-    modelReset: (def) => `🧠 Model reset to default (${def}).`,
+    codexModelStatus: (cur) =>
+      `🧠 Codex model: ${cur}\n` +
+      "Set: `/model <full-codex-model-id>`\n" +
+      `/model default — clear the override and use codexModel/CLI default`,
+    modelSet: (provider, m) => `🧠 ${provider} model set to: ${m}`,
+    modelReset: (provider, def) => `🧠 ${provider} model reset to default (${def}).`,
+    providerStatus: (cur, def) => `🤖 Provider: ${cur}${cur === def ? " (config default)" : ` (config default: ${def})`}\nSwitch: /provider claude · /provider codex · /provider default`,
+    providerSet: (provider) => `🤖 Default provider set to ${provider}. Existing Claude and Codex sessions are preserved separately.`,
+    providerReset: (provider) => `🤖 Provider reset to the config default (${provider}).`,
+    providerUsage: "Usage: /provider claude · /provider codex · /provider default",
     autoCompactStatus: (cur, def) =>
       `🗜️ Auto-compact threshold: ${cur} tokens${cur === def ? " (default)" : ""}\n` +
       "Set: `/autocompact <number>` · `/autocompact off` to disable · `/autocompact default` to reset",
@@ -236,6 +258,7 @@ const STR = {
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
       "• /compact — 컨텍스트 압축 (세션 유지, 공간 확보)\n" +
       "• /plan <요청> — 계획만 세우기 (편집 없음) → 승인/취소로 실제 실행\n" +
+      "• Codex 폴백 활성화 시 Claude 한도 도달 때 자동으로 대신 실행\n" +
       "• /ollama — Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM 사용)\n" +
       "• /stop — 진행 중인 작업 중단 · /stop --reset 으로 세션도 되돌리기\n" +
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
@@ -244,6 +267,7 @@ const STR = {
       "• /reserve — 한도 리셋 시 대기열 상태 확인 · /reserve rm 으로 취소\n" +
       "• /restart — 봇 재시작 (문법 검사 후 안전하게)\n" +
       "• /status — 봇 상태·버전 보기\n" +
+      "• /provider — 기본 provider 보기·전환\n" +
       "• /model — 모델 보기·전환\n" +
       "• /autocompact — 자동 압축 임계값 보기·설정\n" +
       "• /id — 이 채팅 ID 확인\n" +
@@ -254,7 +278,7 @@ const STR = {
     stopOk: "🛑 작업을 중단했습니다.",
     stopReset: "🛑 작업을 중단하고 세션을 작업 이전으로 되돌렸습니다.",
     stopNoop: "실행 중인 작업이 없습니다.",
-    localBusy: "💻 로컬 `ctb claude` 세션이 활성화되어 있습니다. 종료 후 메시지를 보내주세요.",
+    localBusy: "💻 로컬 `ctb` 세션이 활성화되어 있습니다. 종료 후 메시지를 보내주세요.",
     needChatId: (id) => `이 채팅 ID를 config.json 의 allowedChatId 에 넣으세요:\n${id}`,
     cronEmpty:
       "등록된 예약 작업이 없습니다.\n`/cron add 매일 아침 9시에 …` 처럼 자연어로 추가해 보세요.",
@@ -284,17 +308,28 @@ const STR = {
     status: (i) =>
       `🤖 ${i.name}\n` +
       `• 버전: ${i.version}\n` +
+      `• 메인 provider: ${i.provider}\n` +
+      `• CLI: Claude ${i.cliVersions.claude} · Codex ${i.cliVersions.codex} · Ollama ${i.cliVersions.ollama}\n` +
       `• 모델: ${i.model}\n` +
+      `• 폴백: ${i.fallback}\n` +
       `• 세션: ${i.hasSession ? "이어가는 중" : "없음 (새 세션)"}\n` +
       `• 예약 작업: ${i.jobs}개\n` +
       `• 작업 폴더: ${i.projectDir}\n` +
       `• 권한 모드: ${i.permissionMode}`,
-    modelStatus: (cur, list) =>
-      `🧠 현재 모델: ${cur}\n` +
+    claudeModelStatus: (cur, list) =>
+      `🧠 현재 Claude 모델: ${cur}\n` +
       `전환: ${list.map((x) => `/model ${x}`).join(" · ")} (또는 전체 모델 ID)\n` +
       `/model default — 오버라이드 해제`,
-    modelSet: (m) => `🧠 모델을 ${m} (으)로 설정했습니다.`,
-    modelReset: (def) => `🧠 모델을 기본값(${def})으로 되돌렸습니다.`,
+    codexModelStatus: (cur) =>
+      `🧠 현재 Codex 모델: ${cur}\n` +
+      "설정: `/model <Codex 전체 모델 ID>`\n" +
+      `/model default — 오버라이드를 해제하고 codexModel/CLI 기본값 사용`,
+    modelSet: (provider, m) => `🧠 ${provider} 모델을 ${m}(으)로 설정했습니다.`,
+    modelReset: (provider, def) => `🧠 ${provider} 모델을 기본값(${def})으로 되돌렸습니다.`,
+    providerStatus: (cur, def) => `🤖 현재 provider: ${cur}${cur === def ? " (config 기본값)" : ` (config 기본값: ${def})`}\n전환: /provider claude · /provider codex · /provider default`,
+    providerSet: (provider) => `🤖 기본 provider를 ${provider}(으)로 변경했습니다. Claude와 Codex의 기존 세션은 각각 유지됩니다.`,
+    providerReset: (provider) => `🤖 provider를 config 기본값(${provider})으로 되돌렸습니다.`,
+    providerUsage: "사용법: /provider claude · /provider codex · /provider default",
     autoCompactStatus: (cur, def) =>
       `🗜️ 자동 압축 임계값: ${cur} 토큰${cur === def ? " (기본값)" : ""}\n` +
       "설정: `/autocompact <숫자>` · `/autocompact off` 로 끄기 · `/autocompact default` 로 초기화",
@@ -316,15 +351,18 @@ const STR = {
     compactOk: "🗜️ 컨텍스트를 압축했습니다. 대화가 요약본으로 이어집니다.",
     compactFail: (m) => `⚠️ compact 실패: ${m}`,
     compactNoSession: "압축할 활성 세션이 없습니다. 메시지를 보내 세션을 시작하세요.",
+    compactProviderUnsupported: "/compact는 현재 provider=claude에서만 사용할 수 있습니다.",
     autoCompact: "🗜️ 대화가 길어져 컨텍스트를 자동 압축했습니다.",
     planUsage: "사용법: `/plan <요청>` — 예: `/plan 회원가입 폼에 입력값 검증 추가해줘`",
     planApprove: "✅ 진행",
     planCancel: "❌ 취소",
     planCancelled: "❌ 계획을 취소했습니다. 아무 변경도 없습니다.",
     planNoPending: "승인할 계획이 없습니다 (/new 이후 만료됐을 수 있음). /plan 을 다시 보내세요.",
+    planProviderUnsupported: "/plan 승인 흐름은 현재 provider=claude에서만 사용할 수 있습니다.",
     contextTooLong: "⚠️ 프롬프트가 너무 깁니다. `/compact` 로 컨텍스트를 압축하거나 `/new` 로 새 세션을 시작하세요.",
-    testFallbackDisabled: "⚠️ Ollama 폴백이 비활성화 상태입니다. config.json에 `\"ollamaFallback\": true` 를 추가하세요.",
-    testFallbackFail: (m) => `⚠️ Ollama 테스트 실패: ${m}`,
+    testFallbackDisabled: "⚠️ 폴백이 비활성화 상태입니다. config.json에 `\"codexFallback\": true`(권장) 또는 `\"ollamaFallback\": true` 를 추가하세요.",
+    testFallbackFail: (m) => `⚠️ 폴백 테스트 실패: ${m}`,
+    ollamaDisabled: "⚠️ Ollama 모드가 비활성화 상태입니다. config.json에 `\"ollamaFallback\": true` 를 추가하세요.",
     ollamaOn: "🌙 Ollama 모드 켜짐. 이제 메시지는 Ollama로 처리됩니다. Claude 세션은 유지됩니다.",
     ollamaOff: "✅ Ollama 모드 꺼짐. 다시 Claude로 처리합니다.",
   },
@@ -335,7 +373,7 @@ const t = (l, key, ...a) => {
 };
 
 // /model 에서 보여줄 추천 별칭(claude CLI 가 별칭·전체 모델 ID 모두 허용).
-const MODEL_SUGGESTIONS = ["fable", "opus", "sonnet", "haiku"];
+const CLAUDE_MODEL_SUGGESTIONS = ["fable", "opus", "sonnet", "haiku"];
 
 // /(슬래시) 자동완성 메뉴용 명령 목록 (언어별). setMyCommands 로 등록.
 const COMMANDS = {
@@ -350,6 +388,7 @@ const COMMANDS = {
     { command: "cron", description: "List / add / remove scheduled tasks" },
     { command: "restart", description: "Restart the bot (after syntax check)" },
     { command: "status", description: "Bot status / version" },
+    { command: "provider", description: "View / switch the default provider" },
     { command: "model", description: "View / switch the model" },
     { command: "autocompact", description: "View / set the auto-compact token threshold" },
     { command: "reserve", description: "Schedule retry when usage limit resets · /reserve rm to cancel" },
@@ -367,6 +406,7 @@ const COMMANDS = {
     { command: "cron", description: "예약 작업 보기·추가·삭제" },
     { command: "restart", description: "봇 재시작 (문법 검사 후)" },
     { command: "status", description: "봇 상태·버전 보기" },
+    { command: "provider", description: "기본 provider 보기·전환" },
     { command: "model", description: "모델 보기·전환" },
     { command: "autocompact", description: "자동 압축 임계값 보기·설정" },
     { command: "reserve", description: "한도 리셋 시 재시도 예약 · /reserve rm 으로 취소" },
@@ -442,6 +482,28 @@ function saveMemory(content) {
   writeFileSync(MEMORY_PATH, content);
 }
 
+function loadCodexHandoff(maxChars = 12000) {
+  try {
+    const text = readFileSync(CODEX_HANDOFF_PATH, "utf8").trim();
+    return text.length > maxChars ? text.slice(-maxChars) : text;
+  } catch {
+    return "";
+  }
+}
+
+function appendCodexHandoff({ prompt, response, sessionId }) {
+  const entry =
+    `\n\n## ${new Date().toISOString()}\n` +
+    `Codex session: ${sessionId || "(unknown)"}\n\n` +
+    `### Telegram prompt\n${String(prompt || "").trim() || "(empty)"}\n\n` +
+    `### Codex response\n${String(response || "").trim() || "(empty)"}\n`;
+  try {
+    writeFileSync(CODEX_HANDOFF_PATH, loadCodexHandoff(80000) + entry);
+  } catch (e) {
+    console.error("Failed to append Codex handoff", e.message);
+  }
+}
+
 // ── 상태 (세션 이어가기용) ────────────────────────────────────────────────
 function loadState() {
   // 새 경로(.claude-bot/) 우선, 없으면 구버전 루트 경로로 폴백(이주 실패 시 안전망).
@@ -460,7 +522,12 @@ function saveState(s) {
   }
 }
 migrateData(); // 루트 직하 → .claude-bot/ 1회 이주(있으면) 후 state 로드
-let state = loadState(); // { sessionId?, cron?: [{ id, cron, prompt, label? }], restartNotify?, model? }
+let state = loadState(); // { sessionId?, codexSessionId?, cron?: [{ id, cron, prompt, label? }], restartNotify?, model? }
+if (state.provider && !["claude", "codex"].includes(state.provider)) {
+  console.warn(`Ignoring invalid provider override in state: ${state.provider}`);
+  state.provider = undefined;
+}
+const currentProvider = () => state.provider || DEFAULT_PROVIDER;
 
 // ── 텔레그램 헬퍼 ─────────────────────────────────────────────────────────
 async function tg(method, body) {
@@ -655,7 +722,11 @@ function runClaude(prompt, sessionId, opts = {}) {
     const mem = opts.injectMemory ? loadMemory() : "";
     // 메모리는 persona보다 앞에 배치하고 헤더를 강화 → persona가 덮어쓰는 것 방지
     const memoryBlock = mem ? `## RULES (must follow before anything else)\n${mem}` : null;
-    const appendSys = [memoryBlock, cfg.persona, brevity, modelHint].filter(Boolean).join("\n\n");
+    const handoff = opts.injectHandoff !== false ? loadCodexHandoff() : "";
+    const handoffBlock = handoff
+      ? `## CODEX FALLBACK HANDOFF\nClaude and Codex sessions are separate. The notes below summarize work Codex handled while Claude was unavailable; use them as context, not as your own prior messages.\n${handoff}`
+      : null;
+    const appendSys = [memoryBlock, handoffBlock, cfg.persona, brevity, modelHint].filter(Boolean).join("\n\n");
     if (appendSys) args.push("--append-system-prompt", appendSys);
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
@@ -699,27 +770,224 @@ function runClaude(prompt, sessionId, opts = {}) {
   });
 }
 
-// ── Ollama 폴백 실행 ──────────────────────────────────────────────────────
-async function runOllama(prompt, lang = "en", opts = {}) {
-  const header = opts.noHeader ? "" : (lang === "ko"
-    ? "🌙 Claude가 잠시 쉬고 있어요. 제가 대신 도와드릴게요. (세션은 이어지지 않아요)\n\n"
-    : "🌙 Claude is resting right now. I'll help in the meantime. (Session won't continue)\n\n");
-  const model = cfg.ollamaModel || "phi3:mini";
-  const brevity = "This reply is delivered over Telegram. Be concise — short paragraphs and lists, no filler intro/summary. Reply in the user's language.";
-  const systemParts = [cfg.persona, brevity].filter(Boolean);
-  const messages = [];
-  if (systemParts.length) messages.push({ role: "system", content: systemParts.join("\n\n") });
-  messages.push({ role: "user", content: prompt });
-  const r = await fetch("http://localhost:11434/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages, stream: false }),
-    signal: AbortSignal.timeout(60_000),
+function extractCodexTextFromJsonl(out) {
+  let sessionId;
+  let text = "";
+  for (const line of String(out || "").split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const j = JSON.parse(line);
+      // Current Codex CLI JSONL format.
+      if (j.type === "thread.started" && j.thread_id) sessionId = j.thread_id;
+      if (j.type === "item.completed" && j.item?.type === "agent_message" && j.item.text) {
+        text = j.item.text;
+      }
+      // Older app-server event format, kept for compatibility.
+      if (j.type === "session_meta" && j.payload?.id) sessionId = j.payload.id;
+      const p = j.payload;
+      if (p?.type === "message" && p.role === "assistant" && Array.isArray(p.content)) {
+        const parts = p.content
+          .filter((c) => c.type === "output_text" && c.text)
+          .map((c) => c.text);
+        if (parts.length) text = parts.join("\n");
+      }
+    } catch {}
+  }
+  return { sessionId, text: text.trim() };
+}
+
+function resolveCodexBin() {
+  if (cfg.codexBin) return cfg.codexBin;
+  const candidates = [
+    join(dirname(process.execPath), "codex"),
+    join(process.env.HOME || "", ".local", "bin", "codex"),
+    "/opt/homebrew/bin/codex",
+    "/usr/local/bin/codex",
+  ];
+  return candidates.find((p) => p && existsSync(p)) || "codex";
+}
+
+// ── Codex 폴백 실행 ──────────────────────────────────────────────────────
+// Claude와 Codex 세션은 호환되지 않는다. Codex는 별도 session id를 state.codexSessionId에
+// 저장하고, Claude 복귀 시 codex-handoff.md 요약을 시스템 프롬프트로 넘겨 맥락을 연결한다.
+function runCodex(prompt, lang = "en", opts = {}) {
+  return new Promise((resolve) => {
+    const header = opts.noHeader ? "" : (lang === "ko" ? "🤖 Codex 폴백\n\n" : "🤖 Codex fallback\n\n");
+    const lastPath = join(BOT_DIR, `codex-last-message-${process.pid}.txt`);
+    const model = state.codexModel || cfg.codexModel;
+    const timeoutMs = cfg.codexTimeout || 600_000;
+    const args = ["exec"];
+    const resumeSessionId = Object.prototype.hasOwnProperty.call(opts, "sessionId")
+      ? opts.sessionId
+      : state.codexSessionId;
+    let codexPrompt = prompt;
+    if (!resumeSessionId && opts.injectMemory) {
+      const context = [loadMemory(), cfg.persona, cfg.appendSystemPrompt].filter(Boolean).join("\n\n");
+      if (context) codexPrompt = `Project instructions and persistent context:\n${context}\n\nUser request:\n${prompt}`;
+    }
+
+    if (resumeSessionId) {
+      args.push("resume", "--json", "-o", lastPath);
+      if (model) args.push("--model", model);
+      args.push(resumeSessionId, "-");
+    } else {
+      args.push("--json", "-o", lastPath, "-C", cfg.projectDir, "--sandbox", cfg.codexSandbox || "workspace-write");
+      if (model) args.push("--model", model);
+      args.push("-");
+    }
+
+    const child = spawn(resolveCodexBin(), args, {
+      cwd: cfg.projectDir,
+      env: { ...process.env, ...(cfg.env || {}) },
+    });
+    if (opts.trackChild) currentChild = child;
+
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      currentChild = null;
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+      finish({ ok: false, text: `Codex timed out after ${Math.round(timeoutMs / 1000)}s` });
+    }, timeoutMs);
+
+    let out = "", err = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { err += d; });
+    child.stdin.on("error", () => {});
+    child.on("error", (e) => finish({ ok: false, text: `Failed to start codex: ${e.message}` }));
+    child.on("close", (code) => {
+      const parsed = extractCodexTextFromJsonl(out);
+      let finalText = parsed.text;
+      if (!finalText) {
+        try { finalText = readFileSync(lastPath, "utf8").trim(); } catch {}
+      }
+      const sessionId = parsed.sessionId || resumeSessionId;
+      if (code === 0 && finalText) {
+        if (opts.recordHandoff !== false) appendCodexHandoff({ prompt, response: finalText, sessionId });
+        return finish({ ok: true, text: header + finalText, sessionId });
+      }
+      const raw = (err || out || finalText || "no output").slice(0, 1000);
+      finish({ ok: false, text: `Codex failed (exit ${code}):\n${raw}`, canFallback: isFallbackError(raw, code) });
+    });
+    child.stdin.end(codexPrompt);
   });
-  if (!r.ok) return { ok: false, text: `Ollama HTTP ${r.status}` };
-  const j = await r.json();
-  const text = (j.message?.content || "").trim();
-  return text ? { ok: true, text: header + text } : { ok: false, text: "no response" };
+}
+
+function runPrimary(prompt, opts = {}) {
+  if (currentProvider() === "codex") {
+    return runCodex(prompt, opts.lang || BOT_LANG, {
+      noHeader: true,
+      trackChild: opts.trackChild,
+      injectMemory: opts.injectMemory,
+      recordHandoff: opts.recordHandoff,
+      ...(Object.prototype.hasOwnProperty.call(opts, "sessionId") ? { sessionId: opts.sessionId } : {}),
+    });
+  }
+  return runClaude(prompt, opts.sessionId, opts);
+}
+
+// launchd 데몬은 로그인 셸(zsh)을 거치지 않아 .zshrc/brew shellenv의 PATH를 상속받지 못한다
+// (claudeBin과 동일한 이유). ollamaBin 미지정 시 흔한 설치 경로를 순서대로 탐색한다.
+function resolveOllamaBin() {
+  if (cfg.ollamaBin) return cfg.ollamaBin;
+  const candidates = ["/opt/homebrew/bin/ollama", "/usr/local/bin/ollama", "/usr/bin/ollama"];
+  return candidates.find(existsSync) || "ollama";
+}
+
+function getCliVersion(bin, kind) {
+  return new Promise((resolve) => {
+    const child = spawn(bin, ["--version"], {
+      cwd: cfg.projectDir,
+      env: { ...process.env, ...(cfg.env || {}) },
+    });
+    let output = "", settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    child.stdout.on("data", (d) => { output += d; });
+    child.stderr.on("data", (d) => { output += d; });
+    child.on("error", () => finish("unavailable"));
+    child.on("close", () => {
+      const patterns = {
+        claude: /([0-9]+\.[0-9]+\.[0-9]+)/,
+        codex: /codex(?:-cli)?\s+v?([0-9]+\.[0-9]+\.[0-9]+)/i,
+        ollama: /(?:client\s+version\s+is|ollama\s+version\s+is)\s+v?([0-9]+\.[0-9]+\.[0-9]+)/i,
+      };
+      finish(output.match(patterns[kind])?.[1] || "unknown");
+    });
+    const timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+      finish("unavailable");
+    }, 3000);
+  });
+}
+
+async function getCliVersions() {
+  const [claude, codex, ollama] = await Promise.all([
+    getCliVersion(cfg.claudeBin || "claude", "claude"),
+    getCliVersion(resolveCodexBin(), "codex"),
+    getCliVersion(resolveOllamaBin(), "ollama"),
+  ]);
+  return { claude, codex, ollama };
+}
+
+// ── Ollama 폴백 실행 ──────────────────────────────────────────────────────
+// `ollama launch claude` 로 Claude Code CLI를 로컬 모델로 구동한다. opts.sessionId가
+// 있으면 `--resume`으로 기존 대화 맥락을 그대로 이어받는다(HTTP api/chat 방식과 달리 세션 유지).
+// 터미널 검증: ollama launch claude --model <m> --yes -- -p -- <prompt> --resume <id>
+function runOllama(prompt, lang = "en", opts = {}) {
+  return new Promise((resolve) => {
+    const header = opts.noHeader ? "" : (lang === "ko"
+      ? "🌙 Claude가 잠시 쉬고 있어요. 그동안 저(로컬 모델)는 복귀하면 Claude에게 넘길 내용을 정리하는 걸 도와드릴게요 — 코딩·파일 작업은 Claude가 돌아온 뒤에요.\n\n"
+      : "🌙 Claude is resting right now. Meanwhile I (a local model) can help you jot down and organize what to hand off once it's back — coding and file work waits for Claude.\n\n");
+    const model = cfg.ollamaModel || "qwen3.5:4b";
+    const brevity = "This reply is delivered over Telegram. Be concise — short paragraphs and lists, no filler intro/summary. Reply in the user's language.";
+    // 폴백 경로에서만: Claude가 막혀 소형 로컬 모델로 대응 중임을 알리고, 코딩·도구 작업을 시도하는
+    // 대신 사용자가 Claude 복귀 후 이어갈 수 있도록 요청 정리·요약을 돕는 조수 역할을 지시한다.
+    const fallbackRole = opts.fallback
+      ? "You are a small local model standing in because Claude is temporarily unavailable (rate-limited or out of credits). Do NOT attempt coding, file edits, or tool use — you can't do those reliably. Instead, act as a note-taker: help the user capture, organize, and draft what they'll ask Claude to do once it's back. Summaries, request drafts, and tidy notes are your job."
+      : "";
+    const appendSys = [cfg.persona, brevity, fallbackRole].filter(Boolean).join("\n\n");
+    // `--` 앞은 ollama launch 플래그, 뒤는 claude 플래그로 전달된다.
+    const claudeArgs = ["--output-format", "json"];
+    if (appendSys) claudeArgs.push("--append-system-prompt", appendSys);
+    if (opts.sessionId) claudeArgs.push("--resume", opts.sessionId);
+    claudeArgs.push("-p", "--", prompt);
+    const args = ["launch", "claude", "--model", model, "--yes", "--", ...claudeArgs];
+
+    const child = spawn(resolveOllamaBin(), args, {
+      cwd: cfg.projectDir,
+      env: { ...process.env, ...(cfg.env || {}) },
+    });
+    // 로컬 4B 모델 콜드스타트는 첫 응답까지 수 분이 걸릴 수 있어 기본 타임아웃을 넉넉히 잡는다.
+    const timer = setTimeout(() => child.kill("SIGKILL"), cfg.ollamaTimeout || 360_000);
+    let out = "", err = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { err += d; });
+    child.on("error", (e) => { clearTimeout(timer); resolve({ ok: false, text: `Failed to start ollama: ${e.message}` }); });
+    child.on("close", () => {
+      clearTimeout(timer);
+      try {
+        const j = JSON.parse(out);
+        const text = (j.result ?? "").trim();
+        if (j.is_error || !text) return resolve({ ok: false, text: text || "no response" });
+        resolve({ ok: true, text: header + text, sessionId: j.session_id });
+      } catch {
+        // JSON 파싱 실패 시 원시 출력으로 폴백 (구버전 ollama·비-JSON 출력 대비)
+        const text = (out || "").trim();
+        if (text) return resolve({ ok: true, text: header + text });
+        resolve({ ok: false, text: (err || "no output").slice(0, 500) });
+      }
+    });
+  });
 }
 
 // ── 크론 스케줄러 ─────────────────────────────────────────────────────────
@@ -793,7 +1061,7 @@ async function runScheduled(job) {
   busy = true;
   const started = Date.now();
   try {
-    const res = await runClaude(job.prompt, undefined); // 새 세션 (state 미저장)
+    const res = await runPrimary(job.prompt, { sessionId: null, lang: BOT_LANG, recordHandoff: false }); // 새 세션 (state 미저장)
     // 조용한 예약 작업: 출력이 비었거나 정확히 "SKIP"이면 전송하지 않는다.
     // (예: "조건 충족 시에만 알리고, 아니면 SKIP만 출력해" 식의 조건부 알림용)
     if (res.ok) {
@@ -850,7 +1118,7 @@ async function extractCron(input, l) {
     "Reply with ONLY one line of JSON, no prose or code block: " +
     '{"cron":"0 9 * * *","prompt":"the task","label":"short name","human":"every day at 09:00"}\n\n' +
     `request: ${input}`;
-  const res = await runClaude(ask, undefined); // 새 세션 (대화 맥락과 분리)
+  const res = await runPrimary(ask, { sessionId: null, lang: l, recordHandoff: false }); // 새 세션 (대화 맥락과 분리)
   const m = res.text && res.text.match(/\{[\s\S]*\}/);
   if (!res.ok || !m) return { error: res.text || t(l, "extractFail") };
   let obj;
@@ -1011,11 +1279,30 @@ let rateLimitTimer = null;  // 리셋 시간에 큐를 드레인하는 타이머
 async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
   const secs = Math.round((Date.now() - started) / 1000);
   if (!res.ok) {
-    // Ollama 폴백: 레이트리밋·크레딧 에러이고 ollamaFallback 켜져 있으면 Ollama로 재시도
+    // Codex 폴백: 레이트리밋·크레딧 에러이고 codexFallback 켜져 있으면 reserve 전에 Codex로 재시도
+    if (currentProvider() === "claude" && cfg.codexFallback && res.canFallback && !stopping) {
+      try {
+        const cRes = await runCodex(prompt, l, { trackChild: true });
+        if (cRes.ok) {
+          if (cRes.sessionId) { state.codexSessionId = cRes.sessionId; saveState(state); }
+          await send(chatId, cRes.text); return;
+        }
+        console.error(cRes.text);
+      } catch (e) {
+        console.error("Codex fallback failed:", e.message);
+      }
+    }
+    // Ollama 폴백: Codex 미사용/실패 시, 레이트리밋·크레딧 에러이고 ollamaFallback 켜져 있으면 Ollama로 재시도
     if (cfg.ollamaFallback && res.canFallback && !stopping) {
       try {
-        const oRes = await runOllama(prompt, l);
-        if (oRes.ok) { await send(chatId, oRes.text); return; }
+        const oRes = await runOllama(prompt, l, {
+          fallback: true,
+          sessionId: currentProvider() === "claude" ? state.sessionId : undefined,
+        });
+        if (oRes.ok) {
+          if (oRes.sessionId) { state.sessionId = oRes.sessionId; saveState(state); }
+          await send(chatId, oRes.text); return;
+        }
       } catch {}
     }
     // 리셋 시간을 알면 현재 메시지를 큐 앞에 다시 넣고 타이머 설정
@@ -1039,7 +1326,7 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
     if (!stopping) await send(chatId, res.text + footer);
     // 자동 컴팩션: cache_read_input_tokens 가 임계값 초과 시 자동 /compact
     const compactThreshold = state.autoCompactThreshold ?? cfg.autoCompactThreshold ?? 100000;
-    if (compactThreshold > 0 && res.cacheTokens > compactThreshold && state.sessionId && !stopping) {
+    if (currentProvider() === "claude" && compactThreshold > 0 && res.cacheTokens > compactThreshold && state.sessionId && !stopping) {
       try {
         const cr = await runClaude("/compact", state.sessionId);
         if (cr.sessionId) { state.sessionId = cr.sessionId; saveState(state); }
@@ -1153,7 +1440,7 @@ async function handle(msg) {
     return;
   }
   if (text === "/status") {
-    const latest = await fetchLatestVersion();
+    const [latest, cliVersions] = await Promise.all([fetchLatestVersion(), getCliVersions()]);
     const versionStr = !latest || !isNewer(latest, VERSION)
       ? VERSION
       : `${VERSION} → ${latest} ✨`;
@@ -1161,9 +1448,19 @@ async function handle(msg) {
       chatId,
       t(l, "status", {
         version: versionStr,
+        provider: currentProvider(),
+        cliVersions,
         name: cfg.name || "claude-telegram-bot",
-        model: state.model || cfg.model || (l === "ko" ? "(기본값)" : "(default)"),
-        hasSession: Boolean(state.sessionId),
+        model: (currentProvider() === "codex" ? state.codexModel || cfg.codexModel : state.model || cfg.model)
+          || (l === "ko" ? "(기본값)" : "(default)"),
+        fallback: currentProvider() === "codex"
+          ? (cfg.ollamaFallback ? "Ollama" : (l === "ko" ? "꺼짐" : "off"))
+          : cfg.codexFallback
+            ? `Codex${state.codexSessionId ? (l === "ko" ? " (세션 있음)" : " (session active)") : ""}`
+            : cfg.ollamaFallback
+              ? "Ollama"
+              : (l === "ko" ? "꺼짐" : "off"),
+        hasSession: Boolean(currentProvider() === "codex" ? state.codexSessionId : state.sessionId),
         jobs: schedule.length,
         projectDir: cfg.projectDir,
         permissionMode: cfg.permissionMode || "acceptEdits",
@@ -1171,22 +1468,53 @@ async function handle(msg) {
     );
     return;
   }
-  if (text === "/model" || text.startsWith("/model ")) {
-    const arg = text.slice(6).trim();
+  if (text === "/provider" || text.startsWith("/provider ")) {
+    if (busy) {
+      await send(chatId, t(l, "busy"));
+      return;
+    }
+    const arg = text.slice(9).trim().toLowerCase();
     if (!arg) {
-      const cur = state.model || cfg.model || (l === "ko" ? "(기본값)" : "(default)");
-      await send(chatId, t(l, "modelStatus", cur, MODEL_SUGGESTIONS));
+      await send(chatId, t(l, "providerStatus", currentProvider(), DEFAULT_PROVIDER));
       return;
     }
     if (arg === "default" || arg === "reset") {
-      state.model = undefined;
+      state.provider = undefined;
       saveState(state);
-      await send(chatId, t(l, "modelReset", cfg.model || (l === "ko" ? "기본값" : "default")));
+      await send(chatId, t(l, "providerReset", DEFAULT_PROVIDER));
       return;
     }
-    state.model = arg;
+    if (!["claude", "codex"].includes(arg)) {
+      await send(chatId, t(l, "providerUsage"));
+      return;
+    }
+    state.provider = arg;
+    state.ollamaMode = false;
     saveState(state);
-    await send(chatId, t(l, "modelSet", arg));
+    await send(chatId, t(l, "providerSet", arg));
+    return;
+  }
+  if (text === "/model" || text.startsWith("/model ")) {
+    const arg = text.slice(6).trim();
+    const provider = currentProvider();
+    const modelStateKey = provider === "codex" ? "codexModel" : "model";
+    const configuredModel = provider === "codex" ? cfg.codexModel : cfg.model;
+    if (!arg) {
+      const cur = state[modelStateKey] || configuredModel || (l === "ko" ? "(기본값)" : "(default)");
+      await send(chatId, provider === "codex"
+        ? t(l, "codexModelStatus", cur)
+        : t(l, "claudeModelStatus", cur, CLAUDE_MODEL_SUGGESTIONS));
+      return;
+    }
+    if (arg === "default" || arg === "reset") {
+      state[modelStateKey] = undefined;
+      saveState(state);
+      await send(chatId, t(l, "modelReset", provider, configuredModel || (l === "ko" ? "기본값" : "default")));
+      return;
+    }
+    state[modelStateKey] = arg;
+    saveState(state);
+    await send(chatId, t(l, "modelSet", provider, arg));
     return;
   }
   if (text === "/autocompact" || text.startsWith("/autocompact ")) {
@@ -1243,6 +1571,7 @@ async function handle(msg) {
     return;
   }
   if (text === "/compact") {
+    if (currentProvider() !== "claude") { await send(chatId, t(l, "compactProviderUnsupported")); return; }
     if (!state.sessionId) { await send(chatId, t(l, "compactNoSession")); return; }
     try {
       const res = await runClaude("/compact", state.sessionId);
@@ -1257,18 +1586,26 @@ async function handle(msg) {
     return;
   }
   if (text === "/ollama") {
-    if (!cfg.ollamaFallback) { await send(chatId, t(l, "testFallbackDisabled")); return; }
+    if (!cfg.ollamaFallback) { await send(chatId, t(l, "ollamaDisabled")); return; }
     state.ollamaMode = !state.ollamaMode;
     saveState(state);
     await send(chatId, t(l, state.ollamaMode ? "ollamaOn" : "ollamaOff"));
     return;
   }
   if (text === "/testfallback") {
-    if (!cfg.ollamaFallback) { await send(chatId, t(l, "testFallbackDisabled")); return; }
-    await send(chatId, "🧪 Ollama 연결 테스트 중…");
+    if (!cfg.codexFallback && !cfg.ollamaFallback) { await send(chatId, t(l, "testFallbackDisabled")); return; }
+    await send(chatId, cfg.codexFallback ? "🧪 Codex fallback 연결 테스트 중…" : "🧪 Ollama fallback 연결 테스트 중…");
     try {
-      const res = await runOllama("Reply with exactly one sentence: Ollama fallback is working.", l);
-      if (res.ok) await send(chatId, res.text);
+      const prompt = cfg.codexFallback
+        ? "Reply with exactly one sentence: Codex fallback is working."
+        : "Reply with exactly one sentence: Ollama fallback is working.";
+      const res = cfg.codexFallback
+        ? await runCodex(prompt, l, { trackChild: true, recordHandoff: false })
+        : await runOllama(prompt, l);
+      if (res.ok) {
+        if (cfg.codexFallback && res.sessionId) { state.codexSessionId = res.sessionId; saveState(state); }
+        await send(chatId, res.text);
+      }
       else await send(chatId, t(l, "testFallbackFail", res.text));
     } catch (e) {
       await send(chatId, t(l, "testFallbackFail", e.message));
@@ -1276,7 +1613,8 @@ async function handle(msg) {
     return;
   }
   if (text === "/new") {
-    state.sessionId = undefined;
+    if (currentProvider() === "codex") state.codexSessionId = undefined;
+    else state.sessionId = undefined;
     saveState(state);
     await send(chatId, t(l, "newSession"));
     return;
@@ -1291,7 +1629,8 @@ async function handle(msg) {
     msgQueue.length = 0; // 대기 메시지도 취소
     currentChild.kill();
     if (reset) {
-      state.sessionId = prevSessionId;
+      const primarySessionKey = currentProvider() === "codex" ? "codexSessionId" : "sessionId";
+      state[primarySessionKey] = prevSessionId;
       saveState(state);
     }
     await send(chatId, t(l, reset ? "stopReset" : "stopOk"));
@@ -1373,6 +1712,7 @@ async function handle(msg) {
     // /plan <요청> — permission-mode를 강제로 plan으로 실행해 편집 없이 계획만 받고,
     // 승인 버튼을 눌러야 실제 permissionMode로 이어서 실행 (runApprovedPlan).
     if (text === "/plan" || text.startsWith("/plan ")) {
+      if (currentProvider() !== "claude") { await send(chatId, t(l, "planProviderUnsupported")); return; }
       const planReq = text.slice(5).trim();
       if (!planReq) { await send(chatId, t(l, "planUsage")); return; }
       prevSessionId = state.sessionId;
@@ -1421,18 +1761,28 @@ async function handle(msg) {
     if (meta) prompt = prompt ? `${meta}\n\n${prompt}` : meta;
     if (state.ollamaMode) {
       try {
-        const oRes = await runOllama(prompt, l, { noHeader: true });
-        if (oRes.ok) await send(chatId, oRes.text);
+        const oRes = await runOllama(prompt, l, { noHeader: true, sessionId: state.sessionId });
+        if (oRes.ok) {
+          if (oRes.sessionId) { state.sessionId = oRes.sessionId; saveState(state); }
+          await send(chatId, oRes.text);
+        }
         else await send(chatId, t(l, "testFallbackFail", oRes.text));
       } catch (e) {
         await send(chatId, t(l, "testFallbackFail", e.message));
       }
       return;
     }
-    prevSessionId = state.sessionId; // /stop --reset 복원 대상 저장
-    const res = await runClaude(prompt, state.sessionId, { modelHint: true, trackChild: true, injectMemory: true });
+    const primarySessionKey = currentProvider() === "codex" ? "codexSessionId" : "sessionId";
+    prevSessionId = state[primarySessionKey]; // /stop --reset 복원 대상 저장
+    const res = await runPrimary(prompt, {
+      sessionId: state[primarySessionKey],
+      lang: l,
+      modelHint: true,
+      trackChild: true,
+      injectMemory: true,
+    });
     if (res.sessionId) {
-      state.sessionId = res.sessionId;
+      state[primarySessionKey] = res.sessionId;
       saveState(state);
     }
     await replyWithClaudeResult(chatId, l, prompt, msg, res, started);
