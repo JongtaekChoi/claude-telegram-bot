@@ -21,6 +21,47 @@
 Claude 한도 → Codex 폴백 → codex-handoff.md → 다음 Claude 호출
 ```
 
+> ### ⚠️ 의도적으로 원격 코드 실행 도구입니다
+> 텔레그램 메시지가 호스트 머신의 코드 실행으로 이어질 수 있습니다. 처음에는
+> `permissionMode: acceptEdits`로 시작하고, 반드시 `allowedChatId`를 설정하세요. 상시 실행 전에
+> [보안](#보안)을 읽어주세요.
+
+## 3분 빠른 시작
+
+필요한 것: **Node.js 18+**, 설치·로그인된 **Claude Code `claude` CLI**, `@BotFather`에서 받은 텔레그램 봇 토큰.
+
+```sh
+npm i -g claude-telegram-bot
+claude-telegram-bot init ~/botconfigs/my-project
+```
+
+`~/botconfigs/my-project/mybot.json`을 수정합니다.
+
+```json
+{
+  "token": "BOT_TOKEN_FROM_BOTFATHER",
+  "allowedChatId": "",
+  "projectDir": "/ABSOLUTE/PATH/TO/PROJECT",
+  "claudeBin": "/ABSOLUTE/PATH/TO/claude",
+  "permissionMode": "acceptEdits"
+}
+```
+
+처음 한 번 실행해서 chat ID를 확인합니다.
+
+```sh
+claude-telegram-bot ~/botconfigs/my-project/mybot.json
+```
+
+텔레그램 봇에 아무 메시지나 보내면 봇이 `chatId`를 알려줍니다. 그 값을 `allowedChatId`에 넣고 재시작한 뒤, 이렇게 요청해보세요.
+
+```text
+테스트 돌려보고 실패한 부분 요약해줘
+```
+
+설치 없이 시험하려면 `npx claude-telegram-bot init`, `npx claude-telegram-bot`을 사용하면 됩니다.
+Claude 대신(또는 함께) Codex를 쓰려면 [설정](#설정)을 참고하세요.
+
 ## 왜 만들었나
 
 자리를 비운 사이에도 폰으로 빌드를 돌려보거나 간단한 수정을 맡기고 싶을 때가 있습니다. 그렇다고 외부에서 데스크톱에 원격 접속해서 터미널을 여는 건 번거롭죠.
@@ -359,6 +400,16 @@ Claude와 Codex의 안전 설정은 서로 다르며 `/provider` 전환 시 실�
 - 커스텀 `/명령어`는 provider 설정과 무관하게 데몬 사용자 권한으로 직접 실행됩니다.
 
 보안 이슈는 공개로 올리기보다 GitHub 이슈(민감한 내용은 메인테이너에게 비공개)로 알려주세요.
+
+## 개발
+
+```sh
+npm test
+```
+
+smoke test는 CLI 파일에 `node --check`를 실행하고, 두 바이너리가 버전을 출력하는지 확인합니다. CI는 Node 18, 20, 22에서 같은 검사를 실행합니다.
+
+최근 변경 사항은 [CHANGELOG.md](./CHANGELOG.md)를 참고하세요.
 
 ## 라이선스
 

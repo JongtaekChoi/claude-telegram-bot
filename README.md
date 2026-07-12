@@ -32,6 +32,52 @@ It runs as a **background daemon** (launchd), so there's no interactive session 
 > A message you send from Telegram is executed as a command on the machine running the bot.
 > With `permissionMode: bypassPermissions`, a one-line message can run **anything** as your user.
 
+## 3-minute quick start
+
+Prerequisites: **Node.js 18+**, the **Claude Code `claude` CLI installed and authenticated**, and a Telegram bot token from `@BotFather`.
+
+```sh
+npm i -g claude-telegram-bot
+claude-telegram-bot init ~/botconfigs/my-project
+```
+
+Edit `~/botconfigs/my-project/mybot.json`:
+
+```json
+{
+  "token": "BOT_TOKEN_FROM_BOTFATHER",
+  "allowedChatId": "",
+  "projectDir": "/ABSOLUTE/PATH/TO/PROJECT",
+  "claudeBin": "/ABSOLUTE/PATH/TO/claude",
+  "permissionMode": "acceptEdits"
+}
+```
+
+Start once to discover your chat ID:
+
+```sh
+claude-telegram-bot ~/botconfigs/my-project/mybot.json
+```
+
+Send any message to the Telegram bot. It replies with your `chatId`. Put that value into `allowedChatId`, restart the bot, then send something useful:
+
+```text
+run the tests and summarize any failures
+```
+
+For a no-install trial, use `npx claude-telegram-bot init` and `npx claude-telegram-bot` instead. To
+run Codex instead of (or alongside) Claude, see [Configuration](#configuration).
+
+## Why this exists
+
+Sometimes you are away from your desk but still want to ask a coding agent to inspect a repo, run
+tests, make a small edit, or prepare a commit. Remote desktop and SSH are heavy for that; a Telegram
+chat is enough.
+
+This project is intentionally small: a CLI/daemon that reuses the `claude` and/or `codex` CLI already
+authenticated on your machine. It is best for a Mac mini, home server, dev box, or personal VPS that
+you already trust.
+
 **Highlights**
 
 - **Zero dependencies** — just Node 18+. No npm install, no supply chain.
@@ -510,6 +556,17 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.pl
 - A Telegram bot token from `@BotFather`
 - At least one provider: authenticated Claude CLI or authenticated Codex CLI
 - Optional: Codex CLI for Codex fallback; Ollama and a downloaded model for Ollama mode/fallback
+
+## Development
+
+```sh
+npm test
+```
+
+The smoke test runs `node --check` on the CLI files and verifies both binaries can print their
+version. CI runs the same checks on Node 18, 20, and 22.
+
+See [CHANGELOG.md](./CHANGELOG.md) for recent changes.
 
 ## License
 
