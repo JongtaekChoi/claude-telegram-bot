@@ -35,6 +35,8 @@ Claude 가 파일을 만들었을 때 (`projectDir` 내 신규 파일) 텔레그
 - 세션은 그룹 전체가 공유 (팀이 같은 프로젝트 보는 용도)
 - `allowedChatId` 배열 지원으로 DM + 그룹 동시 허용 가능
 
+다중 사용자 처리(발신자 표시 / 방별 세션 분리)는 [docs/design/group-chat-multi-user.md](design/group-chat-multi-user.md) 참고.
+
 ---
 
 ## 4. 봇 간 공유 문서 (블랙보드 패턴)

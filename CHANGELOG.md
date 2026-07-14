@@ -1,10 +1,10 @@
 # Changelog
 
-## [0.4.1] - 2026-07-10
-### Changed
-- `ctb`의 provider 결정 우선순위(`--provider` → `config.provider` → `claude`)를 도움말에 명시했다.
-- `/model` 상태·설정 안내를 provider별로 분리했다. Claude에서는 모델 별칭을 제안하고, Codex에서는
-  Claude 별칭을 노출하지 않고 전체 Codex 모델 ID와 `codexModel`/CLI 기본값 사용법을 안내한다.
+## [0.4.2] - 2026-07-14
+### Added
+- 그룹 채팅에서 메시지를 보낸 사람을 `[From: 이름 (@username)]` 형태로 프롬프트에 표시한다(1:1 채팅은
+  한 명뿐이라 표시하지 않음). `busy` 중 쌓인 메시지를 한 번에 합쳐 보내는 큐 병합 시에도 줄마다 발신자를
+  구분해 표기한다 — 이전엔 마지막 발신자만 남아 앞서 온 메시지들의 발신자 정보가 유실됐었다.
 ### Fixed
 - `ctb`가 provider를 고를 때 `state.json`의 `provider`(텔레그램 `/provider`로 전환한 값)를 무시하고
   `config.provider`만 보던 버그. 텔레그램에서 `/provider codex`로 전환해둔 상태에서 `ctb`를 실행하면
@@ -13,6 +13,14 @@
   동일하게 맞췄다.
 - `ctb` 세션 종료 알림(`notifyTelegram`)이 `allowedChatId`가 배열일 때 `chat_id`에 배열을 그대로 넣어
   텔레그램 API가 `400 Bad Request`로 거부하던 버그 — 각 chat_id를 순회하며 개별 전송하도록 수정.
+- 레이트리밋으로 메시지가 reserve 큐에 쌓인 상태에서 `/provider`로 다른 provider로 전환해도 큐가 그대로
+  묶여 있던 버그 — 전환 시 예약을 즉시 풀고 새 provider로 큐를 이어서 처리하도록 수정.
+
+## [0.4.1] - 2026-07-10
+### Changed
+- `ctb`의 provider 결정 우선순위(`--provider` → `config.provider` → `claude`)를 도움말에 명시했다.
+- `/model` 상태·설정 안내를 provider별로 분리했다. Claude에서는 모델 별칭을 제안하고, Codex에서는
+  Claude 별칭을 노출하지 않고 전체 Codex 모델 ID와 `codexModel`/CLI 기본값 사용법을 안내한다.
 
 ## [0.4.0] - 2026-07-10
 ### Added

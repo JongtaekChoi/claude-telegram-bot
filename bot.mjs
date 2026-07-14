@@ -1225,8 +1225,22 @@ async function downloadAttachment(att) {
 }
 
 // ── 텔레그램 메시지 메타데이터 추출 ──────────────────────────────────────
+// 그룹 채팅에서 누가 보냈는지 표시할 때 쓰는 이름 포맷 (buildMsgMeta / drainQueue 공용)
+function formatSender(u) {
+  if (!u) return null;
+  if (u.first_name) return `${u.first_name}${u.username ? ` (@${u.username})` : ""}`;
+  return u.username ? `@${u.username}` : null;
+}
+const isGroupChat = (chat) => chat?.type === "group" || chat?.type === "supergroup";
+
 function buildMsgMeta(msg) {
   const parts = [];
+
+  // 그룹 채팅은 발신자가 여러 명일 수 있으니 표시 (1:1은 한 명뿐이라 생략, 큐 병합 메시지는 줄마다 이미 표기)
+  if (isGroupChat(msg.chat) && !msg._merged) {
+    const sender = formatSender(msg.from);
+    if (sender) parts.push(`[From: ${sender}]`);
+  }
 
   // 포워드 출처 (신규 API: forward_origin, 구버전 폴백: forward_from / forward_from_chat)
   const fo = msg.forward_origin;
@@ -1274,6 +1288,16 @@ let rateLimitUntil = null;  // 레이트 리밋 활성 시 리셋 Date — 이 �
 const pendingPlans = new Map(); // chatId → { sessionId, messageId } — /plan 승인 대기
 const PLAN_PROCEED_PROMPT = "Proceed with the plan you just approved above. Implement it now.";
 let rateLimitTimer = null;  // 리셋 시간에 큐를 드레인하는 타이머
+
+// 한도에 걸린 provider에서 다른 provider로 전환하면 예약을 기다릴 이유가 없다.
+// 기존 실패 메시지를 포함한 대기열을 새 provider로 즉시 이어서 처리한다.
+function resumeQueueAfterProviderSwitch(previousProvider) {
+  if (previousProvider === currentProvider() || (!rateLimitUntil && !rateLimitTimer)) return;
+  if (rateLimitTimer) clearTimeout(rateLimitTimer);
+  rateLimitTimer = null;
+  rateLimitUntil = null;
+  if (msgQueue.length > 0) setImmediate(() => handle(drainQueue()));
+}
 
 // runClaude 결과를 답장으로 변환 — 폴백/큐잉/자동 컴팩션 처리. handle()과 /plan 승인 실행이 공유.
 async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
@@ -1479,19 +1503,23 @@ async function handle(msg) {
       return;
     }
     if (arg === "default" || arg === "reset") {
+      const previousProvider = currentProvider();
       state.provider = undefined;
       saveState(state);
       await send(chatId, t(l, "providerReset", DEFAULT_PROVIDER));
+      resumeQueueAfterProviderSwitch(previousProvider);
       return;
     }
     if (!["claude", "codex"].includes(arg)) {
       await send(chatId, t(l, "providerUsage"));
       return;
     }
+    const previousProvider = currentProvider();
     state.provider = arg;
     state.ollamaMode = false;
     saveState(state);
     await send(chatId, t(l, "providerSet", arg));
+    resumeQueueAfterProviderSwitch(previousProvider);
     return;
   }
   if (text === "/model" || text.startsWith("/model ")) {
@@ -1801,11 +1829,14 @@ async function handle(msg) {
 function drainQueue() {
   if (msgQueue.length === 1) return msgQueue.shift().msg;
   const group = msgQueue.splice(0);
+  const groupChat = isGroupChat(group[0].msg.chat);
   const merged = group
     .map((item, i) => {
       const text = item.msg.text || item.msg.caption || "";
       const dt = Math.round((item.receivedAt - group[0].receivedAt) / 1000);
-      return i === 0 ? `[1] ${text}` : `[${i + 1}, +${dt}s] ${text}`;
+      const label = i === 0 ? "[1]" : `[${i + 1}, +${dt}s]`;
+      const sender = groupChat ? formatSender(item.msg.from) : null;
+      return sender ? `${label} ${sender}: ${text}` : `${label} ${text}`;
     })
     .join("\n");
   // 마지막 메시지 필드만 남기면 앞서 온 메시지의 사진/첨부가 유실되므로, 전체 첨부를 순서대로 모아 둠
@@ -1818,6 +1849,8 @@ function drainQueue() {
     ...group[group.length - 1].msg,
     text: merged,
     caption: undefined,
+    // 줄마다 발신자를 이미 표기했으니 buildMsgMeta의 단일 [From: ] 태그(마지막 발신자 기준)는 중복이라 생략
+    _merged: groupChat || undefined,
     _mediaGroup: fileIds.length ? fileIds : undefined,
   };
 }
