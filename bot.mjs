@@ -199,6 +199,10 @@ const STR = {
       `⚠️ Restart canceled due to a syntax error (bot still running):\n${err}`,
     restartOk: "✅ Syntax OK · restarting… (a supervisor relaunches it, ~10s with launchd)",
     restartDone: (n) => `✅ Restarted · ${n} scheduled task(s) active`,
+    restartInterrupted: (n) =>
+      `♻️ The bot was restarted from another room — the task running here was interrupted` +
+      (n ? ` and ${n} queued message(s) were dropped.` : ".") +
+      `\nSend it again once the bot is back (~10s).`,
     attachFail: (m) => `⚠️ Failed to handle attachment: ${m}`,
     botError: (m) => `Bot error: ${m}`,
     scheduledError: (m) => `⏰ Scheduled task error: ${m}`,
@@ -298,6 +302,10 @@ const STR = {
     restartSyntaxFail: (err) => `⚠️ 문법 오류로 재시작 취소(봇은 계속 실행 중):\n${err}`,
     restartOk: "✅ 문법 OK · 재시작합니다… (관리자가 다시 띄웁니다, launchd 기준 ~10초)",
     restartDone: (n) => `✅ 재시작 완료 · 예약 작업 ${n}개 활성`,
+    restartInterrupted: (n) =>
+      `♻️ 다른 방에서 봇을 재시작해 여기서 실행 중이던 작업이 중단됐습니다` +
+      (n ? ` (대기 중이던 메시지 ${n}개도 사라졌습니다).` : ".") +
+      `\n봇이 다시 뜨면(~10초) 다시 보내주세요.`,
     attachFail: (m) => `⚠️ 첨부 파일 처리 실패: ${m}`,
     botError: (m) => `봇 오류: ${m}`,
     scheduledError: (m) => `⏰ 예약 작업 오류: ${m}`,
@@ -529,6 +537,39 @@ if (state.provider && !["claude", "codex"].includes(state.provider)) {
 }
 const currentProvider = () => state.provider || DEFAULT_PROVIDER;
 
+// ── 방(chatId)별 세션 ─────────────────────────────────────────────────────
+// 같은 봇이 여러 방(DM·그룹)을 담당할 때 방마다 대화 맥락을 분리한다. Claude와 Codex 세션은
+// 서로 호환되지 않으므로 방마다 sessionId(Claude)와 codexSessionId(Codex)를 따로 저장한다.
+// provider·model·ollamaMode 같은 봇 단위 설정은 기존대로 state 최상위에 둔다(세션만 방별로 분리).
+function chatBucket(chatId) {
+  if (!state.sessions) state.sessions = {};
+  const k = String(chatId);
+  if (!state.sessions[k]) state.sessions[k] = {};
+  return state.sessions[k];
+}
+const sidKey = (provider = currentProvider()) => (provider === "codex" ? "codexSessionId" : "sessionId");
+function getSid(chatId, provider = currentProvider()) {
+  return chatBucket(chatId)[sidKey(provider)];
+}
+function setSid(chatId, id, provider = currentProvider()) {
+  chatBucket(chatId)[sidKey(provider)] = id;
+}
+
+// 구버전(전역 단일 세션) → 방별 세션 마이그레이션. 어느 방의 세션인지 알 수 없으므로 주(primary)
+// 방(allowedIds[0], 보통 소유자 DM)으로 옮긴다. allowedChatId 미설정 시엔 메시지 처리 자체가
+// 안 되므로 그대로 두고, chatId가 생긴 뒤 재시작 때 이관된다.
+if (!state.sessions && (state.sessionId || state.codexSessionId)) {
+  const primary = allowedIds[0];
+  if (primary) {
+    state.sessions = { [primary]: {} };
+    if (state.sessionId) state.sessions[primary].sessionId = state.sessionId;
+    if (state.codexSessionId) state.sessions[primary].codexSessionId = state.codexSessionId;
+    delete state.sessionId;
+    delete state.codexSessionId;
+    saveState(state);
+  }
+}
+
 // ── 텔레그램 헬퍼 ─────────────────────────────────────────────────────────
 async function tg(method, body) {
   const r = await fetch(`${TG}/${method}`, {
@@ -738,7 +779,7 @@ function runClaude(prompt, sessionId, opts = {}) {
       cwd: cfg.projectDir,
       env: { ...process.env, ...(cfg.env || {}) },
     });
-    if (opts.trackChild) currentChild = child; // /stop 에서 kill 가능하도록 노출
+    if (opts.trackChild) opts.trackChild.child = child; // /stop 에서 kill 가능하도록 방 런타임에 노출
 
     let out = "",
       err = "";
@@ -749,11 +790,11 @@ function runClaude(prompt, sessionId, opts = {}) {
       err += d;
     });
     child.on("error", (e) => {
-      currentChild = null;
+      if (opts.trackChild) opts.trackChild.child = null;
       resolve({ ok: false, text: `Failed to start claude: ${e.message}` });
     });
     child.on("close", (code) => {
-      currentChild = null;
+      if (opts.trackChild) opts.trackChild.child = null;
       try {
         const j = JSON.parse(out);
         const rawErr = j.result ?? "";
@@ -808,8 +849,8 @@ function resolveCodexBin() {
 }
 
 // ── Codex 폴백 실행 ──────────────────────────────────────────────────────
-// Claude와 Codex 세션은 호환되지 않는다. Codex는 별도 session id를 state.codexSessionId에
-// 저장하고, Claude 복귀 시 codex-handoff.md 요약을 시스템 프롬프트로 넘겨 맥락을 연결한다.
+// Claude와 Codex 세션은 호환되지 않는다. Codex는 별도 session id를 방별 codexSessionId에
+// 저장하고(호출부가 opts.sessionId로 넘김), Claude 복귀 시 codex-handoff.md 요약을 시스템 프롬프트로 넘겨 맥락을 연결한다.
 function runCodex(prompt, lang = "en", opts = {}) {
   return new Promise((resolve) => {
     const header = opts.noHeader ? "" : (lang === "ko" ? "🤖 Codex 폴백\n\n" : "🤖 Codex fallback\n\n");
@@ -817,9 +858,7 @@ function runCodex(prompt, lang = "en", opts = {}) {
     const model = state.codexModel || cfg.codexModel;
     const timeoutMs = cfg.codexTimeout || 600_000;
     const args = ["exec"];
-    const resumeSessionId = Object.prototype.hasOwnProperty.call(opts, "sessionId")
-      ? opts.sessionId
-      : state.codexSessionId;
+    const resumeSessionId = opts.sessionId; // 세션은 방별로 관리 — 호출부가 명시적으로 넘긴다
     let codexPrompt = prompt;
     if (!resumeSessionId && opts.injectMemory) {
       const context = [loadMemory(), cfg.persona, cfg.appendSystemPrompt].filter(Boolean).join("\n\n");
@@ -840,14 +879,14 @@ function runCodex(prompt, lang = "en", opts = {}) {
       cwd: cfg.projectDir,
       env: { ...process.env, ...(cfg.env || {}) },
     });
-    if (opts.trackChild) currentChild = child;
+    if (opts.trackChild) opts.trackChild.child = child;
 
     let settled = false;
     const finish = (value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      currentChild = null;
+      if (opts.trackChild) opts.trackChild.child = null;
       resolve(value);
     };
     const timer = setTimeout(() => {
@@ -1052,13 +1091,14 @@ function buildSchedule() {
 let schedule = buildSchedule();
 
 // 예약 작업은 사용자 대화 맥락을 오염시키지 않도록 항상 새 세션으로 독립 실행하고,
-// 결과를 allowedChatId 로 보낸다. busy 락을 공유해 사용자 요청과 직렬화됨.
+// 결과를 allowedChatId 로 보낸다. 전용 CRON_KEY 슬롯을 써 예약끼리는 직렬화하되 사용자 방과는 병렬로 돈다.
 async function runScheduled(job) {
-  if (busy || checkLocalLock()) {
+  const r = rt(CRON_KEY); // 예약 작업끼리는 직렬화하되 사용자 방과는 병렬로 돈다
+  if (r.busy || checkLocalLock()) {
     console.warn(`Skipped scheduled job (busy): ${job.cron} — ${String(job.prompt).slice(0, 40)}`);
     return;
   }
-  busy = true;
+  r.busy = true;
   const started = Date.now();
   try {
     const res = await runPrimary(job.prompt, { sessionId: null, lang: BOT_LANG, recordHandoff: false }); // 새 세션 (state 미저장)
@@ -1080,7 +1120,7 @@ async function runScheduled(job) {
   } catch (e) {
     for (const id of allowedIds) await send(id, t(BOT_LANG, "scheduledError", e.message));
   } finally {
-    busy = false;
+    r.busy = false;
   }
 }
 
@@ -1154,11 +1194,12 @@ async function handleCron(chatId, rest, l) {
       await send(chatId, t(l, "cronAddUsage"));
       return;
     }
-    if (busy) {
+    const rtc = rt(chatId);
+    if (rtc.busy) {
       await send(chatId, t(l, "busy"));
       return;
     }
-    busy = true;
+    rtc.busy = true;
     try {
       await tg("sendChatAction", { chat_id: chatId, action: "typing" });
       const r = await extractCron(input, l);
@@ -1176,7 +1217,7 @@ async function handleCron(chatId, rest, l) {
     } catch (e) {
       await send(chatId, t(l, "botError", e.message));
     } finally {
-      busy = false;
+      rtc.busy = false;
     }
     return;
   }
@@ -1277,17 +1318,46 @@ function buildMsgMeta(msg) {
 }
 
 // ── 메시지 처리 ───────────────────────────────────────────────────────────
-let busy = false;
-const msgQueue = []; // { msg, receivedAt } — busy 중 수신 메시지 대기열
+// 방(chat)별 실행 상태 — 방마다 세션이 독립이라 서로 다른 방은 동시에 실행한다.
+// busy·child·typing·prevSession·stopping·queue 를 방 단위로 들고, 한 방 안에서는 여전히 직렬화된다
+// (단일 머신이라도 CLI 프로세스는 방마다 하나씩 병렬 실행). 레이트리밋만 계정 단위라 전역.
+const chatRuntime = new Map(); // chatId → { busy, child, typing, prevSession, stopping, queue }
+function rt(chatId) {
+  const id = String(chatId);
+  let r = chatRuntime.get(id);
+  if (!r) {
+    r = { busy: false, child: null, typing: null, prevSession: null, stopping: false, queue: [] };
+    chatRuntime.set(id, r);
+  }
+  return r;
+}
+const CRON_KEY = "__cron__"; // 예약 작업 전용 실행 슬롯 (실제 chatId 와 겹치지 않음)
 const mediaGroups = new Map(); // media_group_id → { msgs, timer } — 미디어 그룹 수집 대기
-let currentChild = null;    // 실행 중인 claude child process (/stop 용)
-let currentTyping = null;   // 타이핑 인터벌 (/stop 시 정리용)
-let prevSessionId;          // /stop --reset 복원 대상
-let stopping = false;       // /stop 처리 중 오류 메시지 억제 플래그
-let rateLimitUntil = null;  // 레이트 리밋 활성 시 리셋 Date — 이 시간까지 메시지를 큐에 쌓음
 const pendingPlans = new Map(); // chatId → { sessionId, messageId } — /plan 승인 대기
 const PLAN_PROCEED_PROMPT = "Proceed with the plan you just approved above. Implement it now.";
+let rateLimitUntil = null;  // 레이트 리밋 활성 시 리셋 Date — 이 시간까지 메시지를 큐에 쌓음
 let rateLimitTimer = null;  // 리셋 시간에 큐를 드레인하는 타이머
+
+// 모든 방의 대기열을 각자 드레인 (레이트리밋 해제·provider 전환 시). 방마다 독립 실행됨.
+function drainAllQueues() {
+  for (const [id, r] of chatRuntime) if (r.queue.length > 0) setImmediate(() => handle(drainQueue(id)));
+}
+// /restart 는 프로세스를 통째로 내리므로 방별 격리와 무관하게 다른 방의 작업·대기열까지 같이 죽는다.
+// 요청한 방은 restartOk 로 이미 알고 있으니 빼고, 실제로 잃을 게 있는 방(실행 중이거나 큐가 쌓인 방)에만
+// 알린다 — 재시작은 배포 경로라 잦아서, 놀고 있는 방까지 부르면 그냥 소음이 된다.
+async function notifyRestartInterrupted(requesterId) {
+  const me = String(requesterId);
+  for (const [id, r] of chatRuntime) {
+    if (id === me || id === CRON_KEY) continue;
+    if (!r.busy && !r.queue.length) continue;
+    await send(id, t(BOT_LANG, "restartInterrupted", r.queue.length)).catch(() => {});
+  }
+}
+function totalQueued() {
+  let n = 0;
+  for (const r of chatRuntime.values()) n += r.queue.length;
+  return n;
+}
 
 // 한도에 걸린 provider에서 다른 provider로 전환하면 예약을 기다릴 이유가 없다.
 // 기존 실패 메시지를 포함한 대기열을 새 provider로 즉시 이어서 처리한다.
@@ -1296,19 +1366,20 @@ function resumeQueueAfterProviderSwitch(previousProvider) {
   if (rateLimitTimer) clearTimeout(rateLimitTimer);
   rateLimitTimer = null;
   rateLimitUntil = null;
-  if (msgQueue.length > 0) setImmediate(() => handle(drainQueue()));
+  drainAllQueues();
 }
 
 // runClaude 결과를 답장으로 변환 — 폴백/큐잉/자동 컴팩션 처리. handle()과 /plan 승인 실행이 공유.
 async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
+  const r = rt(chatId);
   const secs = Math.round((Date.now() - started) / 1000);
   if (!res.ok) {
     // Codex 폴백: 레이트리밋·크레딧 에러이고 codexFallback 켜져 있으면 reserve 전에 Codex로 재시도
-    if (currentProvider() === "claude" && cfg.codexFallback && res.canFallback && !stopping) {
+    if (currentProvider() === "claude" && cfg.codexFallback && res.canFallback && !r.stopping) {
       try {
-        const cRes = await runCodex(prompt, l, { trackChild: true });
+        const cRes = await runCodex(prompt, l, { trackChild: r, sessionId: getSid(chatId, "codex") });
         if (cRes.ok) {
-          if (cRes.sessionId) { state.codexSessionId = cRes.sessionId; saveState(state); }
+          if (cRes.sessionId) { setSid(chatId, cRes.sessionId, "codex"); saveState(state); }
           await send(chatId, cRes.text); return;
         }
         console.error(cRes.text);
@@ -1317,43 +1388,43 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
       }
     }
     // Ollama 폴백: Codex 미사용/실패 시, 레이트리밋·크레딧 에러이고 ollamaFallback 켜져 있으면 Ollama로 재시도
-    if (cfg.ollamaFallback && res.canFallback && !stopping) {
+    if (cfg.ollamaFallback && res.canFallback && !r.stopping) {
       try {
         const oRes = await runOllama(prompt, l, {
           fallback: true,
-          sessionId: currentProvider() === "claude" ? state.sessionId : undefined,
+          sessionId: currentProvider() === "claude" ? getSid(chatId, "claude") : undefined,
         });
         if (oRes.ok) {
-          if (oRes.sessionId) { state.sessionId = oRes.sessionId; saveState(state); }
+          if (oRes.sessionId) { setSid(chatId, oRes.sessionId, "claude"); saveState(state); }
           await send(chatId, oRes.text); return;
         }
       } catch {}
     }
     // 리셋 시간을 알면 현재 메시지를 큐 앞에 다시 넣고 타이머 설정
     let autoRetryMsg = "";
-    if (res.resetAt && !stopping) {
-      msgQueue.unshift({ msg, receivedAt: Date.now() });
+    if (res.resetAt && !r.stopping) {
+      r.queue.unshift({ msg, receivedAt: Date.now() });
       rateLimitUntil = res.resetAt;
       if (rateLimitTimer) clearTimeout(rateLimitTimer);
       rateLimitTimer = setTimeout(() => {
         rateLimitTimer = null;
         rateLimitUntil = null;
-        if (msgQueue.length > 0) handle(drainQueue());
+        drainAllQueues();
       }, Math.max(res.resetAt - Date.now(), 1000));
       const timeStr = res.resetAt.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
       autoRetryMsg = "\n\n" + t(l, "reserveAuto", timeStr);
     }
     const errMsg = res.text === "contextTooLong" ? t(l, "contextTooLong") : `⚠️ ${res.text}${autoRetryMsg}`;
-    if (!stopping) await send(chatId, errMsg);
+    if (!r.stopping) await send(chatId, errMsg);
   } else {
     const footer = `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`;
-    if (!stopping) await send(chatId, res.text + footer);
+    if (!r.stopping) await send(chatId, res.text + footer);
     // 자동 컴팩션: cache_read_input_tokens 가 임계값 초과 시 자동 /compact
     const compactThreshold = state.autoCompactThreshold ?? cfg.autoCompactThreshold ?? 100000;
-    if (currentProvider() === "claude" && compactThreshold > 0 && res.cacheTokens > compactThreshold && state.sessionId && !stopping) {
+    if (currentProvider() === "claude" && compactThreshold > 0 && res.cacheTokens > compactThreshold && getSid(chatId, "claude") && !r.stopping) {
       try {
-        const cr = await runClaude("/compact", state.sessionId);
-        if (cr.sessionId) { state.sessionId = cr.sessionId; saveState(state); }
+        const cr = await runClaude("/compact", getSid(chatId, "claude"));
+        if (cr.sessionId) { setSid(chatId, cr.sessionId, "claude"); saveState(state); }
         if (cr.ok !== false) await send(chatId, t(l, "autoCompact"));
       } catch {}
     }
@@ -1365,43 +1436,44 @@ async function runApprovedPlan(chatId, l) {
   const pending = pendingPlans.get(chatId);
   pendingPlans.delete(chatId);
   // /new 등으로 세션이 바뀌었으면 이 계획은 더 이상 유효하지 않음
-  if (!pending || pending.sessionId !== state.sessionId) {
+  if (!pending || pending.sessionId !== getSid(chatId, "claude")) {
     await send(chatId, t(l, "planNoPending"));
     return;
   }
-  if (busy) {
-    msgQueue.push({ msg: { chat: { id: chatId }, text: PLAN_PROCEED_PROMPT }, receivedAt: Date.now() });
-    await send(chatId, t(l, "queued", msgQueue.length));
+  const r = rt(chatId);
+  if (r.busy) {
+    r.queue.push({ msg: { chat: { id: chatId }, text: PLAN_PROCEED_PROMPT }, receivedAt: Date.now() });
+    await send(chatId, t(l, "queued", r.queue.length));
     return;
   }
   if (checkLocalLock()) {
     await send(chatId, t(l, "localBusy"));
     return;
   }
-  busy = true;
+  r.busy = true;
   const started = Date.now();
-  currentTyping = setInterval(
+  r.typing = setInterval(
     () => tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {}),
     5000,
   );
   const syntheticMsg = { chat: { id: chatId }, text: PLAN_PROCEED_PROMPT };
   try {
     await tg("sendChatAction", { chat_id: chatId, action: "typing" });
-    prevSessionId = state.sessionId;
-    const res = await runClaude(PLAN_PROCEED_PROMPT, pending.sessionId, { modelHint: true, trackChild: true, injectMemory: true });
+    r.prevSession = { chatId: String(chatId), provider: "claude", sessionId: getSid(chatId, "claude") };
+    const res = await runClaude(PLAN_PROCEED_PROMPT, pending.sessionId, { modelHint: true, trackChild: r, injectMemory: true });
     if (res.sessionId) {
-      state.sessionId = res.sessionId;
+      setSid(chatId, res.sessionId, "claude");
       saveState(state);
     }
     await replyWithClaudeResult(chatId, l, PLAN_PROCEED_PROMPT, syntheticMsg, res, started);
   } catch (e) {
-    if (!stopping) await send(chatId, t(l, "botError", e.message));
+    if (!r.stopping) await send(chatId, t(l, "botError", e.message));
   } finally {
-    clearInterval(currentTyping);
-    currentTyping = null;
-    stopping = false;
-    busy = false;
-    if (msgQueue.length > 0 && !rateLimitUntil) setImmediate(() => handle(drainQueue()));
+    clearInterval(r.typing);
+    r.typing = null;
+    r.stopping = false;
+    r.busy = false;
+    if (r.queue.length > 0 && !rateLimitUntil) setImmediate(() => handle(drainQueue(chatId)));
   }
 }
 
@@ -1445,12 +1517,13 @@ async function handle(msg) {
     console.warn(`Ignoring unauthorized chatId ${chatId}`);
     return;
   }
+  const r = rt(chatId); // 이 방의 실행 상태 (busy·child·typing·queue…)
 
   // 레이트리밋 활성 중: 일반 메시지는 큐에 추가, 명령어는 통과
   if (rateLimitUntil && Date.now() < rateLimitUntil && !text.startsWith("/")) {
-    msgQueue.push({ msg, receivedAt: Date.now() });
+    r.queue.push({ msg, receivedAt: Date.now() });
     const timeStr = rateLimitUntil.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
-    await send(chatId, t(l, "rateLimitQueued", msgQueue.length, timeStr));
+    await send(chatId, t(l, "rateLimitQueued", r.queue.length, timeStr));
     return;
   }
 
@@ -1480,11 +1553,11 @@ async function handle(msg) {
         fallback: currentProvider() === "codex"
           ? (cfg.ollamaFallback ? "Ollama" : (l === "ko" ? "꺼짐" : "off"))
           : cfg.codexFallback
-            ? `Codex${state.codexSessionId ? (l === "ko" ? " (세션 있음)" : " (session active)") : ""}`
+            ? `Codex${getSid(chatId, "codex") ? (l === "ko" ? " (세션 있음)" : " (session active)") : ""}`
             : cfg.ollamaFallback
               ? "Ollama"
               : (l === "ko" ? "꺼짐" : "off"),
-        hasSession: Boolean(currentProvider() === "codex" ? state.codexSessionId : state.sessionId),
+        hasSession: Boolean(getSid(chatId)),
         jobs: schedule.length,
         projectDir: cfg.projectDir,
         permissionMode: cfg.permissionMode || "acceptEdits",
@@ -1493,7 +1566,7 @@ async function handle(msg) {
     return;
   }
   if (text === "/provider" || text.startsWith("/provider ")) {
-    if (busy) {
+    if (r.busy) {
       await send(chatId, t(l, "busy"));
       return;
     }
@@ -1594,15 +1667,16 @@ async function handle(msg) {
       state.restartNotify = chatId; // 재시작 후 시작 시 완료 알림
       saveState(state);
       await send(chatId, t(l, "restartOk"));
+      await notifyRestartInterrupted(chatId);
       process.exit(0);
     });
     return;
   }
   if (text === "/compact") {
     if (currentProvider() !== "claude") { await send(chatId, t(l, "compactProviderUnsupported")); return; }
-    if (!state.sessionId) { await send(chatId, t(l, "compactNoSession")); return; }
+    if (!getSid(chatId, "claude")) { await send(chatId, t(l, "compactNoSession")); return; }
     try {
-      const res = await runClaude("/compact", state.sessionId);
+      const res = await runClaude("/compact", getSid(chatId, "claude"));
       if (res.ok !== false) {
         await send(chatId, t(l, "compactOk"));
       } else {
@@ -1628,10 +1702,10 @@ async function handle(msg) {
         ? "Reply with exactly one sentence: Codex fallback is working."
         : "Reply with exactly one sentence: Ollama fallback is working.";
       const res = cfg.codexFallback
-        ? await runCodex(prompt, l, { trackChild: true, recordHandoff: false })
+        ? await runCodex(prompt, l, { trackChild: r, recordHandoff: false, sessionId: getSid(chatId, "codex") })
         : await runOllama(prompt, l);
       if (res.ok) {
-        if (cfg.codexFallback && res.sessionId) { state.codexSessionId = res.sessionId; saveState(state); }
+        if (cfg.codexFallback && res.sessionId) { setSid(chatId, res.sessionId, "codex"); saveState(state); }
         await send(chatId, res.text);
       }
       else await send(chatId, t(l, "testFallbackFail", res.text));
@@ -1641,24 +1715,22 @@ async function handle(msg) {
     return;
   }
   if (text === "/new") {
-    if (currentProvider() === "codex") state.codexSessionId = undefined;
-    else state.sessionId = undefined;
+    setSid(chatId, undefined); // 이 방의 현재 provider 세션만 초기화 (다른 방·다른 provider는 유지)
     saveState(state);
     await send(chatId, t(l, "newSession"));
     return;
   }
   if (text === "/stop" || text.startsWith("/stop ")) {
-    if (!busy || !currentChild) {
+    if (!r.busy || !r.child) {
       await send(chatId, t(l, "stopNoop"));
       return;
     }
     const reset = text.includes("--reset");
-    stopping = true;
-    msgQueue.length = 0; // 대기 메시지도 취소
-    currentChild.kill();
-    if (reset) {
-      const primarySessionKey = currentProvider() === "codex" ? "codexSessionId" : "sessionId";
-      state[primarySessionKey] = prevSessionId;
+    r.stopping = true;
+    r.queue.length = 0; // 이 방의 대기 메시지도 취소 (다른 방은 그대로)
+    r.child.kill();
+    if (reset && r.prevSession) {
+      setSid(r.prevSession.chatId, r.prevSession.sessionId, r.prevSession.provider);
       saveState(state);
     }
     await send(chatId, t(l, reset ? "stopReset" : "stopOk"));
@@ -1689,13 +1761,13 @@ async function handle(msg) {
       if (!rateLimitUntil && !rateLimitTimer) { await send(chatId, t(l, "reserveNone")); return; }
       if (rateLimitTimer) { clearTimeout(rateLimitTimer); rateLimitTimer = null; }
       rateLimitUntil = null;
-      msgQueue.length = 0;
+      for (const rr of chatRuntime.values()) rr.queue.length = 0; // 모든 방의 예약 대기열 취소
       await send(chatId, t(l, "reserveRm"));
       return;
     }
     if (!rateLimitUntil) { await send(chatId, t(l, "reserveNone")); return; }
     const timeStr = rateLimitUntil.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
-    await send(chatId, t(l, "reserveStatus", msgQueue.length, timeStr));
+    await send(chatId, t(l, "reserveStatus", totalQueued(), timeStr));
     return;
   }
 
@@ -1715,19 +1787,19 @@ async function handle(msg) {
     }
   }
 
-  if (busy) {
-    msgQueue.push({ msg, receivedAt: Date.now() });
-    await send(chatId, t(l, "queued", msgQueue.length));
+  if (r.busy) {
+    r.queue.push({ msg, receivedAt: Date.now() });
+    await send(chatId, t(l, "queued", r.queue.length));
     return;
   }
   if (checkLocalLock()) {
     await send(chatId, t(l, "localBusy"));
     return;
   }
-  busy = true;
+  r.busy = true;
   const started = Date.now();
   // 긴 작업 동안 타이핑 표시 유지
-  currentTyping = setInterval(
+  r.typing = setInterval(
     () =>
       tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(
         () => {},
@@ -1743,10 +1815,10 @@ async function handle(msg) {
       if (currentProvider() !== "claude") { await send(chatId, t(l, "planProviderUnsupported")); return; }
       const planReq = text.slice(5).trim();
       if (!planReq) { await send(chatId, t(l, "planUsage")); return; }
-      prevSessionId = state.sessionId;
-      const res = await runClaude(planReq, state.sessionId, { permissionMode: "plan", modelHint: true, trackChild: true, injectMemory: true });
+      r.prevSession = { chatId: String(chatId), provider: "claude", sessionId: getSid(chatId, "claude") };
+      const res = await runClaude(planReq, getSid(chatId, "claude"), { permissionMode: "plan", modelHint: true, trackChild: r, injectMemory: true });
       if (res.sessionId) {
-        state.sessionId = res.sessionId;
+        setSid(chatId, res.sessionId, "claude");
         saveState(state);
       }
       if (!res.ok) {
@@ -1761,7 +1833,7 @@ async function handle(msg) {
           ]],
         },
       });
-      pendingPlans.set(chatId, { sessionId: state.sessionId, messageId });
+      pendingPlans.set(chatId, { sessionId: getSid(chatId, "claude"), messageId });
       return;
     }
     let prompt = text;
@@ -1789,9 +1861,9 @@ async function handle(msg) {
     if (meta) prompt = prompt ? `${meta}\n\n${prompt}` : meta;
     if (state.ollamaMode) {
       try {
-        const oRes = await runOllama(prompt, l, { noHeader: true, sessionId: state.sessionId });
+        const oRes = await runOllama(prompt, l, { noHeader: true, sessionId: getSid(chatId, "claude") });
         if (oRes.ok) {
-          if (oRes.sessionId) { state.sessionId = oRes.sessionId; saveState(state); }
+          if (oRes.sessionId) { setSid(chatId, oRes.sessionId, "claude"); saveState(state); }
           await send(chatId, oRes.text);
         }
         else await send(chatId, t(l, "testFallbackFail", oRes.text));
@@ -1800,35 +1872,35 @@ async function handle(msg) {
       }
       return;
     }
-    const primarySessionKey = currentProvider() === "codex" ? "codexSessionId" : "sessionId";
-    prevSessionId = state[primarySessionKey]; // /stop --reset 복원 대상 저장
+    r.prevSession = { chatId: String(chatId), provider: currentProvider(), sessionId: getSid(chatId) }; // /stop --reset 복원 대상 저장
     const res = await runPrimary(prompt, {
-      sessionId: state[primarySessionKey],
+      sessionId: getSid(chatId),
       lang: l,
       modelHint: true,
-      trackChild: true,
+      trackChild: r,
       injectMemory: true,
     });
     if (res.sessionId) {
-      state[primarySessionKey] = res.sessionId;
+      setSid(chatId, res.sessionId);
       saveState(state);
     }
     await replyWithClaudeResult(chatId, l, prompt, msg, res, started);
   } catch (e) {
-    if (!stopping) await send(chatId, t(l, "botError", e.message));
+    if (!r.stopping) await send(chatId, t(l, "botError", e.message));
   } finally {
-    clearInterval(currentTyping);
-    currentTyping = null;
-    stopping = false;
-    busy = false;
-    if (msgQueue.length > 0 && !rateLimitUntil) setImmediate(() => handle(drainQueue()));
+    clearInterval(r.typing);
+    r.typing = null;
+    r.stopping = false;
+    r.busy = false;
+    if (r.queue.length > 0 && !rateLimitUntil) setImmediate(() => handle(drainQueue(chatId)));
   }
 }
 
-// 큐 전체를 꺼내 하나의 메시지로 합침. 여러 개면 번호+경과시간 붙여 병합 → Claude가 맥락 일괄 파악.
-function drainQueue() {
-  if (msgQueue.length === 1) return msgQueue.shift().msg;
-  const group = msgQueue.splice(0);
+// 한 방(chat)의 대기열 전체를 꺼내 하나로 합침. 여러 개면 번호+경과시간 붙여 병합.
+// 큐가 방별로 분리돼 있어 이 안의 메시지는 모두 같은 방·같은 세션 → 안전하게 병합 가능.
+function drainQueue(chatId) {
+  const group = rt(chatId).queue.splice(0);
+  if (group.length === 1) return group[0].msg;
   const groupChat = isGroupChat(group[0].msg.chat);
   const merged = group
     .map((item, i) => {

@@ -251,15 +251,18 @@ Core commands:
 > you a review step before a `bypassPermissions` bot touches anything. The pending approval expires
 > if you start a new session with `/new` first.
 
-> **`/stop`** kills the running provider process immediately and clears any queued messages.
-> Add `--reset` to also restore the session to the state it was in *before* the task started,
-> so the conversation history doesn't include the interrupted work.
+> **`/stop`** kills the provider process running **in that room** and clears that room's queued
+> messages. Other rooms keep running untouched. Add `--reset` to also restore the session to the
+> state it was in *before* the task started, so the conversation history doesn't include the
+> interrupted work.
 
 > **`/restart`** runs `node --check` on `bot.mjs` first and **aborts the restart if it has a syntax
 > error** (so a bad edit can't crash-loop the bot), then exits — relying on a process supervisor
 > to relaunch it. Works out of the box with the [launchd setup](#always-on-with-launchd-macos)
 > (`KeepAlive`); under a bare `node bot.mjs` with no supervisor it just stops. Your session resumes
-> after the restart (the id lives in `state.json`).
+> after the restart (the id lives in `state.json`). Unlike `/stop`, a restart is **not** room-scoped —
+> it takes the whole process down, so any task running in another room dies with it. Rooms that had a
+> task running or messages queued get told; idle rooms aren't bothered.
 
 **4) Keep it always on (optional)** — see [Always-on with launchd](#always-on-with-launchd-macos).
 
@@ -354,7 +357,10 @@ your launchd plist points them.
   absolute path is handed to the active provider (caption included as the message).
 - **Sessions**: Claude and Codex keep separate session IDs, so switching providers preserves both
   conversations. `/new` resets only the active provider's session.
-- **Message queue**: if you send a message while a task is running, it is queued (not dropped). When the task finishes, all queued messages are merged into a single prompt so Claude can resolve corrections and follow-ups in one pass (e.g. "do X" then "never mind, do Y" → handled together). Use `/stop` to cancel the running task and discard the queue.
+- **Per-chat sessions**: your DM and each group hold independent Claude/Codex sessions (`state.sessions[chatId]`); what you say in one room never carries into another room's session. Settings like `provider` and `model` are bot-wide.
+- **Group chats**: to use the bot in a group, make it a **group admin**. Telegram's privacy mode limits a non-admin bot to mentions, commands, and replies, but an admin bot receives every message so you can talk to it without @mentioning it each time (alternatively, disable privacy mode via BotFather `/setprivacy`). Everyone in the group shares that group's single session.
+- **Per-room concurrency**: rooms run **in parallel** — a long task in your DM doesn't block a group, and vice versa. Each room holds its own session, so there's nothing to serialize across them. Within a single room, messages still run one at a time (queued and merged, below). Scheduled jobs get their own slot: they serialize against each other but run alongside your rooms. A local `ctb` terminal session is still a machine-wide lock and pauses every room.
+- **Message queue**: if you send a message while that room's task is running, it is queued (not dropped). When the task finishes, queued messages **from the same room** are merged into a single prompt so Claude can resolve corrections and follow-ups in one pass (e.g. "do X" then "never mind, do Y" → handled together). Merging is only ever within a room, so it can't mix sessions. Use `/stop` to cancel that room's running task and discard its queue.
 - **Models**: `/model` follows the active provider and stores separate Claude/Codex overrides. Claude shows the `haiku`, `sonnet`, `opus`, and `fable` aliases; Codex asks for a full Codex model ID instead of displaying Claude aliases. `/model default` clears only the active provider's override.
 - **Usage-limit queue**: when a Claude Max / API rate-limit error includes a reset time, the bot first tries enabled fallbacks. If no fallback is enabled or every fallback fails, the triggering message is queued and retried at that time — just like messages queued while Claude is busy. Any additional messages you send during the limit window are also added to the queue. Use `/reserve` to check queue status and reset time, `/reserve rm` to cancel and clear the queue.
 - **Codex fallback**: set `"codexFallback": true` to run `codex exec` when Claude is rate-limited or out of credits. Codex keeps its own session in `state.codexSessionId` using `codex exec resume <id>`, but Claude and Codex sessions are not interoperable. Each successful Codex fallback appends a summary to `.claude-bot/codex-handoff.md`, and future Claude calls receive the recent handoff notes as context.
@@ -399,8 +405,10 @@ checks, reminders. Each entry runs the prompt and sends the result to `allowedCh
 - **`prompt`** (required) — the message sent to Claude. **`label`** (optional) — a short name
   shown in the reply footer and in `/cron`.
 - **Fresh session**: scheduled jobs run in their **own session** so they never pollute your
-  interactive conversation context (`state.json` stays yours). They share the single-task lock,
-  so a job is **skipped** (logged) if a task is already running when it fires.
+  interactive conversation context (`state.json` stays yours). They run in their own slot, so
+  they don't wait on your rooms (and your rooms don't wait on them) — but they serialize against
+  each other, so a job is **skipped** (logged) if another scheduled job is still running when it
+  fires.
 - **Silent jobs (conditional alerts)**: if Claude's output is **empty or exactly `SKIP`**, that run
   sends **nothing** to Telegram. To get "alert only when it matters, stay quiet otherwise," tell the
   prompt to *output just `SKIP` when the condition isn't met*. This lets even frequent jobs (e.g.
