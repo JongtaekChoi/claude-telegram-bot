@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // ctb — short-form CLI for claude-telegram-bot
 //
-// ctb [config.json] [--provider claude|codex] [...provider args]
+// ctb [config.json] [--provider claude|codex] [--chat <id>] [...provider args]
 //                                      Resume the provider's Telegram session
+//                                      (--chat picks the room; default is allowedChatId[0])
 // ctb bot [config.json]                Start the Telegram bot daemon (delegates to bot.mjs)
 // ctb init [dir]                       Create a config.json template
 // ctb --help | --version
@@ -67,7 +68,7 @@ async function main() {
     console.log(
       `ctb v${VERSION} — claude-telegram-bot short CLI\n\n` +
       `Usage:\n` +
-      `  ctb [config.json] [--provider claude|codex] [...args]\n` +
+      `  ctb [config.json] [--provider claude|codex] [--chat <id>] [...args]\n` +
       `                                Resume the provider's Telegram session\n` +
       `  ctb bot [config.json]         Start the Telegram bot daemon\n` +
       `  ctb init [dir]                Create a config.json template\n` +
@@ -81,6 +82,7 @@ async function main() {
       `  ctb planner.json              Resume planner persona session interactively\n` +
       `  ctb planner.json -p "..."     Headless with planner session\n` +
       `  ctb planner.json --provider codex  Interactive Codex with its Telegram session\n` +
+      `  ctb --chat -5360343684        Resume that group chat's session instead of the DM\n` +
       `  ctb bot                       Start the bot with default config\n` +
       `  ctb bot planner.json          Start the bot with planner config`,
     );
@@ -108,6 +110,7 @@ async function main() {
   const providerArgs = looksLikeConfig ? args.slice(1) : args;
   const cfg = JSON.parse(readFileSync(configPath, "utf8"));
   let providerOverride;
+  let chatOverride;
   const forwardedArgs = [];
   for (let i = 0; i < providerArgs.length; i++) {
     const arg = providerArgs[i];
@@ -116,6 +119,11 @@ async function main() {
       if (!providerOverride) throw new Error("--provider requires claude or codex");
     } else if (arg.startsWith("--provider=")) {
       providerOverride = arg.slice("--provider=".length);
+    } else if (arg === "--chat") {
+      chatOverride = providerArgs[++i];
+      if (!chatOverride) throw new Error("--chat requires a chat id");
+    } else if (arg.startsWith("--chat=")) {
+      chatOverride = arg.slice("--chat=".length);
     } else {
       forwardedArgs.push(arg);
     }
@@ -151,10 +159,18 @@ async function main() {
   process.on("SIGINT", () => { signalExitCode = 130; });
   process.on("SIGTERM", () => { signalExitCode = 143; });
 
+  // 세션은 방(chatId)별로 state.sessions 아래에 저장된다(bot.mjs의 chatBucket과 동일 구조).
+  // 어느 방을 이어받을지는 --chat 으로 지정하고, 없으면 allowedChatId 첫 번째(보통 소유자 DM)를
+  // 쓴다 — bot.mjs의 구버전 마이그레이션이 primary 로 고르는 방과 같은 규칙이다.
+  // 최상위 키 폴백은 0.4.3 이전 state.json 을 위한 것.
   const sessionKey = provider === "codex" ? "codexSessionId" : "sessionId";
+  const primaryChatId = chatOverride
+    ? String(chatOverride)
+    : [].concat(cfg.allowedChatId).filter(Boolean).map(String)[0];
   let sessionId;
   try {
-    sessionId = JSON.parse(readFileSync(statePath, "utf8"))[sessionKey];
+    const st = JSON.parse(readFileSync(statePath, "utf8"));
+    sessionId = (primaryChatId && st.sessions?.[primaryChatId]?.[sessionKey]) || st[sessionKey];
   } catch {}
 
   if (sessionId) {

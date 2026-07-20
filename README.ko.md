@@ -193,10 +193,13 @@ CLI를 업데이트한 뒤에는 무인 실행에 맡기기 전에 `/testfallbac
 ```sh
 ctb mybot.json --provider claude
 ctb mybot.json --provider codex
+ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 ```
 
-Claude는 `state.sessionId`, Codex는 `state.codexSessionId`를 읽어 `codex resume <세션ID>`로
-재개합니다. 두 provider의 세션은 서로 분리됩니다. `/plan` 승인 흐름은 현재
+세션은 방별로 `state.sessions[chatId]` 아래에 저장됩니다 — Claude는 `sessionId`, Codex는
+`codexSessionId`를 읽어 `codex resume <세션ID>`로 재개합니다. `ctb`는 기본적으로 `allowedChatId`의
+첫 번째 방(보통 소유자 DM)을 이어받고, `--chat <id>`로 다른 방을 지정할 수 있습니다.
+두 provider의 세션은 서로 분리됩니다. `/plan` 승인 흐름은 현재
 `provider: "claude"`에서만 지원하며, 일반 메시지·첨부 파일·예약 작업은 둘 다 지원합니다.
 
 `/provider`는 텔레그램 봇 전용 override를 state에 저장하므로 재시작 후에도 유지되지만 config 파일은

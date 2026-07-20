@@ -328,10 +328,13 @@ while an explicit flag overrides it for that invocation:
 ```sh
 ctb mybot.json --provider claude
 ctb mybot.json --provider codex
+ctb mybot.json --chat -1001234567890   # resume a specific room's session
 ```
 
-Claude resumes `state.sessionId`; Codex resumes `state.codexSessionId` with
-`codex resume <session-id>`. The sessions remain separate. The `/plan` approval workflow currently
+Sessions are stored per room at `state.sessions[chatId]` — Claude under `sessionId`, Codex under
+`codexSessionId` (resumed with `codex resume <session-id>`). `ctb` resumes the first entry of
+`allowedChatId` (usually your DM) unless `--chat <id>` names another room. The sessions remain
+separate. The `/plan` approval workflow currently
 requires `provider: "claude"`; normal messages, attachments, and scheduled jobs support both.
 
 `/provider` stores a Telegram-only override in state, survives bot restarts, and does not rewrite
