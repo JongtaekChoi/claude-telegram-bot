@@ -571,6 +571,21 @@ if (!state.sessions && (state.sessionId || state.codexSessionId)) {
 }
 
 // ── 텔레그램 헬퍼 ─────────────────────────────────────────────────────────
+let botUsername = ""; // 시작 시 getMe 로 채움
+
+// 그룹 채팅에서 텔레그램은 명령어를 `/cmd@BotName` 형태로 보낸다.
+// 내 봇을 향한 것이면 `@BotName` 을 떼어 일반 명령어 파싱에 태운다.
+// 다른 봇을 향한 명령어(`/cmd@OtherBot`)는 건드리지 않는다.
+function stripBotMention(text) {
+  if (!text.startsWith("/")) return text;
+  const sp = text.indexOf(" ");
+  const head = sp === -1 ? text : text.slice(0, sp);
+  const at = head.indexOf("@");
+  if (at === -1) return text;
+  if (botUsername && head.slice(at + 1).toLowerCase() !== botUsername.toLowerCase()) return text;
+  return head.slice(0, at) + (sp === -1 ? "" : text.slice(sp));
+}
+
 async function tg(method, body) {
   const r = await fetch(`${TG}/${method}`, {
     method: "POST",
@@ -1504,7 +1519,7 @@ async function handle(msg) {
   const chatId = msg.chat?.id;
   if (!chatId) return;
   const l = langOf(msg);
-  const text = (msg.text || msg.caption || "").trim();
+  const text = stripBotMention((msg.text || msg.caption || "").trim());
   const attachment = msg._mediaGroup ? null : pickAttachment(msg);
   if (!text && !attachment && !msg._mediaGroup?.length) return;
 
@@ -1959,6 +1974,12 @@ async function main() {
     saveState(state);
     await send(to, t(BOT_LANG, "restartDone", schedule.length)).catch(() => {});
   }
+  // 그룹에서 오는 `/cmd@BotName` 을 벗겨내려면 내 username 이 필요하다.
+  try {
+    const me = await tg("getMe");
+    if (me.ok && me.result?.username) botUsername = me.result.username;
+  } catch {}
+
   // 텔레그램 명령어 자동완성(/ 입력 시 뜨는 메뉴) 등록. 직접 파싱과 별개로 한 번 알려줘야 함.
   // 기본 목록(BOT_LANG) + 한국어 변형(language_code: ko) → ko 클라이언트는 한국어, 그 외 기본.
   // config.commands 에 정의된 커스텀 명령어도 목록에 추가.
