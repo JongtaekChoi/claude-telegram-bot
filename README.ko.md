@@ -187,8 +187,9 @@ CLI를 업데이트한 뒤에는 무인 실행에 맡기기 전에 `/testfallbac
 | `ollamaTimeout` | (선택) Ollama 응답을 기다리는 최대 시간(ms) (기본값: `360000` — 로컬 모델은 콜드스타트가 느릴 수 있음) |
 | `autoCompactThreshold` | (선택) 캐시된 입력 토큰이 이 값을 초과하면 컨텍스트 자동 압축 (기본값: `100000`). `0`이면 비활성화. 런타임에 `/autocompact`로 전환 가능(state에 저장) |
 
-같은 config로 로컬 대화형 세션도 실행할 수 있습니다. `ctb mybot.json`은 `config.provider`를 따르고,
-명시적인 옵션은 해당 실행에서만 설정을 덮어씁니다.
+같은 config로 로컬 대화형 세션도 실행할 수 있습니다. `ctb mybot.json`은 봇과 같은 provider를
+따릅니다 — `/provider` override가 state에 있으면 그 값을, 없으면 `config.provider`를 씁니다.
+명시적인 옵션은 해당 실행에서만 둘 다 덮어씁니다.
 
 ```sh
 ctb mybot.json --provider claude
@@ -202,8 +203,9 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 두 provider의 세션은 서로 분리됩니다. `/plan` 승인 흐름은 현재
 `provider: "claude"`에서만 지원하며, 일반 메시지·첨부 파일·예약 작업은 둘 다 지원합니다.
 
-`/provider`는 텔레그램 봇 전용 override를 state에 저장하므로 재시작 후에도 유지되지만 config 파일은
-수정하지 않습니다. 로컬 `ctb`는 계속 `config.provider` 또는 명시적인 `--provider` 옵션을 사용합니다.
+`/provider`는 override를 state에 저장하므로 재시작 후에도 유지되지만 config 파일은 수정하지
+않습니다. 로컬 `ctb`도 같은 override를 읽으므로 봇과 터미널이 같은 provider를 씁니다. 우선순위는
+`--provider` 옵션 → state override → `config.provider` → `claude` 입니다.
 
 `state`와 첨부 파일은 config 파일 옆 **`.claude-bot/` 숨김 폴더**에 저장됩니다(프로젝트 격리). 구버전에서 올리면 첫 시작 때 기존 `state.json`·`attachments/`를 `.claude-bot/`로 **자동 이동**합니다(무손실). 로그는 launchd plist가 가리키는 위치 그대로입니다.
 

@@ -322,8 +322,9 @@ Edit `mybot.json`:
 | `ollamaTimeout` | (optional) Milliseconds to wait for an Ollama reply before giving up (default: `360000` — local models can be slow to cold-start) |
 | `autoCompactThreshold` | (optional) Auto-compact context when cached input tokens exceed this value (default: `100000`). Set to `0` to disable. Override at runtime with `/autocompact` (persists in state). |
 
-The same config also drives local interactive sessions. `ctb mybot.json` uses `config.provider`,
-while an explicit flag overrides it for that invocation:
+The same config also drives local interactive sessions. `ctb mybot.json` follows the same provider
+as the bot — the `/provider` override in state if one is set, otherwise `config.provider` — while an
+explicit flag overrides both for that invocation:
 
 ```sh
 ctb mybot.json --provider claude
@@ -337,9 +338,9 @@ Sessions are stored per room at `state.sessions[chatId]` — Claude under `sessi
 separate. The `/plan` approval workflow currently
 requires `provider: "claude"`; normal messages, attachments, and scheduled jobs support both.
 
-`/provider` stores a Telegram-only override in state, survives bot restarts, and does not rewrite
-the config. The local `ctb` command intentionally continues to use `config.provider` or its explicit
-`--provider` flag.
+`/provider` stores an override in state, survives bot restarts, and does not rewrite the config.
+The local `ctb` command reads that same override, so the bot and your terminal stay on the same
+provider; precedence is `--provider` flag → state override → `config.provider` → `claude`.
 
 State and downloaded attachments live in a hidden **`.claude-bot/`** folder next to the config
 file, so projects stay isolated. Upgrading from an older version **auto-moves** an existing

@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+### Fixed
+- **provider 우선순위 문서가 실제 동작과 달랐던 문제.** 0.4.1에서 `ctb.mjs`가 `/provider` override
+  (`state.provider`)를 읽도록 바뀌었는데 문서는 갱신되지 않아, README(영/국문)는 "로컬 `ctb`는 계속
+  `config.provider`를 쓴다"고, `ctb --help`는 `--provider flag → config.provider → claude`라고
+  안내하고 있었다. 실제 우선순위인 `--provider` 옵션 → state override → `config.provider` → `claude`로
+  네 곳 모두 수정했다. 동작 변경은 없다(help 출력 문구만 바뀜).
+
 ## [0.4.5] - 2026-07-20
 ### Fixed
 - **로컬 `ctb`가 텔레그램 세션을 이어받지 못하던 버그(0.4.3 회귀).** 0.4.3에서 세션을 방별로 옮기며

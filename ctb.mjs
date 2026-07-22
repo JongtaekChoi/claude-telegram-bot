@@ -75,7 +75,7 @@ async function main() {
       `  ctb --help | --version\n\n` +
       `config.json defaults to $BOT_CONFIG or the package's own config.json.\n` +
       `A bare name like "planner.json" resolves relative to the package directory.\n\n` +
-      `Provider precedence: --provider flag → config.provider → claude.\n\n` +
+      `Provider precedence: --provider flag → /provider override in state → config.provider → claude.\n\n` +
       `Examples:\n` +
       `  ctb                           Interactive configured provider, continuing its session\n` +
       `  ctb -p "what did we do?"      Headless configured provider with session context\n` +
