@@ -1,6 +1,6 @@
 {
   "name": "claude-telegram-bot",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Drive Claude Code or Codex from Telegram with persistent sessions, provider switching, and zero runtime dependencies.",
   "type": "module",
   "bin": {

@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.6] - 2026-07-24
+### Added
+- **봇이 이미지를 텔레그램으로 전송.** 에이전트가 답변 끝에 `[[ctb-image: 파일명 | 캡션]]` 마커를 붙이면
+  bot.mjs가 마커를 떼고 그 파일을 사진으로 보낸다. 파일은 `projectDir/.ctb-outbox/`에서만 읽는다 —
+  마커의 값에서 basename만 취해 경로 탈출을 원천 차단하고, 실제 그 폴더 안의 파일이며 허용 확장자
+  (`png/jpg/jpeg/gif/webp`)·10MB 이하여야 하며, 폴더 밖을 가리키는 심볼릭 링크도 거부한다. 아웃박스를
+  `projectDir` 아래 둔 건 Claude와 Codex(`workspace-write` 샌드박스) 둘 다 쓰기 가능한 위치라서다.
+  전송법은 시스템 프롬프트로 provider에 자동 안내되며, `"sendImages": false`로 끌 수 있다. 나가는
+  경로는 텍스트 전용이던 것을 Node 18+ 내장 `FormData`/`Blob` 기반 `sendPhoto`로 확장했다(의존성 0 유지).
 ### Fixed
 - **provider 우선순위 문서가 실제 동작과 달랐던 문제.** 0.4.1에서 `ctb.mjs`가 `/provider` override
   (`state.provider`)를 읽도록 바뀌었는데 문서는 갱신되지 않아, README(영/국문)는 "로컬 `ctb`는 계속

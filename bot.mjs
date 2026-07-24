@@ -13,8 +13,8 @@
 // 사용자 대상 문구는 영어 기본 + 한국어(STR 테이블). 언어는 텔레그램 from.language_code 로
 // 자동 판별하고, cfg.lang 을 주면 그 언어로 고정함. 콘솔/CLI 출력은 영어 단일.
 
-import { basename, dirname, join, resolve } from "node:path";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
 import dns from "node:dns";
 import { fileURLToPath } from "node:url";
@@ -100,6 +100,7 @@ function migrateData() {
       renameSync(LEGACY_ATTACH_DIR, ATTACH_DIR);
       console.log(`Migrated attachments → ${ATTACH_DIR}`);
     }
+    if (IMAGE_SEND) mkdirSync(OUTBOX_DIR, { recursive: true }); // 에이전트가 보낼 이미지를 놓는 폴더
   } catch (e) {
     console.error("Data migration skipped:", e.message);
   }
@@ -120,6 +121,13 @@ if (!["claude", "codex"].includes(DEFAULT_PROVIDER)) {
 }
 console.log({ ...cfg, token: cfg.token ? "<redacted>" : "(none)" });
 const TG = `https://api.telegram.org/bot${cfg.token}`;
+// 이미지 전송(아웃박스): 에이전트가 답변 끝에 [[ctb-image: 파일명 | 캡션]] 마커를 붙이면
+// bot.mjs 가 마커를 떼고 그 파일을 사진으로 전송한다. 파일은 아래 전용 폴더에서만 읽으며(basename만
+// 취해 경로탈출 불가), projectDir 안에 둬서 Claude·Codex(workspace-write 샌드박스) 둘 다 쓸 수 있다.
+const IMAGE_SEND = cfg.sendImages !== false;
+const OUTBOX_DIR = join(cfg.projectDir || DATA_DIR, ".ctb-outbox");
+const OUTBOX_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+const OUTBOX_MAX_BYTES = 10 * 1024 * 1024; // 텔레그램 sendPhoto 상한(대략)
 // allowedChatId 는 문자열 또는 배열 모두 허용 (하위 호환)
 const allowedIds = []
   .concat(cfg.allowedChatId)
@@ -693,6 +701,87 @@ async function send(chatId, text, opts = {}) {
   return lastId;
 }
 
+// ── 이미지 전송(아웃박스) ──────────────────────────────────────────────────
+// multipart/form-data 로 sendPhoto (Node 18+ 내장 FormData/Blob, 의존성 0 유지).
+async function tgSendPhoto(chatId, absPath, caption) {
+  const fd = new FormData();
+  fd.append("chat_id", String(chatId));
+  if (caption) fd.append("caption", caption.slice(0, 1024));
+  fd.append("photo", new Blob([readFileSync(absPath)]), basename(absPath));
+  const r = await fetch(`${TG}/sendPhoto`, { method: "POST", body: fd });
+  return r.json();
+}
+
+// 마커의 파일명을 검증한다. basename만 취해 경로탈출을 원천 차단하고, 반드시 OUTBOX_DIR 안의
+// 실제 파일이며 허용 확장자·크기여야 한다. 실패 시 null(전송 안 함).
+function validateOutboxImage(rawName, rawCap) {
+  try {
+    const name = basename(String(rawName).trim());
+    if (!name || name.startsWith(".")) return null;
+    const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
+    if (!OUTBOX_EXT.has(ext)) { console.warn(`Outbox: unsupported type ${name}`); return null; }
+    const abs = join(OUTBOX_DIR, name);
+    if (!existsSync(abs)) { console.warn(`Outbox: file not found ${name}`); return null; }
+    const st = statSync(abs);
+    if (!st.isFile()) return null;
+    if (st.size > OUTBOX_MAX_BYTES) { console.warn(`Outbox: too large ${name} (${st.size}B)`); return null; }
+    // 심볼릭 링크로 폴더 밖을 가리키는 경우 차단
+    const realOut = realpathSync(OUTBOX_DIR);
+    const real = realpathSync(abs);
+    if (real !== realOut && !real.startsWith(realOut + sep)) { console.warn(`Outbox: escapes dir ${name}`); return null; }
+    const caption = rawCap ? String(rawCap).trim().slice(0, 1024) || undefined : undefined;
+    return { name, abs: real, caption };
+  } catch (e) {
+    console.warn("Outbox validate error:", e.message);
+    return null;
+  }
+}
+
+// 답변 텍스트에서 [[ctb-image: 파일명 | 캡션]] 마커를 뽑아내고, 마커는 텍스트에서 제거한다.
+const OUTBOX_MARKER = /\[\[ctb-image:\s*([^\]|]+?)\s*(?:\|\s*([^\]]*?))?\s*\]\]/g;
+function extractOutboxImages(text) {
+  const images = [];
+  if (!IMAGE_SEND || !text || !text.includes("[[ctb-image:")) return { text: text || "", images };
+  const clean = String(text)
+    .replace(OUTBOX_MARKER, (_m, name, cap) => {
+      const img = validateOutboxImage(name, cap);
+      if (img) images.push(img);
+      return ""; // 유효하든 아니든 마커 자체는 사용자에게 노출하지 않는다
+    })
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { text: clean, images };
+}
+
+// 에이전트 답변을 사용자에게 전달한다. 이미지 마커가 있으면 텍스트(마커 제거)를 먼저,
+// 이어서 사진을 보낸다. 마커가 없으면 기존 send() 와 완전히 동일하게 동작한다.
+async function deliver(chatId, text, opts = {}) {
+  const { text: clean, images } = extractOutboxImages(text);
+  let lastId = null;
+  // 텍스트가 남아 있거나(정상) 보낼 이미지가 없으면 텍스트를 보낸다.
+  // 이미지만 있고 본문이 빈 경우엔 "(empty response)" 버블을 만들지 않도록 텍스트 전송을 건너뛴다.
+  if (clean.trim() || images.length === 0) lastId = await send(chatId, clean, opts);
+  for (const img of images) {
+    try {
+      const r = await tgSendPhoto(chatId, img.abs, img.caption);
+      if (!r?.ok) console.error(`sendPhoto failed (${img.name}):`, r?.description);
+    } catch (e) {
+      console.error(`sendPhoto error (${img.name}):`, e.message);
+    }
+  }
+  return lastId;
+}
+
+// 에이전트에게 이미지 전송법을 알려주는 시스템 프롬프트 조각.
+function imageSendInstruction() {
+  return `To send an image to this Telegram chat: save the image file into the folder ${OUTBOX_DIR} `
+    + `(bare filename, no subfolders), then add a line at the very END of your reply in this exact form:\n`
+    + `[[ctb-image: FILENAME | optional caption]]\n`
+    + `Use only the filename (e.g. chart.png), not a path. Repeat the line for multiple images. `
+    + `Supported: png, jpg, jpeg, gif, webp, up to 10 MB each. The marker line is stripped from your `
+    + `visible reply and the file is delivered as a Telegram photo. Only do this when the user wants an image.`;
+}
+
 // ── Claude 에러 분류 ──────────────────────────────────────────────────────
 function parseResetTime(raw) {
   // ISO timestamp: 2026-06-17T14:00:00Z
@@ -782,7 +871,8 @@ function runClaude(prompt, sessionId, opts = {}) {
     const handoffBlock = handoff
       ? `## CODEX FALLBACK HANDOFF\nClaude and Codex sessions are separate. The notes below summarize work Codex handled while Claude was unavailable; use them as context, not as your own prior messages.\n${handoff}`
       : null;
-    const appendSys = [memoryBlock, handoffBlock, cfg.persona, brevity, modelHint].filter(Boolean).join("\n\n");
+    const imageHint = IMAGE_SEND ? imageSendInstruction() : null;
+    const appendSys = [memoryBlock, handoffBlock, cfg.persona, brevity, modelHint, imageHint].filter(Boolean).join("\n\n");
     if (appendSys) args.push("--append-system-prompt", appendSys);
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
@@ -876,7 +966,7 @@ function runCodex(prompt, lang = "en", opts = {}) {
     const resumeSessionId = opts.sessionId; // 세션은 방별로 관리 — 호출부가 명시적으로 넘긴다
     let codexPrompt = prompt;
     if (!resumeSessionId && opts.injectMemory) {
-      const context = [loadMemory(), cfg.persona, cfg.appendSystemPrompt].filter(Boolean).join("\n\n");
+      const context = [loadMemory(), cfg.persona, cfg.appendSystemPrompt, IMAGE_SEND ? imageSendInstruction() : null].filter(Boolean).join("\n\n");
       if (context) codexPrompt = `Project instructions and persistent context:\n${context}\n\nUser request:\n${prompt}`;
     }
 
@@ -1395,7 +1485,7 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
         const cRes = await runCodex(prompt, l, { trackChild: r, sessionId: getSid(chatId, "codex") });
         if (cRes.ok) {
           if (cRes.sessionId) { setSid(chatId, cRes.sessionId, "codex"); saveState(state); }
-          await send(chatId, cRes.text); return;
+          await deliver(chatId, cRes.text); return;
         }
         console.error(cRes.text);
       } catch (e) {
@@ -1433,7 +1523,7 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
     if (!r.stopping) await send(chatId, errMsg);
   } else {
     const footer = `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`;
-    if (!r.stopping) await send(chatId, res.text + footer);
+    if (!r.stopping) await deliver(chatId, res.text + footer);
     // 자동 컴팩션: cache_read_input_tokens 가 임계값 초과 시 자동 /compact
     const compactThreshold = state.autoCompactThreshold ?? cfg.autoCompactThreshold ?? 100000;
     if (currentProvider() === "claude" && compactThreshold > 0 && res.cacheTokens > compactThreshold && getSid(chatId, "claude") && !r.stopping) {

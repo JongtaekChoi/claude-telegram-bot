@@ -359,6 +359,13 @@ your launchd plist points them.
   HTML. If conversion ever produces invalid HTML, the message is automatically resent as plain text.
 - **Attachments**: send a photo/document/voice/video and it's downloaded into `attachments/`; the
   absolute path is handed to the active provider (caption included as the message).
+- **Sending images (outgoing)**: the agent can send an image *back* to the chat. It saves the file
+  into `.ctb-outbox/` (under `projectDir`) and adds a line at the end of its reply in the form
+  `[[ctb-image: filename.png | optional caption]]`. The bot strips the marker from the visible text
+  and delivers the file as a Telegram photo (repeat the line for several images). Only bare filenames
+  inside that folder are accepted — `png/jpg/jpeg/gif/webp`, ≤10 MB; path traversal, symlinks escaping
+  the folder, and other file types are rejected. The provider learns this convention automatically via
+  the system prompt. Disable the whole feature with `"sendImages": false`.
 - **Sessions**: Claude and Codex keep separate session IDs, so switching providers preserves both
   conversations. `/new` resets only the active provider's session.
 - **Per-chat sessions**: your DM and each group hold independent Claude/Codex sessions (`state.sessions[chatId]`); what you say in one room never carries into another room's session. Settings like `provider` and `model` are bot-wide.
