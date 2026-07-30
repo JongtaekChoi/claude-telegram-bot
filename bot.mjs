@@ -147,6 +147,7 @@ const STR = {
     help: () =>
       `${cfg.name || "Claude Code Telegram bot"}\n\n` +
       "• Just send a message and Claude works in the project.\n" +
+      "• Start a message with // and the bot ignores it — leave yourself a note in the chat\n" +
       "• /new — reset conversation context (new session)\n" +
       "• /compact — compress context to free up space (keeps the session)\n" +
       "• /plan <request> — plan only (no edits), then approve/cancel to run for real\n" +
@@ -237,17 +238,17 @@ const STR = {
       `• Scheduled jobs: ${i.jobs}\n` +
       `• Project: ${i.projectDir}\n` +
       `• Permission: ${i.permissionMode}`,
-    claudeModelStatus: (cur, list) =>
+    claudeModelStatus: (cur) =>
       `🧠 Claude model: ${cur}\n` +
-      `Switch: ${list.map((x) => `/model ${x}`).join(" · ")} (or a full model id)\n` +
-      `/model default — clear the override`,
+      "Tap to switch, or send `/model <full-model-id>`",
     codexModelStatus: (cur) =>
       `🧠 Codex model: ${cur}\n` +
-      "Set: `/model <full-codex-model-id>`\n" +
-      `/model default — clear the override and use codexModel/CLI default`,
+      "Set: `/model <full-codex-model-id>`",
+    modelDefBtn: "Default",
     modelSet: (provider, m) => `🧠 ${provider} model set to: ${m}`,
     modelReset: (provider, def) => `🧠 ${provider} model reset to default (${def}).`,
-    providerStatus: (cur, def) => `🤖 Provider: ${cur}${cur === def ? " (config default)" : ` (config default: ${def})`}\nSwitch: /provider claude · /provider codex · /provider default`,
+    providerStatus: (cur, def) => `🤖 Provider: ${cur}${cur === def ? " (config default)" : ` (config default: ${def})`}`,
+    providerDefBtn: "Config default",
     providerSet: (provider) => `🤖 Default provider set to ${provider}. Existing Claude and Codex sessions are preserved separately.`,
     providerReset: (provider) => `🤖 Provider reset to the config default (${provider}).`,
     providerUsage: "Usage: /provider claude · /provider codex · /provider default",
@@ -280,6 +281,7 @@ const STR = {
     help: () =>
       `${cfg.name || "Claude Code 텔레그램 봇"}\n\n` +
       "• 그냥 메시지를 보내면 Claude가 프로젝트에서 작업합니다.\n" +
+      "• 메시지를 // 로 시작하면 봇이 무시합니다 — 채팅에 혼잣말 메모를 남기는 용도\n" +
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
       "• /compact — 컨텍스트 압축 (세션 유지, 공간 확보)\n" +
       "• /plan <요청> — 계획만 세우기 (편집 없음) → 승인/취소로 실제 실행\n" +
@@ -352,17 +354,17 @@ const STR = {
       `• 예약 작업: ${i.jobs}개\n` +
       `• 작업 폴더: ${i.projectDir}\n` +
       `• 권한 모드: ${i.permissionMode}`,
-    claudeModelStatus: (cur, list) =>
+    claudeModelStatus: (cur) =>
       `🧠 현재 Claude 모델: ${cur}\n` +
-      `전환: ${list.map((x) => `/model ${x}`).join(" · ")} (또는 전체 모델 ID)\n` +
-      `/model default — 오버라이드 해제`,
+      "버튼으로 전환하거나 `/model <전체 모델 ID>`",
     codexModelStatus: (cur) =>
       `🧠 현재 Codex 모델: ${cur}\n` +
-      "설정: `/model <Codex 전체 모델 ID>`\n" +
-      `/model default — 오버라이드를 해제하고 codexModel/CLI 기본값 사용`,
+      "설정: `/model <Codex 전체 모델 ID>`",
+    modelDefBtn: "기본값",
     modelSet: (provider, m) => `🧠 ${provider} 모델을 ${m}(으)로 설정했습니다.`,
     modelReset: (provider, def) => `🧠 ${provider} 모델을 기본값(${def})으로 되돌렸습니다.`,
-    providerStatus: (cur, def) => `🤖 현재 provider: ${cur}${cur === def ? " (config 기본값)" : ` (config 기본값: ${def})`}\n전환: /provider claude · /provider codex · /provider default`,
+    providerStatus: (cur, def) => `🤖 현재 provider: ${cur}${cur === def ? " (config 기본값)" : ` (config 기본값: ${def})`}`,
+    providerDefBtn: "config 기본값",
     providerSet: (provider) => `🤖 기본 provider를 ${provider}(으)로 변경했습니다. Claude와 Codex의 기존 세션은 각각 유지됩니다.`,
     providerReset: (provider) => `🤖 provider를 config 기본값(${provider})으로 되돌렸습니다.`,
     providerUsage: "사용법: /provider claude · /provider codex · /provider default",
@@ -1415,6 +1417,80 @@ async function handleAutoCompact(chatId, arg, l) {
   await send(chatId, t(l, "autoCompactSet", n));
 }
 
+// provider 확인·전환 — /provider 와 버튼(`pv:*`)이 모두 여기로 온다.
+// 인자 없이 부르면 현재 provider 를 보여주고 전환 버튼을 함께 보낸다 — 휴대폰에서 `/provider codex`를
+// 타이핑하는 대신 한 번 누르면 끝나도록.
+const PROVIDERS = ["claude", "codex"];
+async function handleProvider(chatId, arg, l) {
+  if (rt(chatId).busy) {
+    await send(chatId, t(l, "busy"));
+    return;
+  }
+  if (!arg) {
+    const cur = currentProvider();
+    await send(chatId, t(l, "providerStatus", cur, DEFAULT_PROVIDER), {
+      replyMarkup: {
+        inline_keyboard: [[
+          ...PROVIDERS.map((p) => ({ text: p === cur ? `✅ ${p}` : p, callback_data: `pv:${p}` })),
+          { text: t(l, "providerDefBtn"), callback_data: "pv:default" },
+        ]],
+      },
+    });
+    return;
+  }
+  const previousProvider = currentProvider();
+  if (arg === "default" || arg === "reset") {
+    state.provider = undefined;
+    saveState(state);
+    await send(chatId, t(l, "providerReset", DEFAULT_PROVIDER));
+    resumeQueueAfterProviderSwitch(previousProvider);
+    return;
+  }
+  if (!PROVIDERS.includes(arg)) {
+    await send(chatId, t(l, "providerUsage"));
+    return;
+  }
+  state.provider = arg;
+  state.ollamaMode = false;
+  saveState(state);
+  await send(chatId, t(l, "providerSet", arg));
+  resumeQueueAfterProviderSwitch(previousProvider);
+}
+
+// 모델 확인·전환 — /model 과 버튼(`md:*`)이 모두 여기로 온다.
+// Claude 는 별칭 버튼을 주고, Codex 는 전체 모델 ID 를 타이핑해야 해서 기본값 버튼만 준다.
+// 버튼에 표시 시점의 provider 를 실어 보낸다 — 누르기 전에 /provider 로 바꿔도 엉뚱한 쪽에 저장되지 않게.
+async function handleModel(chatId, arg, l, provider = currentProvider()) {
+  const modelStateKey = provider === "codex" ? "codexModel" : "model";
+  const configuredModel = provider === "codex" ? cfg.codexModel : cfg.model;
+  if (!arg) {
+    const cur = state[modelStateKey] || configuredModel || (l === "ko" ? "(기본값)" : "(default)");
+    const btn = (text, v) => ({ text, callback_data: `md:${provider}:${v}` });
+    const defRow = [btn(t(l, "modelDefBtn"), "default")];
+    await send(
+      chatId,
+      provider === "codex" ? t(l, "codexModelStatus", cur) : t(l, "claudeModelStatus", cur),
+      {
+        replyMarkup: {
+          inline_keyboard: provider === "codex"
+            ? [defRow]
+            : [CLAUDE_MODEL_SUGGESTIONS.map((m) => btn(m === cur ? `✅ ${m}` : m, m)), defRow],
+        },
+      },
+    );
+    return;
+  }
+  if (arg === "default" || arg === "reset") {
+    state[modelStateKey] = undefined;
+    saveState(state);
+    await send(chatId, t(l, "modelReset", provider, configuredModel || (l === "ko" ? "기본값" : "default")));
+    return;
+  }
+  state[modelStateKey] = arg;
+  saveState(state);
+  await send(chatId, t(l, "modelSet", provider, arg));
+}
+
 // 로컬 세션 상태·종료 — /local, /stop(봇 작업이 없을 때), localBusy 버튼이 모두 여기로 온다.
 // 종료는 항상 버튼(또는 `/local kill`)으로 한 번 더 확인받는다 — 데스크탑 작업을 끊는 일이라.
 const localKillMarkup = (l) => ({
@@ -1753,6 +1829,11 @@ async function handleCallback(cq) {
     await send(chatId, t(l, "planCancelled"));
   } else if (cq.data?.startsWith("ac:")) {
     await handleAutoCompact(chatId, cq.data.slice(3), l);
+  } else if (cq.data?.startsWith("pv:")) {
+    await handleProvider(chatId, cq.data.slice(3), l);
+  } else if (cq.data?.startsWith("md:")) {
+    const sep = cq.data.indexOf(":", 3);
+    await handleModel(chatId, cq.data.slice(sep + 1), l, cq.data.slice(3, sep));
   } else if (cq.data === "local:kill") {
     await handleLocal(chatId, "kill", l);
   }
@@ -1773,6 +1854,16 @@ async function handle(msg) {
   }
   if (!allowedIds.includes(String(chatId))) {
     console.warn(`Ignoring unauthorized chatId ${chatId}`);
+    return;
+  }
+  // 혼잣말 — `//` 로 시작하는 메시지는 봇이 무시한다. 작업 중 떠오른 딴 주제 메모를
+  // 세션에 넣지 않고 채팅에 남겨두는 용도. 👀 리액션으로 "봤고, 무시했다"만 알린다.
+  if (text.startsWith("//")) {
+    tg("setMessageReaction", {
+      chat_id: chatId,
+      message_id: msg.message_id,
+      reaction: [{ type: "emoji", emoji: "👀" }],
+    }).catch(() => {});
     return;
   }
   const r = rt(chatId); // 이 방의 실행 상태 (busy·child·typing·queue…)
@@ -1824,56 +1915,11 @@ async function handle(msg) {
     return;
   }
   if (text === "/provider" || text.startsWith("/provider ")) {
-    if (r.busy) {
-      await send(chatId, t(l, "busy"));
-      return;
-    }
-    const arg = text.slice(9).trim().toLowerCase();
-    if (!arg) {
-      await send(chatId, t(l, "providerStatus", currentProvider(), DEFAULT_PROVIDER));
-      return;
-    }
-    if (arg === "default" || arg === "reset") {
-      const previousProvider = currentProvider();
-      state.provider = undefined;
-      saveState(state);
-      await send(chatId, t(l, "providerReset", DEFAULT_PROVIDER));
-      resumeQueueAfterProviderSwitch(previousProvider);
-      return;
-    }
-    if (!["claude", "codex"].includes(arg)) {
-      await send(chatId, t(l, "providerUsage"));
-      return;
-    }
-    const previousProvider = currentProvider();
-    state.provider = arg;
-    state.ollamaMode = false;
-    saveState(state);
-    await send(chatId, t(l, "providerSet", arg));
-    resumeQueueAfterProviderSwitch(previousProvider);
+    await handleProvider(chatId, text.slice(9).trim().toLowerCase(), l);
     return;
   }
   if (text === "/model" || text.startsWith("/model ")) {
-    const arg = text.slice(6).trim();
-    const provider = currentProvider();
-    const modelStateKey = provider === "codex" ? "codexModel" : "model";
-    const configuredModel = provider === "codex" ? cfg.codexModel : cfg.model;
-    if (!arg) {
-      const cur = state[modelStateKey] || configuredModel || (l === "ko" ? "(기본값)" : "(default)");
-      await send(chatId, provider === "codex"
-        ? t(l, "codexModelStatus", cur)
-        : t(l, "claudeModelStatus", cur, CLAUDE_MODEL_SUGGESTIONS));
-      return;
-    }
-    if (arg === "default" || arg === "reset") {
-      state[modelStateKey] = undefined;
-      saveState(state);
-      await send(chatId, t(l, "modelReset", provider, configuredModel || (l === "ko" ? "기본값" : "default")));
-      return;
-    }
-    state[modelStateKey] = arg;
-    saveState(state);
-    await send(chatId, t(l, "modelSet", provider, arg));
+    await handleModel(chatId, text.slice(6).trim(), l);
     return;
   }
   if (text === "/autocompact" || text.startsWith("/autocompact ")) {
