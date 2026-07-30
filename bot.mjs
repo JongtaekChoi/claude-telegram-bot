@@ -167,6 +167,7 @@ const STR = {
       "• /id — show this chat ID\n" +
       `\nWorking dir: ${cfg.projectDir}\nPermission mode: ${cfg.permissionMode}`,
     newSession: "🆕 Started a new conversation (previous context cleared).",
+    compacting: "🗜️ Compacting… this can take a minute or two.",
     compactOk: "🗜️ Context compacted. The conversation continues with a summary.",
     compactFail: (m) => `⚠️ Compact failed: ${m}`,
     compactNoSession: "No active session to compact. Just send a message to start one.",
@@ -397,6 +398,7 @@ const STR = {
     reserveAuto: (time) => `⏰ ${time}에 자동 재시도 예약됨. 취소: /reserve rm`,
     reserveRm: "🚫 대기열을 비웠습니다. 예약 취소됨.",
     reserveNone: "예약된 재시도가 없습니다.",
+    compacting: "🗜️ 압축 중… 1~2분 걸릴 수 있습니다.",
     compactOk: "🗜️ 컨텍스트를 압축했습니다. 대화가 요약본으로 이어집니다.",
     compactFail: (m) => `⚠️ compact 실패: ${m}`,
     compactNoSession: "압축할 활성 세션이 없습니다. 메시지를 보내 세션을 시작하세요.",
@@ -1470,16 +1472,52 @@ const AUTOCOMPACT_SNOOZE_RATIO = 1.25;
 // 어중간한 값이라 그대로 보여주면 정밀해 보이지만 어차피 추정치다 — k 단위로 반올림해서 보여준다.
 const roundTokens = (n) => Math.max(Math.round(n / 1000), 1) * 1000;
 
-async function runAutoCompact(chatId, l) {
+// 실제 압축 — 락은 호출자가 잡는다. 자동 압축 트리거는 이미 handle() 안(busy=true)이라
+// 여기를 직접 부르고, 버튼·명령은 아래 runCompact() 를 거친다.
+async function doCompact(chatId, l, okKey) {
   try {
     const cr = await runClaude("/compact", getSid(chatId, "claude"));
     if (cr.sessionId) setSid(chatId, cr.sessionId, "claude");
-    state.autoCompactSnooze = undefined;
+    // 압축해도 임계값 아래로 안 내려갈 수 있다. 그때 snooze 를 지워버리면 바로 다음 턴에 또 물어서
+    // 무한 반복이 되므로, 압축 직후 컨텍스트를 기준으로 다시 걸어둔다.
+    state.autoCompactSnooze = cr.ctxTokens ? roundTokens(cr.ctxTokens * AUTOCOMPACT_SNOOZE_RATIO) : undefined;
     saveState(state);
-    if (cr.ok !== false) await send(chatId, t(l, "autoCompact"));
+    if (cr.ok !== false) await send(chatId, t(l, okKey));
     else await send(chatId, t(l, "compactFail", cr.text));
   } catch (e) {
     await send(chatId, t(l, "compactFail", e.message));
+  }
+}
+
+// 버튼(`cp:yes`)과 /compact 에서 부르는 압축 — busy 락·타이핑 표시를 handle() 과 같은 패턴으로 처리.
+// 락 없이 돌리면 압축이 도는 2분 사이에 들어온 메시지가 같은 세션에 동시 투입돼 답이 통째로 사라진다.
+async function runCompact(chatId, l, okKey) {
+  if (currentProvider() !== "claude") { await send(chatId, t(l, "compactProviderUnsupported")); return; }
+  if (!getSid(chatId, "claude")) { await send(chatId, t(l, "compactNoSession")); return; }
+  const r = rt(chatId);
+  if (r.busy) {
+    r.queue.push({ msg: { chat: { id: chatId }, text: "/compact" }, receivedAt: Date.now() });
+    await send(chatId, t(l, "queued", r.queue.length));
+    return;
+  }
+  if (checkLocalLock()) {
+    await send(chatId, t(l, "localBusy"), { replyMarkup: localKillMarkup(l) });
+    return;
+  }
+  r.busy = true;
+  r.typing = setInterval(
+    () => tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {}),
+    5000,
+  );
+  try {
+    // 압축은 오래 걸린다 — 즉시 응답이 없으면 버튼이 안 먹은 것처럼 보인다.
+    await send(chatId, t(l, "compacting"));
+    await doCompact(chatId, l, okKey);
+  } finally {
+    clearInterval(r.typing);
+    r.typing = null;
+    r.busy = false;
+    if (r.queue.length > 0 && !rateLimitUntil) setImmediate(() => handle(drainQueue(chatId)));
   }
 }
 
@@ -1820,7 +1858,7 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
     // config 의 autoCompactConfirm:false 로 예전처럼 묻지 않고 바로 압축하게 할 수 있다.
     const compactThreshold = state.autoCompactThreshold ?? cfg.autoCompactThreshold ?? 100000;
     if (currentProvider() === "claude" && compactThreshold > 0 && res.ctxTokens > compactThreshold && getSid(chatId, "claude") && !r.stopping) {
-      if (cfg.autoCompactConfirm === false) await runAutoCompact(chatId, l);
+      if (cfg.autoCompactConfirm === false) await doCompact(chatId, l, "autoCompact");
       else if (res.ctxTokens > (state.autoCompactSnooze || 0)) await askAutoCompact(chatId, res.ctxTokens, l);
     }
   }
@@ -1872,6 +1910,12 @@ async function runApprovedPlan(chatId, l) {
   }
 }
 
+// 처리한 인라인 키보드를 기억한다 — 버튼 제거(editMessageReplyMarkup)는 텔레그램 왕복이라
+// 그 사이에 다른 버튼을 또 누를 수 있다. 압축처럼 오래 걸리는 동작에서 실제로 "압축했습니다"와
+// "나중에 묻겠습니다"가 같이 뜨는 일이 있었다. 한 키보드당 한 번만 처리한다.
+const handledKeyboards = new Set();
+const HANDLED_KEYBOARD_MEMORY = 200;
+
 // 텔레그램 인라인 버튼(✅/❌) 클릭 처리
 async function handleCallback(cq) {
   const chatId = cq.message?.chat?.id;
@@ -1879,6 +1923,14 @@ async function handleCallback(cq) {
     await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
     return;
   }
+  const kbKey = `${chatId}:${cq.message.message_id}`;
+  if (handledKeyboards.has(kbKey)) {
+    await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
+    return;
+  }
+  handledKeyboards.add(kbKey);
+  if (handledKeyboards.size > HANDLED_KEYBOARD_MEMORY)
+    handledKeyboards.delete(handledKeyboards.values().next().value);
   const l = langOf({ from: cq.from });
   await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
   // 중복 클릭 방지 — 원본 메시지의 버튼 제거
@@ -1895,7 +1947,7 @@ async function handleCallback(cq) {
   } else if (cq.data?.startsWith("ac:")) {
     await handleAutoCompact(chatId, cq.data.slice(3), l);
   } else if (cq.data === "cp:yes") {
-    await runAutoCompact(chatId, l);
+    await runCompact(chatId, l, "autoCompact");
   } else if (cq.data?.startsWith("cp:later:")) {
     const n = Number(cq.data.slice(9)) || 0;
     state.autoCompactSnooze = roundTokens(n * AUTOCOMPACT_SNOOZE_RATIO);
@@ -2023,18 +2075,7 @@ async function handle(msg) {
     return;
   }
   if (text === "/compact") {
-    if (currentProvider() !== "claude") { await send(chatId, t(l, "compactProviderUnsupported")); return; }
-    if (!getSid(chatId, "claude")) { await send(chatId, t(l, "compactNoSession")); return; }
-    try {
-      const res = await runClaude("/compact", getSid(chatId, "claude"));
-      if (res.ok !== false) {
-        await send(chatId, t(l, "compactOk"));
-      } else {
-        await send(chatId, t(l, "compactFail", res.text));
-      }
-    } catch (e) {
-      await send(chatId, t(l, "compactFail", e.message));
-    }
+    await runCompact(chatId, l, "compactOk");
     return;
   }
   if (text === "/ollama") {
