@@ -244,12 +244,17 @@ const STR = {
     providerReset: (provider) => `🤖 Provider reset to the config default (${provider}).`,
     providerUsage: "Usage: /provider claude · /provider codex · /provider default",
     autoCompactStatus: (cur, def) =>
-      `🗜️ Auto-compact threshold: ${cur} tokens${cur === def ? " (default)" : ""}\n` +
-      "Set: `/autocompact <number>` · `/autocompact off` to disable · `/autocompact default` to reset",
-    autoCompactSet: (n) => `🗜️ Auto-compact threshold set to ${n} tokens.`,
+      `🗜️ Auto-compact threshold: ${fmtTokens(cur)}${cur === def ? " (default)" : ""}\n` +
+      "Tap a button below, or `/autocompact 120k`",
+    autoCompactSet: (n) => `🗜️ Auto-compact threshold set to ${fmtTokens(n)}.`,
     autoCompactOff: "🗜️ Auto-compact disabled.",
-    autoCompactReset: (def) => `🗜️ Auto-compact threshold reset to default (${def}).`,
-    autoCompactUsage: "Usage: `/autocompact <number>` · `/autocompact off` · `/autocompact default`",
+    autoCompactReset: (def) => `🗜️ Auto-compact threshold reset to default (${fmtTokens(def)}).`,
+    autoCompactUsage: "Usage: `/autocompact 120k` (or 120000) · `/autocompact off` · `/autocompact default`",
+    autoCompactRange: (n, min, max) =>
+      `⚠️ ${fmtTokens(n)} is out of range — keep it between ${fmtTokens(min)} and ${fmtTokens(max)}. ` +
+      "Use `/autocompact off` to disable it instead.",
+    autoCompactOffBtn: "Off",
+    autoCompactDefBtn: "Default",
     memoryEmpty: "No memory yet. Use `/remember <text>` to add.",
     memoryShow: (m) => `💾 Memory:\n\`\`\`\n${m}\n\`\`\``,
     memoryCleared: "🧹 Memory cleared.",
@@ -347,12 +352,17 @@ const STR = {
     providerReset: (provider) => `🤖 provider를 config 기본값(${provider})으로 되돌렸습니다.`,
     providerUsage: "사용법: /provider claude · /provider codex · /provider default",
     autoCompactStatus: (cur, def) =>
-      `🗜️ 자동 압축 임계값: ${cur} 토큰${cur === def ? " (기본값)" : ""}\n` +
-      "설정: `/autocompact <숫자>` · `/autocompact off` 로 끄기 · `/autocompact default` 로 초기화",
-    autoCompactSet: (n) => `🗜️ 자동 압축 임계값을 ${n} 토큰으로 설정했습니다.`,
+      `🗜️ 자동 압축 임계값: ${fmtTokens(cur, "ko")}${cur === def ? " (기본값)" : ""}\n` +
+      "아래 버튼을 누르거나 `/autocompact 120k`",
+    autoCompactSet: (n) => `🗜️ 자동 압축 임계값을 ${fmtTokens(n, "ko")}으로 설정했습니다.`,
     autoCompactOff: "🗜️ 자동 압축을 껐습니다.",
-    autoCompactReset: (def) => `🗜️ 자동 압축 임계값을 기본값(${def})으로 되돌렸습니다.`,
-    autoCompactUsage: "사용법: `/autocompact <숫자>` · `/autocompact off` · `/autocompact default`",
+    autoCompactReset: (def) => `🗜️ 자동 압축 임계값을 기본값(${fmtTokens(def, "ko")})으로 되돌렸습니다.`,
+    autoCompactUsage: "사용법: `/autocompact 120k` (또는 120000) · `/autocompact off` · `/autocompact default`",
+    autoCompactRange: (n, min, max) =>
+      `⚠️ ${fmtTokens(n, "ko")}은 범위를 벗어났습니다 — ${fmtTokens(min, "ko")}에서 ${fmtTokens(max, "ko")} 사이로 넣어주세요. ` +
+      "끄려면 `/autocompact off`를 쓰세요.",
+    autoCompactOffBtn: "끄기",
+    autoCompactDefBtn: "기본값",
     memoryEmpty: "저장된 메모리가 없습니다. `/remember <내용>`으로 추가하세요.",
     memoryShow: (m) => `💾 메모리:\n\`\`\`\n${m}\n\`\`\``,
     memoryCleared: "🧹 메모리를 삭제했습니다.",
@@ -387,6 +397,20 @@ const t = (l, key, ...a) => {
   const v = (STR[l] || STR.en)[key];
   return typeof v === "function" ? v(...a) : v;
 };
+
+// 토큰 수 표기·입력 — 모바일에서 0 여섯 개를 치는 건 번거로우니 120k / 1.5m 축약을 받는다.
+function fmtTokens(n, l = "en") {
+  if (!n) return l === "ko" ? "꺼짐" : "off";
+  const num =
+    n >= 1e6 && n % 1e5 === 0 ? `${n / 1e6}m` : n % 1000 === 0 ? `${n / 1000}k` : String(n);
+  return l === "ko" ? `${num} 토큰` : `${num} tokens`;
+}
+function parseTokens(raw) {
+  const m = String(raw).replace(/[,_\s]/g, "").match(/^(\d+(?:\.\d+)?)([km])?$/i);
+  if (!m) return NaN;
+  const mult = m[2] ? (m[2].toLowerCase() === "k" ? 1000 : 1000000) : 1;
+  return Math.round(Number(m[1]) * mult);
+}
 
 // /model 에서 보여줄 추천 별칭(claude CLI 가 별칭·전체 모델 ID 모두 허용).
 const CLAUDE_MODEL_SUGGESTIONS = ["fable", "opus", "sonnet", "haiku"];
@@ -1288,6 +1312,56 @@ function cronListText(l) {
   return t(l, "cronListHeader") + "\n```\n" + rows.join("\n") + "\n```\n" + t(l, "cronListFooter");
 }
 
+// /autocompact — 인자 없으면 현재값 + 프리셋 버튼, 있으면 설정. 버튼 콜백(ac:*)도 같은 경로를 탄다.
+const AUTOCOMPACT_PRESETS = ["50k", "100k", "150k", "200k"];
+// 범위 밖 값은 거절한다. 너무 크면(예: 오타로 100m) 압축이 영구히 안 걸리고,
+// 너무 작으면 매 턴 압축이 돌아 대화가 못 진행된다 — 둘 다 조용히 망가지는 쪽이라 막는다.
+const AUTOCOMPACT_MIN = 10000;
+const AUTOCOMPACT_MAX = 1000000;
+async function handleAutoCompact(chatId, arg, l) {
+  const def = cfg.autoCompactThreshold ?? 100000;
+  if (!arg) {
+    const cur = state.autoCompactThreshold ?? def;
+    const btn = (p) => ({ text: p, callback_data: `ac:${p}` });
+    await send(chatId, t(l, "autoCompactStatus", cur, def), {
+      replyMarkup: {
+        inline_keyboard: [
+          AUTOCOMPACT_PRESETS.map(btn),
+          [
+            { text: t(l, "autoCompactOffBtn"), callback_data: "ac:off" },
+            { text: t(l, "autoCompactDefBtn"), callback_data: "ac:default" },
+          ],
+        ],
+      },
+    });
+    return;
+  }
+  if (arg === "default" || arg === "reset") {
+    state.autoCompactThreshold = undefined;
+    saveState(state);
+    await send(chatId, t(l, "autoCompactReset", def));
+    return;
+  }
+  if (arg === "off") {
+    state.autoCompactThreshold = 0;
+    saveState(state);
+    await send(chatId, t(l, "autoCompactOff"));
+    return;
+  }
+  const n = parseTokens(arg);
+  if (!Number.isFinite(n) || n < 0) {
+    await send(chatId, t(l, "autoCompactUsage"));
+    return;
+  }
+  if (n < AUTOCOMPACT_MIN || n > AUTOCOMPACT_MAX) {
+    await send(chatId, t(l, "autoCompactRange", n, AUTOCOMPACT_MIN, AUTOCOMPACT_MAX));
+    return;
+  }
+  state.autoCompactThreshold = n;
+  saveState(state);
+  await send(chatId, t(l, "autoCompactSet", n));
+}
+
 async function handleCron(chatId, rest, l) {
   if (rest === "" || rest === "list") {
     await send(chatId, cronListText(l));
@@ -1602,6 +1676,8 @@ async function handleCallback(cq) {
   } else if (cq.data === "plan:no") {
     pendingPlans.delete(chatId);
     await send(chatId, t(l, "planCancelled"));
+  } else if (cq.data?.startsWith("ac:")) {
+    await handleAutoCompact(chatId, cq.data.slice(3), l);
   }
 }
 
@@ -1724,33 +1800,7 @@ async function handle(msg) {
     return;
   }
   if (text === "/autocompact" || text.startsWith("/autocompact ")) {
-    const arg = text.slice(13).trim();
-    const def = cfg.autoCompactThreshold ?? 100000;
-    if (!arg) {
-      const cur = state.autoCompactThreshold ?? def;
-      await send(chatId, t(l, "autoCompactStatus", cur, def));
-      return;
-    }
-    if (arg === "default" || arg === "reset") {
-      state.autoCompactThreshold = undefined;
-      saveState(state);
-      await send(chatId, t(l, "autoCompactReset", def));
-      return;
-    }
-    if (arg === "off") {
-      state.autoCompactThreshold = 0;
-      saveState(state);
-      await send(chatId, t(l, "autoCompactOff"));
-      return;
-    }
-    const n = Number(arg);
-    if (!Number.isFinite(n) || n < 0) {
-      await send(chatId, t(l, "autoCompactUsage"));
-      return;
-    }
-    state.autoCompactThreshold = n;
-    saveState(state);
-    await send(chatId, t(l, "autoCompactSet", n));
+    await handleAutoCompact(chatId, text.slice(13).trim(), l);
     return;
   }
   if (text === "/cron" || text.startsWith("/cron ")) {
