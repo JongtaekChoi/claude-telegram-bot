@@ -153,6 +153,7 @@ const STR = {
       "• Codex fallback can run automatically when Claude hits a limit (if enabled)\n" +
       "• /ollama — toggle Ollama chat mode (bypass Claude, use local LLM)\n" +
       "• /stop — stop the current task · /stop --reset to also roll back the session\n" +
+      "• /local — local `ctb` session status · end it from here when it's blocking the bot\n" +
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
       "• /remember <text> — save to persistent memory (survives /new)\n" +
       "• /memory — view memory · /memory clear to wipe\n" +
@@ -186,7 +187,14 @@ const STR = {
     stopOk: "🛑 Task stopped.",
     stopReset: "🛑 Task stopped and session rolled back to before the task.",
     stopNoop: "No task is running.",
-    localBusy: "💻 A local `ctb` session is active. Send a message when it's done.",
+    localBusy: "💻 A local `ctb` session is active. Send a message when it's done, or end it here.",
+    localKillBtn: "💻 End local session",
+    localActive: (pid, mins) =>
+      `💻 A local \`ctb\` session is running (PID ${pid}, started ${mins}m ago).`,
+    localNone: "No local `ctb` session is running.",
+    localKilled: (pid) => `🛑 Ended the local \`ctb\` session (PID ${pid}).`,
+    localKillFail: (pid) =>
+      `⚠️ Couldn't end PID ${pid} — it may need to be closed in the terminal.`,
     needChatId: (id) => `Add this chat ID to "allowedChatId" in config.json:\n${id}`,
     cronEmpty:
       "No scheduled tasks yet.\nAdd one in plain language, e.g. `/cron add summarize open issues every weekday at 9am`.",
@@ -278,6 +286,7 @@ const STR = {
       "• Codex 폴백 활성화 시 Claude 한도 도달 때 자동으로 대신 실행\n" +
       "• /ollama — Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM 사용)\n" +
       "• /stop — 진행 중인 작업 중단 · /stop --reset 으로 세션도 되돌리기\n" +
+      "• /local — 로컬 `ctb` 세션 상태 확인 · 봇을 막고 있으면 여기서 종료\n" +
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
       "• /remember <내용> — 퍼시스턴트 메모리에 저장 (/new 로 초기화해도 유지)\n" +
       "• /memory — 메모리 보기 · /memory clear 로 삭제\n" +
@@ -295,7 +304,13 @@ const STR = {
     stopOk: "🛑 작업을 중단했습니다.",
     stopReset: "🛑 작업을 중단하고 세션을 작업 이전으로 되돌렸습니다.",
     stopNoop: "실행 중인 작업이 없습니다.",
-    localBusy: "💻 로컬 `ctb` 세션이 활성화되어 있습니다. 종료 후 메시지를 보내주세요.",
+    localBusy: "💻 로컬 `ctb` 세션이 활성화되어 있습니다. 종료 후 메시지를 보내거나, 여기서 종료하세요.",
+    localKillBtn: "💻 로컬 세션 종료",
+    localActive: (pid, mins) =>
+      `💻 로컬 \`ctb\` 세션이 실행 중입니다 (PID ${pid}, ${mins}분 전 시작).`,
+    localNone: "실행 중인 로컬 `ctb` 세션이 없습니다.",
+    localKilled: (pid) => `🛑 로컬 \`ctb\` 세션을 종료했습니다 (PID ${pid}).`,
+    localKillFail: (pid) => `⚠️ PID ${pid} 를 종료하지 못했습니다 — 터미널에서 직접 닫아야 할 수 있습니다.`,
     needChatId: (id) => `이 채팅 ID를 config.json 의 allowedChatId 에 넣으세요:\n${id}`,
     cronEmpty:
       "등록된 예약 작업이 없습니다.\n`/cron add 매일 아침 9시에 …` 처럼 자연어로 추가해 보세요.",
@@ -423,6 +438,7 @@ const COMMANDS = {
     { command: "plan", description: "Plan only (no edits), then approve/cancel to run for real" },
     { command: "ollama", description: "Toggle Ollama chat mode (bypass Claude, use local LLM)" },
     { command: "stop", description: "Stop the current task (--reset to roll back session)" },
+    { command: "local", description: "Local ctb session status · end it from here" },
     { command: "remember", description: "Save to persistent memory (survives /new)" },
     { command: "memory", description: "View or clear persistent memory" },
     { command: "cron", description: "List / add / remove scheduled tasks" },
@@ -441,6 +457,7 @@ const COMMANDS = {
     { command: "plan", description: "계획만 세우기 (편집 없음) → 승인/취소로 실제 실행" },
     { command: "ollama", description: "Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM)" },
     { command: "stop", description: "작업 중단 (--reset 으로 세션 되돌리기)" },
+    { command: "local", description: "로컬 ctb 세션 상태 확인·종료" },
     { command: "remember", description: "퍼시스턴트 메모리에 저장 (/new 후에도 유지)" },
     { command: "memory", description: "메모리 보기·삭제" },
     { command: "cron", description: "예약 작업 보기·추가·삭제" },
@@ -470,6 +487,42 @@ function checkLocalLock() {
     try { unlinkSync(LOCAL_LOCK_PATH); } catch {} // stale — remove
     return false;
   }
+}
+// 로컬 세션 정보 — lock 파일의 PID·생성 시각(경과 분).
+function localLockInfo() {
+  if (!checkLocalLock()) return null;
+  try {
+    const pid = parseInt(readFileSync(LOCAL_LOCK_PATH, "utf8"), 10);
+    const mins = Math.max(0, Math.round((Date.now() - statSync(LOCAL_LOCK_PATH).mtimeMs) / 60000));
+    return { pid, mins };
+  } catch {
+    return null;
+  }
+}
+// 로컬 세션 강제 종료 — 밖에 나와 있는데 데스크탑에 ctb 를 켜둔 채였을 때 텔레그램에서 끝낸다.
+// ctb 는 셸 잡 컨트롤 아래에서 프로세스 그룹 리더라 그룹(-pid)에 신호를 보내야 자식 claude 까지
+// 함께 받는다 — Ctrl-C 와 같은 경로라 ctb 가 lock 정리·세션 요약 알림까지 정상 수행한다.
+// 그룹 전송이 안 되면(pgid ≠ pid) PID 로 직접 보낸다.
+async function killLocalSession() {
+  const info = localLockInfo();
+  if (!info) return { none: true };
+  const signal = (sig) => {
+    try { process.kill(-info.pid, sig); return true; } catch {}
+    try { process.kill(info.pid, sig); return true; } catch {}
+    return false;
+  };
+  if (!signal("SIGTERM")) return { ok: false, pid: info.pid };
+  // ctb 는 자식이 끝난 뒤 lock 을 지우므로 잠시 기다리고, 그래도 살아 있으면 SIGKILL.
+  for (let i = 0; i < 20; i++) {
+    if (!checkLocalLock()) return { ok: true, pid: info.pid };
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  signal("SIGKILL");
+  for (let i = 0; i < 8; i++) {
+    if (!checkLocalLock()) return { ok: true, pid: info.pid, forced: true };
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return { ok: false, pid: info.pid };
 }
 
 // ── npm 최신 버전 확인 ────────────────────────────────────────────────────
@@ -1362,6 +1415,28 @@ async function handleAutoCompact(chatId, arg, l) {
   await send(chatId, t(l, "autoCompactSet", n));
 }
 
+// 로컬 세션 상태·종료 — /local, /stop(봇 작업이 없을 때), localBusy 버튼이 모두 여기로 온다.
+// 종료는 항상 버튼(또는 `/local kill`)으로 한 번 더 확인받는다 — 데스크탑 작업을 끊는 일이라.
+const localKillMarkup = (l) => ({
+  inline_keyboard: [[{ text: t(l, "localKillBtn"), callback_data: "local:kill" }]],
+});
+async function handleLocal(chatId, arg, l) {
+  if (arg === "kill" || arg === "stop") {
+    const res = await killLocalSession();
+    await send(
+      chatId,
+      res.none ? t(l, "localNone") : res.ok ? t(l, "localKilled", res.pid) : t(l, "localKillFail", res.pid),
+    );
+    return;
+  }
+  const info = localLockInfo();
+  if (!info) {
+    await send(chatId, t(l, "localNone"));
+    return;
+  }
+  await send(chatId, t(l, "localActive", info.pid, info.mins), { replyMarkup: localKillMarkup(l) });
+}
+
 async function handleCron(chatId, rest, l) {
   if (rest === "" || rest === "list") {
     await send(chatId, cronListText(l));
@@ -1626,7 +1701,7 @@ async function runApprovedPlan(chatId, l) {
     return;
   }
   if (checkLocalLock()) {
-    await send(chatId, t(l, "localBusy"));
+    await send(chatId, t(l, "localBusy"), { replyMarkup: localKillMarkup(l) });
     return;
   }
   r.busy = true;
@@ -1678,6 +1753,8 @@ async function handleCallback(cq) {
     await send(chatId, t(l, "planCancelled"));
   } else if (cq.data?.startsWith("ac:")) {
     await handleAutoCompact(chatId, cq.data.slice(3), l);
+  } else if (cq.data === "local:kill") {
+    await handleLocal(chatId, "kill", l);
   }
 }
 
@@ -1875,8 +1952,18 @@ async function handle(msg) {
     await send(chatId, t(l, "newSession"));
     return;
   }
+  if (text === "/local" || text.startsWith("/local ")) {
+    await handleLocal(chatId, text.slice(6).trim().toLowerCase(), l);
+    return;
+  }
   if (text === "/stop" || text.startsWith("/stop ")) {
     if (!r.busy || !r.child) {
+      // 봇 작업은 없어도 로컬 ctb 가 물고 있을 수 있다 — 종료 버튼을 같이 준다.
+      const info = localLockInfo();
+      if (info) {
+        await send(chatId, t(l, "localActive", info.pid, info.mins), { replyMarkup: localKillMarkup(l) });
+        return;
+      }
       await send(chatId, t(l, "stopNoop"));
       return;
     }
@@ -1948,7 +2035,7 @@ async function handle(msg) {
     return;
   }
   if (checkLocalLock()) {
-    await send(chatId, t(l, "localBusy"));
+    await send(chatId, t(l, "localBusy"), { replyMarkup: localKillMarkup(l) });
     return;
   }
   r.busy = true;

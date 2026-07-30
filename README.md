@@ -237,6 +237,7 @@ Core commands:
 | `/plan <request>` | Produce a plan and wait for approval (Claude only) |
 | `/compact` | Compact the current context (Claude only) |
 | `/stop [--reset]` | Stop the task; optionally restore its previous session ID |
+| `/local [kill]` | Show the local `ctb` session holding the lock, and end it from Telegram |
 | `/ollama` | Toggle local Ollama chat mode |
 | `/testfallback` | Test the configured Codex or Ollama fallback |
 | `/status` | Show version, provider, CLI versions, model, fallback, and session state |
@@ -255,6 +256,13 @@ Core commands:
 > messages. Other rooms keep running untouched. Add `--reset` to also restore the session to the
 > state it was in *before* the task started, so the conversation history doesn't include the
 > interrupted work.
+
+> **`/local`** shows whether a local `ctb` terminal session holds the machine-wide lock (PID and how
+> long it has been running) with a button to end it. That's for the case where you walked away from
+> the desk with `ctb` still open and the bot answers every message with "a local session is active":
+> tapping the button sends `SIGTERM` to the session's process group — the same path as pressing
+> `Ctrl-C` in that terminal, so `ctb` releases the lock and still sends its end-of-session summary.
+> `/stop` offers the same button when no bot task is running. Use `/local kill` to skip the button.
 
 > **`/restart`** runs `node --check` on `bot.mjs` first and **aborts the restart if it has a syntax
 > error** (so a bad edit can't crash-loop the bot), then exits — relying on a process supervisor
@@ -370,7 +378,7 @@ your launchd plist points them.
   conversations. `/new` resets only the active provider's session.
 - **Per-chat sessions**: your DM and each group hold independent Claude/Codex sessions (`state.sessions[chatId]`); what you say in one room never carries into another room's session. Settings like `provider` and `model` are bot-wide.
 - **Group chats**: to use the bot in a group, make it a **group admin**. Telegram's privacy mode limits a non-admin bot to mentions, commands, and replies, but an admin bot receives every message so you can talk to it without @mentioning it each time (alternatively, disable privacy mode via BotFather `/setprivacy`). Everyone in the group shares that group's single session. Commands also work in the `/command@BotName` form Telegram appends in groups; a `/command@SomeOtherBot` addressed to a different bot is ignored.
-- **Per-room concurrency**: rooms run **in parallel** — a long task in your DM doesn't block a group, and vice versa. Each room holds its own session, so there's nothing to serialize across them. Within a single room, messages still run one at a time (queued and merged, below). Scheduled jobs get their own slot: they serialize against each other but run alongside your rooms. A local `ctb` terminal session is still a machine-wide lock and pauses every room.
+- **Per-room concurrency**: rooms run **in parallel** — a long task in your DM doesn't block a group, and vice versa. Each room holds its own session, so there's nothing to serialize across them. Within a single room, messages still run one at a time (queued and merged, below). Scheduled jobs get their own slot: they serialize against each other but run alongside your rooms. A local `ctb` terminal session is still a machine-wide lock and pauses every room — `/local` ends it from Telegram if you left it open.
 - **Message queue**: if you send a message while that room's task is running, it is queued (not dropped). When the task finishes, queued messages **from the same room** are merged into a single prompt so Claude can resolve corrections and follow-ups in one pass (e.g. "do X" then "never mind, do Y" → handled together). Merging is only ever within a room, so it can't mix sessions. Use `/stop` to cancel that room's running task and discard its queue.
 - **Models**: `/model` follows the active provider and stores separate Claude/Codex overrides. Claude shows the `haiku`, `sonnet`, `opus`, and `fable` aliases; Codex asks for a full Codex model ID instead of displaying Claude aliases. `/model default` clears only the active provider's override.
 - **Usage-limit queue**: when a Claude Max / API rate-limit error includes a reset time, the bot first tries enabled fallbacks. If no fallback is enabled or every fallback fails, the triggering message is queued and retried at that time — just like messages queued while Claude is busy. Any additional messages you send during the limit window are also added to the queue. Use `/reserve` to check queue status and reset time, `/reserve rm` to cancel and clear the queue.
