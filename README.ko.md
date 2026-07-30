@@ -4,27 +4,43 @@
 
 [![npm version](https://img.shields.io/npm/v/claude-telegram-bot.svg)](https://www.npmjs.com/package/claude-telegram-bot)
 [![npm downloads](https://img.shields.io/npm/dm/claude-telegram-bot.svg)](https://www.npmjs.com/package/claude-telegram-bot)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![license](https://img.shields.io/npm/l/claude-telegram-bot.svg)](./LICENSE)
 
 텔레그램으로 Claude Code와 Codex를 — 어디서든, 어떤 기기에서도.
 
 텔레그램 메시지를 집이나 서버의 코딩 agent가 처리하고 결과를 다시 채팅으로 보내는, 런타임 의존성 없는 백그라운드 봇입니다.
 
 ```text
-[나] → 텔레그램 → bot.mjs
-                    ├─ Claude provider → state.sessionId
-                    ├─ Codex provider  → state.codexSessionId
-                    └─ Ollama 모드·폴백
-                             ↓
-                 결과 → 텔레그램
+  📱 텔레그램                        🖥  내 머신 — 백그라운드 데몬
+  ─────────────────                  ──────────────────────────────────────
+  "테스트 돌려줘"  ────────────────▶  bot.mjs  (롱폴링, 의존성 0)
+                                       ├─ Claude  →  state.sessionId
+                                       ├─ Codex   →  state.codexSessionId
+                                       └─ Ollama     (모드 · 폴백)
+                                              │
+  "12개 통과, 1개 실패 …"  ◀──────────────────┘
 
-Claude 한도 → Codex 폴백 → codex-handoff.md → 다음 Claude 호출
+  한도에 걸리면?   Claude ─▶ Codex ─▶ codex-handoff.md ─▶ 다음 Claude 호출
 ```
+
+## 실제 화면
+
+| 일을 시킨다 | 실행 전에 승인받는다 |
+|-|-|
+| <img src="docs/images/01-chat.ko.png" width="360" alt="봇에게 테스트 실행을 시키고 요약을 받는 화면"> | <img src="docs/images/02-plan.png" width="360" alt="/plan 이 계획과 진행·취소 버튼을 보여주는 화면"> |
+| 메시지 하나가 레포에서 실제 작업이 됩니다. | `/plan` 은 읽기 전용으로 돌고 ✅ / ❌ 를 기다립니다. |
+
+| 버튼으로 provider 전환 | 봇이 무시하는 메모 |
+|-|-|
+| <img src="docs/images/03-provider.png" width="360" alt="/provider 가 claude, codex, 기본값 버튼을 보여주는 화면"> | <img src="docs/images/04-notes.png" width="360" alt="// 로 시작한 메시지에 눈 리액션만 붙은 화면"> |
+| 타이핑 없이, 현재 것은 ✅ 표시. | `//` 로 큐에 넣지 않고 메모만 남깁니다. |
 
 > ### ⚠️ 의도적으로 원격 코드 실행 도구입니다
 > 텔레그램 메시지가 호스트 머신의 코드 실행으로 이어질 수 있습니다. 처음에는
 > `permissionMode: acceptEdits`로 시작하고, 반드시 `allowedChatId`를 설정하세요. 상시 실행 전에
 > [보안](#보안)을 읽어주세요.
+
+**목차** — [빠른 시작](#3분-빠른-시작) · [왜 만들었나](#왜-만들었나) · [다른 도구와 비교](#다른-도구와-비교) · [설치](#설치--실행) · [설정](#설정) · [첫 실행](#첫-실행) · [사용 메모](#사용-메모) · [커스텀 명령어](#커스텀-명령어) · [예약 작업](#예약-작업-cron) · [여러 프로젝트 / 페르소나](#여러-프로젝트--페르소나) · [상시 실행](#상시-실행-launchd) · [보안](#보안)
 
 ## 3분 빠른 시작
 
@@ -145,6 +161,9 @@ claude-telegram-bot ~/botconfigs/myproj/mybot.json
 
 ### 호환성
 
+<details>
+<summary><b>이 릴리스가 검증된 CLI 버전</b> — Claude Code 2.1.206 · Codex 0.144.1 · Ollama 0.31.1</summary>
+
 이 봇은 CLI 옵션과 기계 판독용 출력 형식에 의존하므로 각 도구의 업데이트에 영향을 받을 수 있습니다.
 아래는 2026-07-10에 호환성 기준으로 기록한 개발 환경 버전이며 강제 고정 버전이나 모든 경로의 통과를
 보장하는 표는 아닙니다. 봇 호스트에 실제 설치된 버전은 `/status`에서 확인할 수 있습니다.
@@ -158,7 +177,15 @@ claude-telegram-bot ~/botconfigs/myproj/mybot.json
 CLI를 업데이트한 뒤에는 무인 실행에 맡기기 전에 `/testfallback`과 일반 Claude 메시지를 각각 확인하세요.
 새 환경의 버전을 기록하고 두 경로를 확인한 뒤 이 표를 갱신하는 것을 권장합니다.
 
+</details>
+
 ### 설정 키
+
+시작에 꼭 필요한 건 `token`, `allowedChatId`, `projectDir`, `claudeBin`, `permissionMode` 다섯 개뿐이고
+나머지는 전부 선택 사항입니다.
+
+<details>
+<summary><b>전체 설정 키</b> — provider · 폴백 · 모델 · 타임아웃 (30개 이상)</summary>
 
 | 키 | 설명 |
 |---|---|
@@ -209,6 +236,8 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 
 `state`와 첨부 파일은 config 파일 옆 **`.claude-bot/` 숨김 폴더**에 저장됩니다(프로젝트 격리). 구버전에서 올리면 첫 시작 때 기존 `state.json`·`attachments/`를 `.claude-bot/`로 **자동 이동**합니다(무손실). 로그는 launchd plist가 가리키는 위치 그대로입니다.
 
+</details>
+
 ## 첫 실행
 
 1. **봇 토큰 발급** — 텔레그램에서 [@BotFather](https://t.me/BotFather)에게 `/newbot`을 보내고, 이름과 username(`_bot`으로 끝나야 함)을 정하면 토큰을 줍니다. `config.json`의 `token`에 넣고 `allowedChatId`는 비워둡니다.
@@ -234,6 +263,9 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 | `/cron` · `/reserve` | 예약 작업·한도 재시도 관리 |
 | `/autocompact` · `/restart` · `/id` · `/help` | 유지관리·도움말 |
 
+<details>
+<summary><b><code>/plan</code> · <code>/stop</code> · <code>/local</code> · <code>/restart</code> 가 실제로 하는 일</b> — 봇을 믿고 맡기기 전에 알아둘 네 가지</summary>
+
 > **`/plan <요청>`** 은 봇에 설정된 `permissionMode`와 무관하게 강제로 읽기 전용 plan 모드(편집·쉘 없음)로 요청을 실행하고, 계획 내용과 함께 **✅ 진행 / ❌ 취소** 버튼을 보냅니다. **진행**을 누르면 같은 세션을 봇의 실제 `permissionMode`로 이어서 승인된 계획을 실행하고, **취소**를 누르면 세션은 그대로 유지됩니다. `bypassPermissions` 봇이 뭔가 건드리기 전에 검토 단계를 두고 싶을 때 유용합니다. `/new`로 새 세션을 시작하면 대기 중인 승인은 만료됩니다.
 
 > **`/stop`** 은 **그 방에서** 실행 중인 provider 프로세스를 즉시 종료하고 그 방의 대기 큐를 비웁니다. 다른 방의 작업은 그대로 계속됩니다. `--reset`을 붙이면 세션을 작업 시작 이전 상태로 되돌려 중단된 작업이 대화 맥락에 남지 않습니다.
@@ -242,7 +274,12 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 
 > **`/restart`** 는 먼저 `bot.mjs` 에 `node --check` 를 돌려 **문법 오류가 있으면 재시작을 취소**합니다(잘못된 수정이 봇을 크래시 루프에 빠뜨리는 것 방지). 통과하면 프로세스를 종료하고, 다시 띄우는 건 프로세스 관리자에게 맡깁니다. [launchd 설정](#상시-실행-launchd)(`KeepAlive`)이면 바로 동작하고, 관리자 없이 `node bot.mjs` 로만 돌리면 그냥 멈춥니다. 재시작 후 대화 세션은 `state.json` 의 ID로 이어집니다. `/stop` 과 달리 재시작은 **방 단위가 아닙니다** — 프로세스를 통째로 내리므로 다른 방에서 돌던 작업도 같이 죽습니다. 작업 중이었거나 대기 메시지가 있던 방에는 중단 사실을 알리고, 놀고 있던 방은 건드리지 않습니다.
 
+</details>
+
 ## 사용 메모
+
+<details>
+<summary><b>평소 동작 방식</b> — 세션 · 큐 · 그룹 채팅 · 첨부 파일 · 폴백 · 자동 컴팩션</summary>
 
 - **세션 유지** — Claude와 Codex의 세션 ID를 따로 저장합니다. `/provider`로 전환해도 각각의 맥락이 유지되며 `/new`는 활성 provider 세션만 초기화합니다.
 - **방별 세션 분리** — DM과 각 그룹은 서로 독립된 Claude·Codex 세션을 가집니다(`state.sessions[chatId]`). 한 방에서 한 얘기는 다른 방 세션에 넘어가지 않습니다. `provider`·`model` 같은 설정은 봇 전체 공용입니다.
@@ -261,9 +298,14 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 - **첨부 파일** — 사진·문서·음성·영상을 보내면 `attachments/`에 내려받고, 그 경로와 캡션을 활성 provider에 전달합니다.
 - **이미지 전송(내보내기)** — 에이전트가 채팅으로 이미지를 *되돌려* 보낼 수 있습니다. 파일을 `.ctb-outbox/`(`projectDir` 아래)에 저장하고, 답변 끝에 `[[ctb-image: 파일명.png | 캡션(선택)]]` 형식의 줄을 붙이면, 봇이 그 마커를 텍스트에서 떼고 파일을 텔레그램 사진으로 보냅니다(여러 장이면 줄을 반복). 그 폴더 안의 순수 파일명만 허용하며 — `png/jpg/jpeg/gif/webp`, 10MB 이하 — 경로 탈출·폴더 밖을 가리키는 심볼릭 링크·다른 확장자는 거부합니다. 이 규칙은 시스템 프롬프트로 provider에 자동 안내됩니다. `"sendImages": false`로 기능 전체를 끌 수 있습니다.
 
+</details>
+
 ## 커스텀 명령어
 
 config에 `commands`를 정의하면 프로젝트별 `/명령어`로 쉘 스크립트를 실행하고 결과를 채팅으로 받을 수 있습니다. 정의한 명령어는 텔레그램 `/` 자동완성 메뉴에 자동 등록됩니다.
+
+<details>
+<summary><b>커스텀 명령어 레퍼런스</b> — 인자 전달 · 제한 · 실행 방식</summary>
 
 ```json
 "commands": {
@@ -279,9 +321,14 @@ config에 `commands`를 정의하면 프로젝트별 `/명령어`로 쉘 스크�
 - Claude와 독립적으로 실행 — Claude 작업 중에도 동작합니다
 - 출력은 최대 4,000자, 타임아웃 60초
 
+</details>
+
 ## 예약 작업 (cron)
 
 config에 `schedule` 배열을 두면 정해진 시각에 프롬프트를 자동 실행합니다 — 아침 브리핑, 주기적 점검, 리마인더 등. 각 항목은 프롬프트를 실행하고 결과를 `allowedChatId`로 보냅니다.
+
+<details>
+<summary><b>cron 레퍼런스</b> — 표현식 문법 · 조용한 작업 · 채팅에서 자연어로 추가하기</summary>
 
 ```json
 "schedule": [
@@ -309,9 +356,20 @@ config에 `schedule` 배열을 두면 정해진 시각에 프롬프트를 자동
 
 config에 적은 작업은 바꾸려면 재시작이 필요하고, 채팅으로 추가한 작업만 즉시 반영됩니다.
 
+</details>
+
 ## 여러 프로젝트 / 페르소나
 
 코드는 프로젝트에 종속되지 않습니다. config 파일만 하나씩 더 만들면 여러 봇을 동시에 굴릴 수 있습니다.
+**같은 프로젝트**를 역할별 봇으로 나눌 수도 있습니다 — 개발자 봇과 기획자 봇처럼요.
+
+| 봇 | permissionMode | 역할 |
+|---|---|---|
+| 개발자 | `bypassPermissions` | 구현·수정·테스트·git |
+| 기획자 | `plan` | 기능 제안·스펙·UX 방향 |
+
+<details>
+<summary><b>여러 봇 굴리기</b> — 프로젝트별 config · 토큰 · 페르소나 · 세션 격리</summary>
 
 ```sh
 claude-telegram-bot ~/projects/A/claudebot.config.json   # 프로젝트 A
@@ -321,20 +379,20 @@ claude-telegram-bot ~/projects/B/claudebot.config.json   # 프로젝트 B
 - 텔레그램은 토큰 하나당 폴링 하나만 허용합니다. 그래서 봇마다 BotFather 토큰을 따로 발급해야 합니다.
 - `state`와 `attachments`는 config 옆에 저장되므로 봇끼리 섞이지 않습니다.
 
-**같은 프로젝트**를 역할별 봇으로 나눌 수도 있습니다. 예를 들어 개발자 봇과 기획자 봇으로요. 코드는 그대로 두고 config만 역할별로 둡니다.
-
-| 봇 | permissionMode | 역할 |
-|---|---|---|
-| 개발자 | `bypassPermissions` | 구현·수정·테스트·git |
-| 기획자 | `plan` | 기능 제안·스펙·UX 방향 |
+역할별로 나눌 때는 코드는 그대로 두고 config만 역할별로 둡니다.
 
 - `persona`에 역할 프롬프트를 넣으면 그 봇의 정체성이 됩니다. (텔레그램용 간결 지침은 자동으로 같이 붙습니다.)
 - 같은 폴더를 공유한다면 쉘을 쓰는 봇(`bypassPermissions`)은 하나로 제한하는 편이 안전합니다. 동시 편집 충돌을 피할 수 있습니다.
 - `state` 파일 이름은 config 이름에서 만들어집니다 (`dev.config.json` → `dev.config.state.json`). 같은 폴더에 config가 여러 개여도 맥락이 안 섞입니다.
 
+</details>
+
 ## 상시 실행 (launchd)
 
 맥을 재부팅하거나 봇이 죽어도 자동으로 다시 뜨게 하려면 launchd를 씁니다. 로그인 세션에서 도는 LaunchAgent라서 `claude`의 키체인/OAuth 인증을 그대로 사용합니다.
+
+<details>
+<summary><b>launchd 설정 단계별</b> — 경로 확인 · 등록 · 관리</summary>
 
 저장소의 `com.claudebot.example.plist`를 복사해 쓰면 됩니다. 먼저 경로부터 확인하세요.
 
@@ -369,6 +427,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.pl
 ```
 
 > 최신 macOS는 `bootstrap`/`bootout`을 권장합니다. 구버전 `load`/`unload`도 동작하지만 deprecated 경고가 뜰 수 있습니다.
+
+</details>
 
 ## 자주 겪는 문제
 

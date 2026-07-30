@@ -4,7 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/claude-telegram-bot.svg)](https://www.npmjs.com/package/claude-telegram-bot)
 [![npm downloads](https://img.shields.io/npm/dm/claude-telegram-bot.svg)](https://www.npmjs.com/package/claude-telegram-bot)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![license](https://img.shields.io/npm/l/claude-telegram-bot.svg)](./LICENSE)
 
 Use Claude Code or Codex from Telegram — run coding agents anywhere, from any device.
 
@@ -15,22 +15,38 @@ folder, and sends the result back to the chat. It uses only Node 18+ built-ins, 
 dependencies to install.
 
 ```text
-[you] → Telegram → bot.mjs
-                     ├─ Claude provider → state.sessionId
-                     ├─ Codex provider  → state.codexSessionId
-                     └─ Ollama mode/fallback
-                              ↓
-                  result → Telegram
+  📱 Telegram                        🖥  your machine — background daemon
+  ─────────────────                  ──────────────────────────────────────
+  "run the tests"  ───────────────▶  bot.mjs  (long-polling, zero deps)
+                                       ├─ Claude  →  state.sessionId
+                                       ├─ Codex   →  state.codexSessionId
+                                       └─ Ollama     (mode / fallback)
+                                              │
+  "12 passed, 1 failed …"  ◀──────────────────┘
 
-Claude limit → Codex fallback → codex-handoff.md → next Claude call
+  hit a rate limit?   Claude ─▶ Codex ─▶ codex-handoff.md ─▶ next Claude call
 ```
 
 Drive a coding agent from your phone: run tests, edit files, commit, push — all from a chat.
 It runs as a **background daemon** (launchd), so there's no interactive session to keep open.
 
+## What it looks like
+
+| Ask it to work | Approve before it acts |
+|-|-|
+| <img src="docs/images/01-chat.png" width="360" alt="Asking the bot to run tests and getting a summary back"> | <img src="docs/images/02-plan.png" width="360" alt="/plan showing a plan with Proceed and Cancel buttons"> |
+| A message becomes a real task in your repo. | `/plan` runs read-only, then waits for ✅ / ❌. |
+
+| Switch provider by tapping | Notes the bot ignores |
+|-|-|
+| <img src="docs/images/03-provider.png" width="360" alt="/provider showing claude, codex and default buttons"> | <img src="docs/images/04-notes.png" width="360" alt="A message starting with // marked only with an eyes reaction"> |
+| No typing — the active one is marked ✅. | `//` leaves a note without queueing it. |
+
 > ### ⚠️ This is a remote code-execution tool by design. Read the [Security](#security) section before running it.
 > A message you send from Telegram is executed as a command on the machine running the bot.
 > With `permissionMode: bypassPermissions`, a one-line message can run **anything** as your user.
+
+**Contents** — [Quick start](#3-minute-quick-start) · [Why](#why-this-exists) · [How it compares](#how-it-compares) · [Security](#security) · [Install & run](#install--run) · [Configuration](#configuration) · [Custom commands](#custom-commands) · [Scheduled tasks](#scheduled-tasks-cron) · [Multiple projects](#running-multiple-projects) · [Personas](#multiple-personas-roles) · [Always-on](#always-on-with-launchd-macos)
 
 ## 3-minute quick start
 
@@ -245,6 +261,9 @@ Core commands:
 | `/cron` · `/reserve` | Manage scheduled jobs and usage-limit retries |
 | `/autocompact` · `/restart` · `/id` · `/help` | Maintenance and help commands |
 
+<details>
+<summary><b>What <code>/plan</code>, <code>/stop</code>, <code>/local</code> and <code>/restart</code> actually do</b> — the four commands worth knowing before you rely on the bot</summary>
+
 > **`/plan <request>`** runs the request in read-only plan mode (no edits, no shell) regardless of
 > the bot's configured `permissionMode`, and replies with the plan plus **✅ Proceed / ❌ Cancel**
 > buttons. Tapping **Proceed** resumes the same session with the bot's normal `permissionMode` and
@@ -272,6 +291,8 @@ Core commands:
 > it takes the whole process down, so any task running in another room dies with it. Rooms that had a
 > task running or messages queued get told; idle rooms aren't bothered.
 
+</details>
+
 **4) Keep it always on (optional)** — see [Always-on with launchd](#always-on-with-launchd-macos).
 
 > **From source** (for hacking on the bot): clone the repo, `cp config.example.json mybot.json`,
@@ -280,6 +301,9 @@ Core commands:
 ---
 
 ## Compatibility
+
+<details>
+<summary><b>CLI versions this release was tested against</b> — Claude Code 2.1.206 · Codex 0.144.1 · Ollama 0.31.1</summary>
 
 The bot depends on CLI flags and machine-readable output that may change between releases. These are
 the development-environment versions recorded as the compatibility baseline on 2026-07-10; they are
@@ -295,13 +319,19 @@ versions actually installed on the bot host.
 When upgrading one of these CLIs, run `/testfallback` and a normal Claude message before relying on
 the bot unattended. Update this table after recording the new environment and checking those paths.
 
+</details>
+
 ## Configuration
 
 ```sh
 cp config.example.json mybot.json
 ```
 
-Edit `mybot.json`:
+The only keys you need to start are `token`, `allowedChatId`, `projectDir`, `claudeBin`, and
+`permissionMode` — everything else is optional.
+
+<details>
+<summary><b>All configuration keys</b> — providers, fallbacks, models, timeouts (30+ options)</summary>
 
 | Key | Description |
 |---|---|
@@ -355,7 +385,12 @@ file, so projects stay isolated. Upgrading from an older version **auto-moves** 
 `state.json` / `attachments/` into `.claude-bot/` on first start (no data loss). Logs stay wherever
 your launchd plist points them.
 
+</details>
+
 ### Usage details
+
+<details>
+<summary><b>How the bot behaves day to day</b> — sessions, queueing, group chats, attachments, fallbacks, auto-compact</summary>
 
 - **Concise mode**: a `--append-system-prompt` is applied by default so replies stay short for
   Telegram. Override it via `appendSystemPrompt` (empty string disables it).
@@ -387,9 +422,14 @@ your launchd plist points them.
 - **Ollama fallback**: set `"ollamaFallback": true` and point `"ollamaModel"` at a locally-installed [Ollama](https://ollama.ai) model (default: `"qwen3.5:4b"`). Ollama is now a secondary automatic fallback when Codex is disabled or fails, and `/ollama` still toggles local chat mode manually. It runs Claude Code through the local model via `ollama launch claude … --resume <session>`, but this remains best-effort because local model context windows are much smaller than Claude's.
 - **Auto-compact**: the bot tracks how many cached tokens are in the session context. When `cache_read_input_tokens` exceeds `autoCompactThreshold` (default 100 000), it automatically runs `/compact` and notifies you. Tune the threshold in config, or at runtime with `/autocompact` — sending it with no argument shows the current value with preset buttons (50k / 100k / 150k / 200k / Off / Default) so you don't have to type digits on a phone. You can still pass a value directly, in shorthand or in full: `/autocompact 120k`, `/autocompact 120000`, `/autocompact 80,000` (`off` to disable, `default` to reset). Values outside 10k–1m are rejected, so a typo like `100m` can't silently switch auto-compact off. The override persists in `state.json` across restarts. You can also run `/compact` manually at any time.
 
+</details>
+
 ### Custom commands
 
 Define project-specific `/commands` in config that run shell scripts and return their output to the chat. Commands appear in Telegram's `/` autocomplete menu automatically.
+
+<details>
+<summary><b>Custom command reference</b> — arguments, limits, execution model</summary>
 
 ```json
 "commands": {
@@ -405,10 +445,15 @@ Define project-specific `/commands` in config that run shell scripts and return 
 - Scripts run independently of Claude — they work even when Claude is busy
 - Output capped at 4 000 characters; 60-second timeout
 
+</details>
+
 ### Scheduled tasks (cron)
 
 Add a `schedule` array to the config to run prompts on a timer — daily briefings, periodic
 checks, reminders. Each entry runs the prompt and sends the result to `allowedChatId`.
+
+<details>
+<summary><b>Cron reference</b> — expression syntax, silent jobs, adding jobs from the chat in plain language</summary>
 
 ```json
 "schedule": [
@@ -449,11 +494,16 @@ jobs get an id; manage them with:
 
 Config-defined jobs still require a restart to change; only chat-added jobs are live.
 
+</details>
+
 ---
 
 ## Running multiple projects
 
 The code is project-agnostic: make **one config file per project** and run several at once.
+
+<details>
+<summary><b>Multi-project setup</b> — one config per project, one BotFather token each</summary>
 
 - Run: `node bot.mjs /absolute/path/to/project.config.json` (no arg → `./mybot.json`, fallback `./config.json`)
 - `state.json` and `attachments/` live in the **config file's folder**, so projects don't mix.
@@ -470,10 +520,20 @@ node bot.mjs ~/projects/A/claudebot.config.json   # instance A
 node bot.mjs ~/projects/B/claudebot.config.json   # instance B
 ```
 
+</details>
+
 ## Multiple personas (roles)
 
 You can split the **same project** into role-based bots (e.g. **Developer** + **Planner**).
 One codebase, **a separate config file per role**.
+
+| Bot | permissionMode | Role |
+|---|---|---|
+| Developer | `bypassPermissions` | Implement, edit, test, git |
+| Planner | `plan` (read/plan only) | Feature proposals, specs, UX direction |
+
+<details>
+<summary><b>Persona setup</b> — system prompts, permission split, session isolation</summary>
 
 - **`persona`**: a role system prompt in the config becomes that bot's identity. The concise-Telegram
   instruction is injected automatically, so `persona` only needs the role itself.
@@ -494,13 +554,10 @@ node bot.mjs dev.config.json
 node bot.mjs planner.config.json
 ```
 
-| Bot | permissionMode | Role |
-|---|---|---|
-| Developer | `bypassPermissions` | Implement, edit, test, git |
-| Planner | `plan` (read/plan only) | Feature proposals, specs, UX direction |
-
 > For always-on, copy `com.claudebot.example.plist` **per bot** and register each with a distinct
 > `Label`, config argument, and log paths (see below).
+
+</details>
 
 ---
 
@@ -519,6 +576,9 @@ node bot.mjs planner.config.json
 
 Keeps the bot alive across reboots and crashes. It runs as a **LaunchAgent** in your login session,
 so it reuses Claude's keychain/OAuth auth.
+
+<details>
+<summary><b>launchd setup, step by step</b> — check paths, register, manage</summary>
 
 ### 1. Check the plist (paths / node version)
 
@@ -562,6 +622,8 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.plis
 launchctl bootout   gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.plist
 ```
+
+</details>
 
 ### Troubleshooting
 
