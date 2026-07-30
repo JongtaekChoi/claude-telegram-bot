@@ -172,6 +172,12 @@ const STR = {
     compactNoSession: "No active session to compact. Just send a message to start one.",
     compactProviderUnsupported: "/compact is currently available only with provider=claude.",
     autoCompact: "🗜️ Auto-compacted context (conversation was getting long).",
+    autoCompactAsk: (n) =>
+      `🗜️ Context is around ${fmtTokens(n)}, past the auto-compact threshold. Compact now?\n` +
+      "Compacting replaces the conversation with a summary — details are lost, but replies get cheaper and faster.",
+    autoCompactNowBtn: "🗜️ Compact now",
+    autoCompactLaterBtn: "Later",
+    autoCompactLater: (n) => `OK — I won't ask again until context passes ${fmtTokens(n)}.`,
     planUsage: "Usage: `/plan <request>` — e.g. `/plan add input validation to the signup form`",
     planApprove: "✅ Proceed",
     planCancel: "❌ Cancel",
@@ -396,6 +402,12 @@ const STR = {
     compactNoSession: "압축할 활성 세션이 없습니다. 메시지를 보내 세션을 시작하세요.",
     compactProviderUnsupported: "/compact는 현재 provider=claude에서만 사용할 수 있습니다.",
     autoCompact: "🗜️ 대화가 길어져 컨텍스트를 자동 압축했습니다.",
+    autoCompactAsk: (n) =>
+      `🗜️ 컨텍스트가 ${fmtTokens(n, "ko")} 정도로 자동 압축 임계값을 넘었습니다. 지금 압축할까요?\n` +
+      "압축하면 대화가 요약본으로 바뀝니다 — 세부 내용은 사라지지만 응답이 싸고 빨라집니다.",
+    autoCompactNowBtn: "🗜️ 지금 압축",
+    autoCompactLaterBtn: "나중에",
+    autoCompactLater: (n) => `알겠습니다 — 컨텍스트가 ${fmtTokens(n, "ko")}을 넘기 전까지 다시 묻지 않습니다.`,
     planUsage: "사용법: `/plan <요청>` — 예: `/plan 회원가입 폼에 입력값 검증 추가해줘`",
     planApprove: "✅ 진행",
     planCancel: "❌ 취소",
@@ -927,6 +939,23 @@ function runCustomCommand(run, args) {
   });
 }
 
+// 한 턴의 usage 에서 "지금 컨텍스트에 얼마나 쌓였나"를 추정한다.
+// 주의: usage.cache_read_input_tokens 는 컨텍스트 크기가 아니라 그 턴 안에서 일어난 모든 API
+// 호출의 합계다. 도구를 쓸 때마다 컨텍스트를 통째로 다시 읽으므로 도구 호출 수에 비례해 부풀고,
+// 실제로는 30k 짜리 대화가 파일 5개를 읽었다는 이유로 160k 로 잡힌다(측정 확인).
+// 마지막 호출(usage.iterations 의 끝 항목)의 입력 토큰 합이 그 시점의 실제 컨텍스트 크기다.
+// iterations 가 없는 CLI 버전에서는 턴 수로 나눠 근사한다 — 과소평가 쪽이라 덜 압축하게 된다.
+function ctxTokensOf(usage, numTurns) {
+  if (!usage) return 0;
+  const it = usage.iterations;
+  const last = Array.isArray(it) && it.length ? it[it.length - 1] : null;
+  if (last) {
+    return (last.cache_read_input_tokens || 0) + (last.cache_creation_input_tokens || 0) + (last.input_tokens || 0);
+  }
+  const total = (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
+  return Math.round(total / Math.max(numTurns || 1, 1));
+}
+
 // ── Claude 실행 ───────────────────────────────────────────────────────────
 function runClaude(prompt, sessionId, opts = {}) {
   return new Promise((resolve) => {
@@ -985,8 +1014,8 @@ function runClaude(prompt, sessionId, opts = {}) {
         const text = j.is_error ? classifyClaudeError(rawErr, code) : (rawErr || "(empty response)");
         const resetAt = j.is_error ? parseResetTime(rawErr) : null;
         const canFallback = j.is_error && isFallbackError(rawErr, code);
-        const cacheTokens = j.usage?.cache_read_input_tokens || 0;
-        resolve({ ok: !j.is_error, text, sessionId: j.session_id, cost: j.total_cost_usd, cacheTokens, resetAt, canFallback });
+        const ctxTokens = ctxTokensOf(j.usage, j.num_turns);
+        resolve({ ok: !j.is_error, text, sessionId: j.session_id, cost: j.total_cost_usd, ctxTokens, resetAt, canFallback });
       } catch {
         const raw = (err || out || "no output").slice(0, 3500);
         resolve({ ok: false, text: classifyClaudeError(raw, code), resetAt: parseResetTime(raw), canFallback: isFallbackError(raw, code) });
@@ -1391,14 +1420,17 @@ async function handleAutoCompact(chatId, arg, l) {
     });
     return;
   }
+  // 임계값을 새로 정하는 경로에서는 "나중에"로 미뤄둔 기준도 같이 초기화한다.
   if (arg === "default" || arg === "reset") {
     state.autoCompactThreshold = undefined;
+    state.autoCompactSnooze = undefined;
     saveState(state);
     await send(chatId, t(l, "autoCompactReset", def));
     return;
   }
   if (arg === "off") {
     state.autoCompactThreshold = 0;
+    state.autoCompactSnooze = undefined;
     saveState(state);
     await send(chatId, t(l, "autoCompactOff"));
     return;
@@ -1413,8 +1445,42 @@ async function handleAutoCompact(chatId, arg, l) {
     return;
   }
   state.autoCompactThreshold = n;
+  state.autoCompactSnooze = undefined;
   saveState(state);
   await send(chatId, t(l, "autoCompactSet", n));
+}
+
+// 임계값 초과 시 압축할지 묻는다 — 버튼 콜백은 `cp:*`.
+async function askAutoCompact(chatId, ctxTokens, l) {
+  await send(chatId, t(l, "autoCompactAsk", roundTokens(ctxTokens)), {
+    replyMarkup: {
+      inline_keyboard: [[
+        { text: t(l, "autoCompactNowBtn"), callback_data: "cp:yes" },
+        { text: t(l, "autoCompactLaterBtn"), callback_data: `cp:later:${ctxTokens}` },
+        { text: t(l, "autoCompactOffBtn"), callback_data: "ac:off" },
+      ]],
+    },
+  });
+}
+
+// "나중에"를 누르면 지금보다 이만큼 더 커지기 전까지 다시 묻지 않는다.
+// 그냥 한 번 넘기기만 하면 다음 턴에 또 물어서 결국 같은 성가심이 된다.
+const AUTOCOMPACT_SNOOZE_RATIO = 1.25;
+// fmtTokens 는 1000 으로 안 나눠지면 원본 숫자를 그대로 찍는다. 컨텍스트 추정치는 132453 처럼
+// 어중간한 값이라 그대로 보여주면 정밀해 보이지만 어차피 추정치다 — k 단위로 반올림해서 보여준다.
+const roundTokens = (n) => Math.max(Math.round(n / 1000), 1) * 1000;
+
+async function runAutoCompact(chatId, l) {
+  try {
+    const cr = await runClaude("/compact", getSid(chatId, "claude"));
+    if (cr.sessionId) setSid(chatId, cr.sessionId, "claude");
+    state.autoCompactSnooze = undefined;
+    saveState(state);
+    if (cr.ok !== false) await send(chatId, t(l, "autoCompact"));
+    else await send(chatId, t(l, "compactFail", cr.text));
+  } catch (e) {
+    await send(chatId, t(l, "compactFail", e.message));
+  }
 }
 
 // provider 확인·전환 — /provider 와 버튼(`pv:*`)이 모두 여기로 온다.
@@ -1749,14 +1815,13 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
   } else {
     const footer = `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`;
     if (!r.stopping) await deliver(chatId, res.text + footer);
-    // 자동 컴팩션: cache_read_input_tokens 가 임계값 초과 시 자동 /compact
+    // 자동 컴팩션: 컨텍스트가 임계값을 넘으면 압축할지 물어본다. 예고 없이 압축이 돌면 대화
+    // 맥락이 갑자기 요약본으로 바뀌어 흐름이 끊기므로, 기본은 확인을 받는 쪽이다.
+    // config 의 autoCompactConfirm:false 로 예전처럼 묻지 않고 바로 압축하게 할 수 있다.
     const compactThreshold = state.autoCompactThreshold ?? cfg.autoCompactThreshold ?? 100000;
-    if (currentProvider() === "claude" && compactThreshold > 0 && res.cacheTokens > compactThreshold && getSid(chatId, "claude") && !r.stopping) {
-      try {
-        const cr = await runClaude("/compact", getSid(chatId, "claude"));
-        if (cr.sessionId) { setSid(chatId, cr.sessionId, "claude"); saveState(state); }
-        if (cr.ok !== false) await send(chatId, t(l, "autoCompact"));
-      } catch {}
+    if (currentProvider() === "claude" && compactThreshold > 0 && res.ctxTokens > compactThreshold && getSid(chatId, "claude") && !r.stopping) {
+      if (cfg.autoCompactConfirm === false) await runAutoCompact(chatId, l);
+      else if (res.ctxTokens > (state.autoCompactSnooze || 0)) await askAutoCompact(chatId, res.ctxTokens, l);
     }
   }
 }
@@ -1829,6 +1894,13 @@ async function handleCallback(cq) {
     await send(chatId, t(l, "planCancelled"));
   } else if (cq.data?.startsWith("ac:")) {
     await handleAutoCompact(chatId, cq.data.slice(3), l);
+  } else if (cq.data === "cp:yes") {
+    await runAutoCompact(chatId, l);
+  } else if (cq.data?.startsWith("cp:later:")) {
+    const n = Number(cq.data.slice(9)) || 0;
+    state.autoCompactSnooze = roundTokens(n * AUTOCOMPACT_SNOOZE_RATIO);
+    saveState(state);
+    await send(chatId, t(l, "autoCompactLater", state.autoCompactSnooze));
   } else if (cq.data?.startsWith("pv:")) {
     await handleProvider(chatId, cq.data.slice(3), l);
   } else if (cq.data?.startsWith("md:")) {
@@ -1994,6 +2066,7 @@ async function handle(msg) {
   }
   if (text === "/new") {
     setSid(chatId, undefined); // 이 방의 현재 provider 세션만 초기화 (다른 방·다른 provider는 유지)
+    state.autoCompactSnooze = undefined; // 컨텍스트가 비었으니 미뤄둔 것도 의미 없음
     saveState(state);
     await send(chatId, t(l, "newSession"));
     return;

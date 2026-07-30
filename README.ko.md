@@ -212,7 +212,8 @@ CLI를 업데이트한 뒤에는 무인 실행에 맡기기 전에 `/testfallbac
 | `ollamaModel` | (선택) 폴백에 쓸 Ollama 모델 (기본값: `"qwen3.5:4b"`). 세션이 이어받는 맥락의 양은 이 모델의 런타임 컨텍스트 창(`num_ctx`)에 의해 제한됨 — 모델 아키텍처상 최대치와 무관하게 Ollama 기본값은 ~4K라, 긴 Claude 세션에는 부족함. `Modelfile`로 더 큰 창을 구워넣은 변형을 만들어(`FROM qwen3.5:4b` + `PARAMETER num_ctx 6144`, `ollama create qwen3.5:4b-ctx6k -f Modelfile`) 이 값으로 지정할 것. 크기는 RAM에 맞출 것 — 8GB 머신에선 ~6K가 안전 상한이고, 32K는 스왑으로 시스템이 먹통이 됨 |
 | `ollamaBin` | (선택) `ollama` 실행 파일 경로. `/opt/homebrew/bin/ollama`, `/usr/local/bin/ollama`, `/usr/bin/ollama` 순으로 자동 탐색 후 없으면 `PATH`의 `"ollama"` 사용 — launchd로 뜨는 봇은 셸의 `PATH`를 상속받지 못하므로, 다른 경로에 설치했다면 명시적으로 지정할 것 |
 | `ollamaTimeout` | (선택) Ollama 응답을 기다리는 최대 시간(ms) (기본값: `360000` — 로컬 모델은 콜드스타트가 느릴 수 있음) |
-| `autoCompactThreshold` | (선택) 캐시된 입력 토큰이 이 값을 초과하면 컨텍스트 자동 압축 (기본값: `100000`). `0`이면 비활성화. 런타임에 `/autocompact`로 전환 가능(state에 저장) |
+| `autoCompactThreshold` | (선택) 추정 컨텍스트 크기가 이 값을 넘으면 압축할지 물어봄 (기본값: `100000`). `0`이면 비활성화. 런타임에 `/autocompact`로 전환 가능(state에 저장) |
+| `autoCompactConfirm` | (선택) 압축 전에 물어볼지 여부 (기본값: `true`). `false`면 임계값을 넘는 즉시 묻지 않고 바로 압축 |
 
 같은 config로 로컬 대화형 세션도 실행할 수 있습니다. `ctb mybot.json`은 봇과 같은 provider를
 따릅니다 — `/provider` override가 state에 있으면 그 값을, 없으면 `config.provider`를 씁니다.
@@ -291,7 +292,7 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 - **Codex 폴백** — `"codexFallback": true`로 설정하면 Claude 레이트 리밋·크레딧 부족 시 `codex exec`가 대신 실행됩니다. Codex는 `state.codexSessionId`에 별도 세션을 저장하고 `codex exec resume <id>`로 이어가지만, Claude 세션과 Codex 세션은 서로 호환되지 않습니다. 대신 성공한 Codex 폴백마다 `.claude-bot/codex-handoff.md`에 요약을 남기고, 이후 Claude 호출 때 최근 handoff 내용을 맥락으로 주입합니다.
 - **실행 중 provider 전환** — `/provider`는 현재 provider(✅ 표시)와 함께 전환 버튼을 보내므로 타이핑이 필요 없습니다. `/provider claude`, `/provider codex`로 봇 state override를 직접 저장하는 방식도 그대로 동작하고, `/provider default`(또는 config 기본값 버튼)는 config 값으로 되돌립니다.
 - **Ollama 폴백** — `"ollamaFallback": true`로 설정하고 `"ollamaModel"`에 로컬 [Ollama](https://ollama.ai) 모델을 지정하면(기본값: `"qwen3.5:4b"`), Codex가 꺼져 있거나 실패했을 때 보조 폴백으로 사용됩니다. `/ollama`로 Claude와 관계없이 로컬 모델을 기본 채팅 상대로 수동 전환할 수도 있습니다. 내부적으로 `ollama launch claude … --resume <세션>`을 사용하지만 로컬 모델 컨텍스트가 작으므로 최선 노력(best-effort)입니다.
-- **자동 컴팩션** — 세션의 캐시된 입력 토큰이 `autoCompactThreshold`(기본값 100,000)를 초과하면 `/compact`를 자동 실행하고 알림을 보냅니다. config에서 임계값을 조정하거나, 런타임에 `/autocompact`로 설정합니다. 인자 없이 보내면 현재값과 함께 프리셋 버튼(50k / 100k / 150k / 200k / 끄기 / 기본값)이 나와서 휴대폰으로 숫자를 칠 필요가 없습니다. 값을 직접 줄 수도 있고 축약 표기를 받습니다 — `/autocompact 120k`, `/autocompact 120000`, `/autocompact 80,000` (`off`로 비활성화, `default`로 초기화). 10k~1m 범위를 벗어난 값은 거절하므로, `100m` 같은 오타로 자동 압축이 조용히 꺼지는 일은 없습니다. 설정값은 `state.json`에 저장돼 재시작 후에도 유지됩니다. 수동으로 `/compact`를 써도 됩니다.
+- **자동 컴팩션** — 세션 컨텍스트 추정 크기가 `autoCompactThreshold`(기본값 100,000)를 넘으면 압축할지 물어보고 **🗜️ 지금 압축 / 나중에 / 끄기** 버튼을 함께 보냅니다. **나중에**를 누르면 컨텍스트가 25% 더 커지기 전까지 다시 묻지 않아서 매 턴 성가시게 굴지 않습니다. `autoCompactConfirm: false`로 두면 묻지 않고 바로 압축합니다. 크기 추정은 그 턴의 **마지막 API 호출** 값으로 합니다 — 턴 전체 토큰 합계는 도구 호출마다 컨텍스트를 다시 읽은 것까지 더해지므로, 파일 5개를 읽은 30k 대화가 160k로 잡혀 그것만으로 임계값을 넘습니다. config에서 임계값을 조정하거나, 런타임에 `/autocompact`로 설정합니다. 인자 없이 보내면 현재값과 함께 프리셋 버튼(50k / 100k / 150k / 200k / 끄기 / 기본값)이 나와서 휴대폰으로 숫자를 칠 필요가 없습니다. 값을 직접 줄 수도 있고 축약 표기를 받습니다 — `/autocompact 120k`, `/autocompact 120000`, `/autocompact 80,000` (`off`로 비활성화, `default`로 초기화). 10k~1m 범위를 벗어난 값은 거절하므로, `100m` 같은 오타로 자동 압축이 조용히 꺼지는 일은 없습니다. 설정값은 `state.json`에 저장돼 재시작 후에도 유지됩니다. 수동으로 `/compact`를 써도 됩니다.
 - **간결한 답변** — 텔레그램에 맞게 짧게 답하도록 시스템 프롬프트가 기본으로 붙습니다. 바꾸려면 `appendSystemPrompt`에 직접 넣으세요 (빈 문자열이면 끔).
 - **언어** — 봇 자체 문구(`/help`, 명령 메뉴, 상태 메시지)는 **기본 영어**, 텔레그램이 한국어인 사용자에겐 한국어로 나옵니다. `lang`(`"en"`/`"ko"`)으로 고정할 수 있습니다. Claude의 실제 답변은 **사용자가 쓴 언어**를 따라갑니다. `/` 명령 메뉴는 `setMyCommands`로 언어별 등록됩니다.
 - **서식 변환** — 답변의 마크다운(굵게·코드·표 등)을 텔레그램 HTML로 바꿔 보냅니다. 변환이 깨지는 경우엔 평문으로 다시 보냅니다.

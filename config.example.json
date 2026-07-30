@@ -11,6 +11,8 @@
   "persona": "System prompt defining this bot's role/voice (optional). Used to differentiate persona bots (developer/planner/...).",
   "appendSystemPrompt": "",
   "env": {},
+  "autoCompactThreshold": 100000,
+  "autoCompactConfirm": true,
   "codexFallback": false,
   "codexBin": "/ABSOLUTE/PATH/TO/codex",
   "codexModel": "",
