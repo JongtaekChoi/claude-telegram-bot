@@ -54,8 +54,11 @@ Prerequisites: **Node.js 18+**, the **Claude Code `claude` CLI installed and aut
 
 ```sh
 npm i -g claude-telegram-bot
-claude-telegram-bot init ~/botconfigs/my-project
+ctb init ~/botconfigs/my-project
 ```
+
+Installing gives you two commands, `claude-telegram-bot` and the shorter `ctb`. The rest of this
+guide uses `ctb`.
 
 Edit `~/botconfigs/my-project/mybot.json`:
 
@@ -72,8 +75,12 @@ Edit `~/botconfigs/my-project/mybot.json`:
 Start once to discover your chat ID:
 
 ```sh
-claude-telegram-bot ~/botconfigs/my-project/mybot.json
+ctb bot ~/botconfigs/my-project/mybot.json
 ```
+
+> `ctb bot` starts the bot daemon. Without `bot`, `ctb mybot.json` does something different — it
+> takes over that bot's session **in your terminal**. Useful later, not now.
+> (See [Configuration](#configuration).)
 
 Send any message to the Telegram bot. It replies with your `chatId`. Put that value into `allowedChatId`, restart the bot, then send something useful:
 
@@ -217,6 +224,9 @@ claude-telegram-bot init ~/botconfigs/myproj/myapp.json  # or a custom filename
 # edit the config (token, projectDir, …)
 claude-telegram-bot ~/botconfigs/myproj/mybot.json
 ```
+
+A global install also puts the shorter `ctb` on your PATH. `ctb init …` is the same command; the
+daemon is `ctb bot …` (plain `ctb` starts a [local session](#configuration), not the daemon).
 
 Run several projects/personas by making one config file each and passing its path —
 `state.json` and `attachments/` live next to that config, so they don't mix.

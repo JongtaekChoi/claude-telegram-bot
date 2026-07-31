@@ -48,8 +48,10 @@
 
 ```sh
 npm i -g claude-telegram-bot
-claude-telegram-bot init ~/botconfigs/my-project
+ctb init ~/botconfigs/my-project
 ```
+
+설치하면 `claude-telegram-bot`과 짧은 이름 `ctb`가 함께 깔립니다 — 아래는 `ctb`로 씁니다.
 
 `~/botconfigs/my-project/mybot.json`을 수정합니다.
 
@@ -66,8 +68,11 @@ claude-telegram-bot init ~/botconfigs/my-project
 처음 한 번 실행해서 chat ID를 확인합니다.
 
 ```sh
-claude-telegram-bot ~/botconfigs/my-project/mybot.json
+ctb bot ~/botconfigs/my-project/mybot.json
 ```
+
+> `ctb bot`이 봇 데몬을 띄웁니다. `bot` 없이 `ctb mybot.json`으로 쓰면 대신 **터미널에서 그 봇의
+> 세션을 이어받습니다** — 나중에 쓸 일이 있지만 지금은 아닙니다. ([설정](#설정) 참고)
 
 텔레그램 봇에 아무 메시지나 보내면 봇이 `chatId`를 알려줍니다. 그 값을 `allowedChatId`에 넣고 재시작한 뒤, 이렇게 요청해보세요.
 
@@ -152,6 +157,9 @@ claude-telegram-bot init ~/botconfigs/myproj/myapp.json   # 또는 파일명 지
 # 설정 편집
 claude-telegram-bot ~/botconfigs/myproj/mybot.json
 ```
+
+전역 설치하면 짧은 이름 `ctb`도 같이 깔립니다. `ctb init …`은 위와 같고, 데몬은 `ctb bot …`으로 띄웁니다
+(`ctb`만 쓰면 데몬이 아니라 [로컬 세션](#설정)이 뜹니다).
 
 > **설정 파일은 git에 올리지 마세요.** config 파일에는 봇 토큰이 들어 있습니다. git 레포 안에 둔다면 `config.json`, `state*.json`, `attachments/`를 그 프로젝트의 `.gitignore`에 추가하세요. 이 레포는 해당 패턴을 이미 무시하므로 `claudebot.config.json` 같은 이름도 안전하지만, 다른 프로젝트는 직접 지정해야 합니다.
 
@@ -263,6 +271,11 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 | `/remember <내용>` · `/memory` | 영구 메모리 저장·확인 |
 | `/cron` · `/reserve` | 예약 작업·한도 재시도 관리 |
 | `/autocompact` · `/restart` · `/id` · `/help` | 유지관리·도움말 |
+
+| 봇의 규칙을 텔레그램에서 바로 추가합니다 |
+|-|
+| <img src="docs/images/05-remember.ko.png" width="360" alt="/remember 로 출력 형식 규칙을 저장하자, 다음 답변부터 그 형식대로 코드 블록으로 나오는 화면"> |
+| `/remember` 로 넣은 항목은 매 호출 시스템 프롬프트 맨 앞(`RULES`)에 붙어 `/new` 후에도, provider를 바꿔도 유지됩니다. 파일을 못 건드리는 `plan` 봇도 이렇게 규칙을 얻습니다 — 프로젝트 전체에 항구적인 규칙이라면 레포의 `CLAUDE.md` 쪽이 맞고, 이건 **그 봇 하나에만** 걸리는 규칙입니다 (`.claude-bot/memory.md`, git 에 올라가지 않음). |
 
 <details>
 <summary><b><code>/plan</code> · <code>/stop</code> · <code>/local</code> · <code>/restart</code> 가 실제로 하는 일</b> — 봇을 믿고 맡기기 전에 알아둘 네 가지</summary>
