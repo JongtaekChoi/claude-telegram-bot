@@ -63,6 +63,8 @@ Requires: the claude CLI installed and authenticated on the host.`);
       console.error(`Already exists: ${target}`);
       process.exit(1);
     }
+    // README 의 빠른 시작이 아직 없는 폴더(~/botconfigs/my-project)를 가리킨다 — 없으면 만든다.
+    mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, readFileSync(join(HERE, "config.example.json"), "utf8"));
     console.log(`Created: ${target}\nFill in token / allowedChatId / projectDir, then run it.`);
     process.exit(0);
@@ -1075,8 +1077,15 @@ function runCodex(prompt, lang = "en", opts = {}) {
     const args = ["exec"];
     const resumeSessionId = opts.sessionId; // 세션은 방별로 관리 — 호출부가 명시적으로 넘긴다
     let codexPrompt = prompt;
-    if (!resumeSessionId && opts.injectMemory) {
-      const context = [loadMemory(), cfg.persona, cfg.appendSystemPrompt, IMAGE_SEND ? imageSendInstruction() : null].filter(Boolean).join("\n\n");
+    if (opts.injectMemory) {
+      // Codex 에는 --append-system-prompt 가 없어 프롬프트 앞에 붙인다. 새 세션이면 persona 까지
+      // 한 번에 싣고, 이어가는 세션이면 메모리만 매 턴 다시 싣는다 — 세션이 시작된 뒤 /remember 로
+      // 추가한 규칙이 그 세션에는 영영 안 들어가던 문제. (Claude 는 매 호출 --append-system-prompt
+      // 로 들어가므로 원래 이 구멍이 없다.)
+      const mem = loadMemory();
+      const context = resumeSessionId
+        ? (mem ? `## RULES (must follow before anything else)\n${mem}` : "")
+        : [mem, cfg.persona, cfg.appendSystemPrompt, IMAGE_SEND ? imageSendInstruction() : null].filter(Boolean).join("\n\n");
       if (context) codexPrompt = `Project instructions and persistent context:\n${context}\n\nUser request:\n${prompt}`;
     }
 
