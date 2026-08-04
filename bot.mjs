@@ -151,6 +151,7 @@ const STR = {
       `${cfg.name || "Claude Code Telegram bot"}\n\n` +
       "• Just send a message and Claude works in the project.\n" +
       "• Start a message with // and the bot ignores it — leave yourself a note in the chat\n" +
+      "• /* ignores everything until a message starting with */ — for a run of notes or a pasted log\n" +
       "• /new — reset conversation context (new session)\n" +
       "• /compact — compress context to free up space (keeps the session)\n" +
       "• /plan <request> — plan only (no edits), then approve/cancel to run for real\n" +
@@ -287,6 +288,8 @@ const STR = {
     memoryCrowded: (n) => `⚠️ ${n} rules in memory. The more there are, the weaker each one pulls — trim with \`/memory\` · \`/memory rm <n>\`.`,
     rememberUsage: "Usage: /remember <text to remember>",
     memoryUsage: (n) => `Usage: /memory · /memory rm <n> · /memory clear${n ? ` (1–${n})` : ""}`,
+    muteOn: "🙈 Comment mode — everything in this chat is ignored until a message starting with `*/`.",
+    muteOff: "🙊 Comment mode off.",
     rateLimitQueued: (n, time) => `⏳ Queued (#${n}). Will retry at ${time}. /reserve rm to cancel.`,
     reserveStatus: (n, time) => `⏳ ${n} message(s) queued. Retrying at ${time}. /reserve rm to cancel.`,
     reserveAuto: (time) => `⏰ Auto-retry scheduled for ${time}. Cancel with /reserve rm.`,
@@ -299,6 +302,7 @@ const STR = {
       `${cfg.name || "Claude Code 텔레그램 봇"}\n\n` +
       "• 그냥 메시지를 보내면 Claude가 프로젝트에서 작업합니다.\n" +
       "• 메시지를 // 로 시작하면 봇이 무시합니다 — 채팅에 혼잣말 메모를 남기는 용도\n" +
+      "• /* 를 보내면 */ 로 시작하는 메시지가 올 때까지 전부 무시합니다 — 메모를 연달아 남기거나 로그를 붙여넣을 때\n" +
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
       "• /compact — 컨텍스트 압축 (세션 유지, 공간 확보)\n" +
       "• /plan <요청> — 계획만 세우기 (편집 없음) → 승인/취소로 실제 실행\n" +
@@ -410,6 +414,8 @@ const STR = {
     memoryCrowded: (n) => `⚠️ 메모리 ${n}개. 많아질수록 각 규칙의 구속력이 약해집니다 — \`/memory\` · \`/memory rm <번호>\` 로 정리하세요.`,
     rememberUsage: "사용법: /remember <기억할 내용>",
     memoryUsage: (n) => `사용법: /memory · /memory rm <번호> · /memory clear${n ? ` (1~${n})` : ""}`,
+    muteOn: "🙈 주석 모드 — `*/` 로 시작하는 메시지를 보낼 때까지 이 방의 입력을 전부 무시합니다.",
+    muteOff: "🙊 주석 모드를 끝냈습니다.",
     rateLimitQueued: (n, time) => `⏳ 대기열에 추가됨 (${n}번째). ${time}에 자동 재시도. 취소: /reserve rm`,
     reserveStatus: (n, time) => `⏳ 대기 중인 메시지 ${n}개. ${time}에 재시도 예약됨. 취소: /reserve rm`,
     reserveAuto: (time) => `⏰ ${time}에 자동 재시도 예약됨. 취소: /reserve rm`,
@@ -2057,12 +2063,37 @@ async function handle(msg) {
   }
   // 혼잣말 — `//` 로 시작하는 메시지는 봇이 무시한다. 작업 중 떠오른 딴 주제 메모를
   // 세션에 넣지 않고 채팅에 남겨두는 용도. 👀 리액션으로 "봤고, 무시했다"만 알린다.
-  if (text.startsWith("//")) {
+  // `/*` 는 그 블록 버전 — `*/` 로 시작하는 메시지가 올 때까지 이 방의 모든 입력을 무시한다.
+  // 로그를 붙여넣거나 메모를 연달아 남길 때 매번 `//` 를 붙이지 않아도 된다. 닫는 걸 잊으면
+  // 봇이 죽은 것처럼 보이는 게 유일한 함정이라, 들어갈 때 탈출 방법을 알리고 무시할 때마다
+  // 👀 를 남긴다 — 눈 아이콘만 계속 달리면 아직 주석 모드라는 게 바로 보인다.
+  const seen = () =>
     tg("setMessageReaction", {
       chat_id: chatId,
       message_id: msg.message_id,
       reaction: [{ type: "emoji", emoji: "👀" }],
     }).catch(() => {});
+  if (chatBucket(chatId).muted) {
+    seen();
+    if (text.startsWith("*/")) {
+      chatBucket(chatId).muted = undefined;
+      saveState(state);
+      await send(chatId, t(l, "muteOff"));
+    }
+    return;
+  }
+  if (text.startsWith("//")) {
+    seen();
+    return;
+  }
+  if (text.startsWith("/*")) {
+    seen();
+    // 한 메시지 안에서 열고 닫으면(`/* 메모 */`) 블록에 들어가지 않고 1회성 무시로 끝낸다.
+    if (!text.slice(2).includes("*/")) {
+      chatBucket(chatId).muted = true;
+      saveState(state);
+      await send(chatId, t(l, "muteOn"));
+    }
     return;
   }
   const r = rt(chatId); // 이 방의 실행 상태 (busy·child·typing·queue…)
