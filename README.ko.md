@@ -213,7 +213,7 @@ CLI를 업데이트한 뒤에는 무인 실행에 맡기기 전에 `/testfallbac
 | `commands` | (선택) 쉘 스크립트를 실행하는 커스텀 `/명령어` — [커스텀 명령어](#커스텀-명령어) 참고 |
 | `codexFallback` | (선택) `true`로 설정하면 Claude 레이트 리밋·크레딧 부족 시 Codex를 우선 폴백으로 사용 |
 | `codexBin` | (선택) `codex` 실행 파일 경로. 기본값은 `PATH`의 `"codex"`이며 launchd에서는 절대경로 권장 |
-| `codexModel` | (선택) Codex에 `--model`로 넘길 모델. Codex 활성 상태에서 `/model <전체-ID>`로 변경 가능 |
+| `codexModel` | (선택) Codex에 `--model`로 넘길 모델. Codex 활성 상태에서 `/model`을 실행하면 설치된 CLI에서 선택 가능한 모델이 버튼으로 표시됩니다. 비우거나 기본값을 쓰는 것이 가장 안전합니다. |
 | `codexSandbox` | (선택) 첫 `codex exec` 세션의 샌드박스 (기본값: `"workspace-write"`) |
 | `codexTimeout` | (선택) Codex 응답을 기다리는 최대 시간(ms). 실패하면 reserve/Ollama로 넘어감 (기본값: `600000`) |
 | `ollamaFallback` | (선택) `true`로 설정하면 Claude 레이트 리밋·크레딧 부족 시 로컬 Ollama를 보조 폴백으로 사용 |
@@ -268,7 +268,7 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 | `/local [kill]` | 락을 물고 있는 로컬 `ctb` 세션 확인·텔레그램에서 종료 |
 | `/ollama` · `/testfallback` | 로컬 모드 전환·fallback 연결 테스트 |
 | `/status` | 버전, provider, CLI, 모델, fallback, 세션 상태 확인 |
-| `/remember <내용>` · `/memory` | 영구 메모리 저장·확인 |
+| `/remember <내용>` · `/memory` | 영구 메모리 저장·확인 (`/memory rm <번호>` 로 한 줄 삭제) |
 | `/cron` · `/reserve` | 예약 작업·한도 재시도 관리 |
 | `/autocompact` · `/restart` · `/id` · `/help` | 유지관리·도움말 |
 
@@ -276,6 +276,15 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 |-|
 | <img src="docs/images/05-remember.ko.png" width="360" alt="/remember 로 출력 형식 규칙을 저장하자, 다음 답변부터 그 형식대로 코드 블록으로 나오는 화면"> |
 | `/remember` 로 넣은 항목은 매 호출 시스템 프롬프트 맨 앞(`RULES`)에 붙어 `/new` 후에도, provider를 바꿔도 유지됩니다. 파일을 못 건드리는 `plan` 봇도 이렇게 규칙을 얻습니다 — 프로젝트 전체에 항구적인 규칙이라면 레포의 `CLAUDE.md` 쪽이 맞고, 이건 **그 봇 하나에만** 걸리는 규칙입니다 (`.claude-bot/memory.md`, git 에 올라가지 않음). |
+
+> **규칙을 지웠는데 계속 따르는 것처럼 보인다면** — 정상입니다. `/memory rm` 은 앞으로 주입될
+> `RULES` 블록에서 그 줄을 빼지만, **이미 진행 중인 대화**에는 그 규칙을 따른 답변이 그대로 남아
+> 있습니다. LLM 은 자기 이전 답변을 스타일 예시로 삼기 때문에, 지시가 사라져도 문맥의 관성으로
+> 한동안 이어집니다. 완전히 떼려면 `/new` 로 세션을 새로 시작하세요.
+>
+> 그래서 추가와 제거는 비대칭입니다. `/remember` 는 다음 답변부터 바로 먹지만, 제거는 대화가
+> 길수록 늦게 듣습니다. 말투·출력 형식처럼 **매 답변에 드러나는** 규칙일수록 두드러지고,
+> "배포 전 확인" 같은 규칙은 문맥에 흔적이 남지 않아 이 문제가 없습니다.
 
 <details>
 <summary><b><code>/plan</code> · <code>/stop</code> · <code>/local</code> · <code>/restart</code> 가 실제로 하는 일</b> — 봇을 믿고 맡기기 전에 알아둘 네 가지</summary>

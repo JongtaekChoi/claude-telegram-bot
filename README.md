@@ -267,9 +267,20 @@ Core commands:
 | `/ollama` | Toggle local Ollama chat mode |
 | `/testfallback` | Test the configured Codex or Ollama fallback |
 | `/status` | Show version, provider, CLI versions, model, fallback, and session state |
-| `/remember <text>` · `/memory` | Save or inspect persistent memory |
+| `/remember <text>` · `/memory` | Save or inspect persistent memory (`/memory rm <n>` drops one line) |
 | `/cron` · `/reserve` | Manage scheduled jobs and usage-limit retries |
 | `/autocompact` · `/restart` · `/id` · `/help` | Maintenance and help commands |
+
+> **A removed rule can look like it's still in effect** — that's expected. `/memory rm` drops the
+> line from the `RULES` block injected on every call, but the **conversation already in progress**
+> still contains answers that followed it. An LLM takes its own earlier replies as a style example,
+> so the habit carries on by context inertia even after the instruction is gone. Start a fresh
+> session with `/new` to clear it fully.
+>
+> Adding and removing are asymmetric this way: `/remember` takes effect on the very next reply,
+> while a removal lands more slowly the longer the conversation is. It's most visible for rules
+> that show up in **every** answer (tone, output format); a rule like "always confirm before
+> deploying" leaves no trace in the context and so doesn't have this problem.
 
 <details>
 <summary><b>What <code>/plan</code>, <code>/stop</code>, <code>/local</code> and <code>/restart</code> actually do</b> — the four commands worth knowing before you rely on the bot</summary>
@@ -361,7 +372,7 @@ The only keys you need to start are `token`, `allowedChatId`, `projectDir`, `cla
 | `commands` | (optional) Custom `/commands` that run shell scripts — see [Custom commands](#custom-commands) |
 | `codexFallback` | (optional) `true` to enable Codex as the preferred fallback when Claude is rate-limited or out of credits |
 | `codexBin` | (optional) Path to the `codex` binary. Defaults to `"codex"` on `PATH`; use an absolute path for launchd |
-| `codexModel` | (optional) Codex model passed with `--model`; override while Codex is active with `/model <full-id>` |
+| `codexModel` | (optional) Codex model passed with `--model`; `/model` shows the models available to the installed Codex CLI as buttons. Empty/default lets the CLI choose and is safest. |
 | `codexSandbox` | (optional) Codex sandbox for a new `codex exec` session (default: `"workspace-write"`) |
 | `codexTimeout` | (optional) Milliseconds to wait for Codex before falling back to reserve/Ollama (default: `600000`) |
 | `ollamaFallback` | (optional) `true` to enable Ollama as a secondary fallback when Claude is rate-limited or out of credits |

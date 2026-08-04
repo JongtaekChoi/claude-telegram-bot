@@ -86,6 +86,7 @@ const BOT_DIR = join(DATA_DIR, ".claude-bot");
 const STATE_PATH = join(BOT_DIR, stateFile);
 const ATTACH_DIR = join(BOT_DIR, "attachments");
 const MEMORY_PATH = join(BOT_DIR, "memory.md"); // /new 로 초기화해도 유지되는 퍼시스턴트 메모리
+const MEMORY_CROWDED = 8; // 이 개수를 넘으면 /remember 응답에 정리 권유를 붙인다 (loadMemory 위 주석 참고)
 const CODEX_HANDOFF_PATH = join(BOT_DIR, "codex-handoff.md"); // Codex fallback 작업을 Claude에 넘길 요약
 const LEGACY_STATE_PATH = join(DATA_DIR, stateFile); // 구버전(루트 직하) 호환
 const LEGACY_ATTACH_DIR = join(DATA_DIR, "attachments");
@@ -159,7 +160,7 @@ const STR = {
       "• /local — local `ctb` session status · end it from here when it's blocking the bot\n" +
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
       "• /remember <text> — save to persistent memory (survives /new)\n" +
-      "• /memory — view memory · /memory clear to wipe\n" +
+      "• /memory — view memory · /memory rm <n> to drop one line · /memory clear to wipe\n" +
       "• /reserve — show retry queue status at usage-limit reset · /reserve rm to cancel\n" +
       "• /restart — restart the bot (after a syntax check)\n" +
       "• /status — bot status & version\n" +
@@ -250,9 +251,14 @@ const STR = {
     claudeModelStatus: (cur) =>
       `🧠 Claude model: ${cur}\n` +
       "Tap to switch, or send `/model <full-model-id>`",
-    codexModelStatus: (cur) =>
+    codexModelStatus: (cur, models) =>
       `🧠 Codex model: ${cur}\n` +
-      "Set: `/model <full-codex-model-id>`",
+      (models.length
+        ? `Available in this Codex CLI: ${models.join(" · ")}\nTap to switch. Default is the safest choice.`
+        : "Set: `/model <full-codex-model-id>`\nDefault is the safest choice; unavailable model IDs can fail."),
+    codexModelUnknown: (m, models) =>
+      `⚠️ Set to ${m}, but it isn't in this Codex CLI's model list — runs may fail.\n` +
+      `Listed: ${models.join(" · ")}\nRevert with /model default.`,
     modelDefBtn: "Default",
     modelSet: (provider, m) => `🧠 ${provider} model set to: ${m}`,
     modelReset: (provider, def) => `🧠 ${provider} model reset to default (${def}).`,
@@ -274,11 +280,13 @@ const STR = {
     autoCompactOffBtn: "Off",
     autoCompactDefBtn: "Default",
     memoryEmpty: "No memory yet. Use `/remember <text>` to add.",
-    memoryShow: (m) => `💾 Memory:\n\`\`\`\n${m}\n\`\`\``,
-    memoryCleared: "🧹 Memory cleared.",
+    memoryShow: (m) => `💾 Memory:\n\`\`\`\n${m}\n\`\`\`\n\`/memory rm <n>\` removes one line.`,
+    memoryCleared: "🧹 Memory cleared. The current chat may still follow it — `/new` starts a fresh chat without it.",
+    memoryRemoved: (s) => `🗑 Removed:\n\`\`\`\n${s}\n\`\`\`\nThe current chat may still follow it — \`/new\` starts a fresh chat without it.`,
     remembered: "💾 Saved to memory.",
+    memoryCrowded: (n) => `⚠️ ${n} rules in memory. The more there are, the weaker each one pulls — trim with \`/memory\` · \`/memory rm <n>\`.`,
     rememberUsage: "Usage: /remember <text to remember>",
-    memoryUsage: "Usage: /memory · /memory clear",
+    memoryUsage: (n) => `Usage: /memory · /memory rm <n> · /memory clear${n ? ` (1–${n})` : ""}`,
     rateLimitQueued: (n, time) => `⏳ Queued (#${n}). Will retry at ${time}. /reserve rm to cancel.`,
     reserveStatus: (n, time) => `⏳ ${n} message(s) queued. Retrying at ${time}. /reserve rm to cancel.`,
     reserveAuto: (time) => `⏰ Auto-retry scheduled for ${time}. Cancel with /reserve rm.`,
@@ -300,7 +308,7 @@ const STR = {
       "• /local — 로컬 `ctb` 세션 상태 확인 · 봇을 막고 있으면 여기서 종료\n" +
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
       "• /remember <내용> — 퍼시스턴트 메모리에 저장 (/new 로 초기화해도 유지)\n" +
-      "• /memory — 메모리 보기 · /memory clear 로 삭제\n" +
+      "• /memory — 메모리 보기 · /memory rm <번호> 로 한 줄 삭제 · /memory clear 로 전체 삭제\n" +
       "• /reserve — 한도 리셋 시 대기열 상태 확인 · /reserve rm 으로 취소\n" +
       "• /restart — 봇 재시작 (문법 검사 후 안전하게)\n" +
       "• /status — 봇 상태·버전 보기\n" +
@@ -366,9 +374,14 @@ const STR = {
     claudeModelStatus: (cur) =>
       `🧠 현재 Claude 모델: ${cur}\n` +
       "버튼으로 전환하거나 `/model <전체 모델 ID>`",
-    codexModelStatus: (cur) =>
+    codexModelStatus: (cur, models) =>
       `🧠 현재 Codex 모델: ${cur}\n` +
-      "설정: `/model <Codex 전체 모델 ID>`",
+      (models.length
+        ? `현재 Codex CLI에서 선택 가능: ${models.join(" · ")}\n버튼으로 선택하세요. 가장 안전한 선택은 기본값입니다.`
+        : "설정: `/model <Codex 전체 모델 ID>`\n가장 안전한 선택은 기본값이며, 지원하지 않는 ID는 실행 중 오류가 날 수 있습니다."),
+    codexModelUnknown: (m, models) =>
+      `⚠️ ${m}(으)로 설정했지만 현재 Codex CLI의 목록에 없습니다 — 실행 중 오류가 날 수 있습니다.\n` +
+      `목록: ${models.join(" · ")}\n되돌리기: /model default`,
     modelDefBtn: "기본값",
     modelSet: (provider, m) => `🧠 ${provider} 모델을 ${m}(으)로 설정했습니다.`,
     modelReset: (provider, def) => `🧠 ${provider} 모델을 기본값(${def})으로 되돌렸습니다.`,
@@ -390,11 +403,13 @@ const STR = {
     autoCompactOffBtn: "끄기",
     autoCompactDefBtn: "기본값",
     memoryEmpty: "저장된 메모리가 없습니다. `/remember <내용>`으로 추가하세요.",
-    memoryShow: (m) => `💾 메모리:\n\`\`\`\n${m}\n\`\`\``,
-    memoryCleared: "🧹 메모리를 삭제했습니다.",
+    memoryShow: (m) => `💾 메모리:\n\`\`\`\n${m}\n\`\`\`\n\`/memory rm <번호>\` 로 한 줄만 지울 수 있습니다.`,
+    memoryCleared: "🧹 메모리를 삭제했습니다. 진행 중인 대화에는 한동안 남습니다 — `/new` 로 대화를 새로 시작하면 사라집니다.",
+    memoryRemoved: (s) => `🗑 삭제했습니다:\n\`\`\`\n${s}\n\`\`\`\n진행 중인 대화에는 한동안 남습니다 — \`/new\` 로 대화를 새로 시작하면 사라집니다.`,
     remembered: "💾 메모리에 저장했습니다.",
+    memoryCrowded: (n) => `⚠️ 메모리 ${n}개. 많아질수록 각 규칙의 구속력이 약해집니다 — \`/memory\` · \`/memory rm <번호>\` 로 정리하세요.`,
     rememberUsage: "사용법: /remember <기억할 내용>",
-    memoryUsage: "사용법: /memory · /memory clear",
+    memoryUsage: (n) => `사용법: /memory · /memory rm <번호> · /memory clear${n ? ` (1~${n})` : ""}`,
     rateLimitQueued: (n, time) => `⏳ 대기열에 추가됨 (${n}번째). ${time}에 자동 재시도. 취소: /reserve rm`,
     reserveStatus: (n, time) => `⏳ 대기 중인 메시지 ${n}개. ${time}에 재시도 예약됨. 취소: /reserve rm`,
     reserveAuto: (time) => `⏰ ${time}에 자동 재시도 예약됨. 취소: /reserve rm`,
@@ -448,6 +463,24 @@ function parseTokens(raw) {
 // /model 에서 보여줄 추천 별칭(claude CLI 가 별칭·전체 모델 ID 모두 허용).
 const CLAUDE_MODEL_SUGGESTIONS = ["fable", "opus", "sonnet", "haiku"];
 
+// Codex CLI가 내려받은 계정별 모델 목록을 그대로 사용한다. 하드코딩하면 모델 출시·폐기와
+// 계정별 rollout 차이를 따라갈 수 없다. 캐시가 없거나 형식이 바뀌면 빈 목록으로 폴백한다.
+function codexModelSuggestions() {
+  try {
+    const codexHome = cfg.env?.CODEX_HOME || process.env.CODEX_HOME
+      || join(process.env.HOME || "", ".codex");
+    const parsed = JSON.parse(readFileSync(join(codexHome, "models_cache.json"), "utf8"));
+    const models = Array.isArray(parsed) ? parsed : parsed.models;
+    if (!Array.isArray(models)) return [];
+    return models
+      .filter((m) => m?.visibility === "list" && typeof m.slug === "string" && m.slug)
+      .sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999))
+      .map((m) => m.slug);
+  } catch {
+    return [];
+  }
+}
+
 // /(슬래시) 자동완성 메뉴용 명령 목록 (언어별). setMyCommands 로 등록.
 const COMMANDS = {
   en: [
@@ -458,7 +491,7 @@ const COMMANDS = {
     { command: "stop", description: "Stop the current task (--reset to roll back session)" },
     { command: "local", description: "Local ctb session status · end it from here" },
     { command: "remember", description: "Save to persistent memory (survives /new)" },
-    { command: "memory", description: "View or clear persistent memory" },
+    { command: "memory", description: "View memory · rm <n> drops one · clear wipes it" },
     { command: "cron", description: "List / add / remove scheduled tasks" },
     { command: "restart", description: "Restart the bot (after syntax check)" },
     { command: "status", description: "Bot status / version" },
@@ -477,7 +510,7 @@ const COMMANDS = {
     { command: "stop", description: "작업 중단 (--reset 으로 세션 되돌리기)" },
     { command: "local", description: "로컬 ctb 세션 상태 확인·종료" },
     { command: "remember", description: "퍼시스턴트 메모리에 저장 (/new 후에도 유지)" },
-    { command: "memory", description: "메모리 보기·삭제" },
+    { command: "memory", description: "메모리 보기 · rm <번호>로 한 줄 · clear로 전체 삭제" },
     { command: "cron", description: "예약 작업 보기·추가·삭제" },
     { command: "restart", description: "봇 재시작 (문법 검사 후)" },
     { command: "status", description: "봇 상태·버전 보기" },
@@ -586,11 +619,33 @@ async function checkForUpdate() {
 
 // ── 퍼시스턴트 메모리 ─────────────────────────────────────────────────────
 // /new 로 세션을 초기화해도 유지되는 메모리. runClaude 시 시스템 프롬프트에 주입.
+// 항목이 늘어나면 토큰보다 주목도가 문제다 — RULES 블록을 persona 앞에 두고 "must follow before
+// anything else" 를 붙여도, 그 안에 스무 줄이 있으면 신호가 평평해져 기존 규칙까지 약해진다.
+// 그래서 MEMORY_CROWDED 를 넘으면 /remember 응답에 정리 권유를 붙인다.
 function loadMemory() {
   try { return readFileSync(MEMORY_PATH, "utf8").trim(); } catch { return ""; }
 }
 function saveMemory(content) {
   writeFileSync(MEMORY_PATH, content);
+}
+// 메모리는 `- ` 항목 목록. 여러 줄짜리 항목은 첫 줄만 `- ` 로 시작하므로 뒤따르는 줄은 앞 항목에 붙인다.
+// (손으로 편집해 불릿이 없는 파일도 항목으로 받아들여 다시 쓸 때 정규화된다.)
+function memoryItems(mem = loadMemory()) {
+  const items = [];
+  let bulleted = false; // 불릿이 하나도 없는 파일이면 줄 단위로 끊는다 — 안 그러면 통째로 한 항목이 된다.
+  for (const line of mem.split("\n")) {
+    if (line.startsWith("- ")) { items.push(line.slice(2)); bulleted = true; }
+    else if (bulleted && items.length) items[items.length - 1] += `\n${line}`;
+    else if (line.trim()) items.push(line.trim());
+  }
+  return items;
+}
+function saveMemoryItems(items) {
+  saveMemory(items.map((s) => `- ${s}`).join("\n"));
+}
+// 번호를 붙여 보여준다 — /memory rm <번호> 로 지우기 위한 것. 여러 줄 항목은 이어지는 줄을 들여쓴다.
+function memoryNumbered(items) {
+  return items.map((s, i) => `${i + 1}. ${s.split("\n").join("\n   ")}`).join("\n");
 }
 
 function loadCodexHandoff(maxChars = 12000) {
@@ -1571,22 +1626,27 @@ async function handleProvider(chatId, arg, l) {
 }
 
 // 모델 확인·전환 — /model 과 버튼(`md:*`)이 모두 여기로 온다.
-// Claude 는 별칭 버튼을 주고, Codex 는 전체 모델 ID 를 타이핑해야 해서 기본값 버튼만 준다.
+// Claude 는 별칭 버튼을 주고, Codex 는 CLI의 계정별 모델 캐시를 버튼으로 보여준다.
 // 버튼에 표시 시점의 provider 를 실어 보낸다 — 누르기 전에 /provider 로 바꿔도 엉뚱한 쪽에 저장되지 않게.
 async function handleModel(chatId, arg, l, provider = currentProvider()) {
   const modelStateKey = provider === "codex" ? "codexModel" : "model";
   const configuredModel = provider === "codex" ? cfg.codexModel : cfg.model;
+  const codexModels = provider === "codex" ? codexModelSuggestions() : [];
   if (!arg) {
     const cur = state[modelStateKey] || configuredModel || (l === "ko" ? "(기본값)" : "(default)");
     const btn = (text, v) => ({ text, callback_data: `md:${provider}:${v}` });
     const defRow = [btn(t(l, "modelDefBtn"), "default")];
+    const codexRows = [];
+    for (let i = 0; i < codexModels.length; i += 2) {
+      codexRows.push(codexModels.slice(i, i + 2).map((m) => btn(m === cur ? `✅ ${m}` : m, m)));
+    }
     await send(
       chatId,
-      provider === "codex" ? t(l, "codexModelStatus", cur) : t(l, "claudeModelStatus", cur),
+      provider === "codex" ? t(l, "codexModelStatus", cur, codexModels) : t(l, "claudeModelStatus", cur),
       {
         replyMarkup: {
           inline_keyboard: provider === "codex"
-            ? [defRow]
+            ? [...codexRows, defRow]
             : [CLAUDE_MODEL_SUGGESTIONS.map((m) => btn(m === cur ? `✅ ${m}` : m, m)), defRow],
         },
       },
@@ -1601,6 +1661,12 @@ async function handleModel(chatId, arg, l, provider = currentProvider()) {
   }
   state[modelStateKey] = arg;
   saveState(state);
+  // 목록에 없어도 막지는 않는다 — 캐시는 Codex CLI 가 갱신하는 파일이라, 새로 나온 모델을 아직
+  // 못 받았을 수 있다. 여기서 차단하면 정당한 모델을 텔레그램에서 영영 못 고른다. 경고만 남긴다.
+  if (provider === "codex" && codexModels.length > 0 && !codexModels.includes(arg)) {
+    await send(chatId, t(l, "codexModelUnknown", arg, codexModels));
+    return;
+  }
   await send(chatId, t(l, "modelSet", provider, arg));
 }
 
@@ -2152,7 +2218,8 @@ async function handle(msg) {
     if (!content) { await send(chatId, t(l, "rememberUsage")); return; }
     const existing = loadMemory();
     saveMemory(existing ? `${existing}\n- ${content}` : `- ${content}`);
-    await send(chatId, t(l, "remembered"));
+    const n = memoryItems().length;
+    await send(chatId, n > MEMORY_CROWDED ? `${t(l, "remembered")}\n\n${t(l, "memoryCrowded", n)}` : t(l, "remembered"));
     return;
   }
   if (text === "/memory" || text.startsWith("/memory ")) {
@@ -2162,8 +2229,18 @@ async function handle(msg) {
       await send(chatId, t(l, "memoryCleared"));
       return;
     }
-    const mem = loadMemory();
-    await send(chatId, mem ? t(l, "memoryShow", mem) : t(l, "memoryEmpty"));
+    const items = memoryItems();
+    if (arg === "rm" || arg.startsWith("rm ")) {
+      if (!items.length) { await send(chatId, t(l, "memoryEmpty")); return; }
+      const n = Number(arg.slice(2).trim());
+      if (!Number.isInteger(n) || n < 1 || n > items.length) { await send(chatId, t(l, "memoryUsage", items.length)); return; }
+      const [removed] = items.splice(n - 1, 1);
+      saveMemoryItems(items);
+      await send(chatId, t(l, "memoryRemoved", removed));
+      return;
+    }
+    if (arg) { await send(chatId, t(l, "memoryUsage", items.length)); return; }
+    await send(chatId, items.length ? t(l, "memoryShow", memoryNumbered(items)) : t(l, "memoryEmpty"));
     return;
   }
   if (text === "/reserve" || text.startsWith("/reserve ")) {
