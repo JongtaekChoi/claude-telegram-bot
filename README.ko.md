@@ -236,7 +236,10 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 세션은 방별로 `state.sessions[chatId]` 아래에 저장됩니다 — Claude는 `sessionId`, Codex는
 `codexSessionId`를 읽어 `codex resume <세션ID>`로 재개합니다. `ctb`는 기본적으로 `allowedChatId`의
 첫 번째 방(보통 소유자 DM)을 이어받고, `--chat <id>`로 다른 방을 지정할 수 있습니다.
-두 provider의 세션은 서로 분리됩니다. `/plan` 승인 흐름은 현재
+두 provider의 세션은 서로 분리됩니다. `ctb`는 실행할 때마다 `persona`와 `/remember` 규칙도 함께
+넘기므로, 이어받을 대화가 없는 `/new` 직후에도 터미널 세션이 봇과 같게 동작합니다. 텔레그램 전용
+문구(간결한 답변, 이미지 전송 규약, 모델 상향 권유)는 제외하며, Codex에는 `--append-system-prompt`가
+없어 `provider: "claude"`에만 적용됩니다. `/plan` 승인 흐름은 현재
 `provider: "claude"`에서만 지원하며, 일반 메시지·첨부 파일·예약 작업은 둘 다 지원합니다.
 
 `/provider`는 override를 state에 저장하므로 재시작 후에도 유지되지만 config 파일은 수정하지

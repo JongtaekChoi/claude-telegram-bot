@@ -189,9 +189,26 @@ async function main() {
   }
 
   const bin = provider === "codex" ? (cfg.codexBin || "codex") : (cfg.claudeBin || "claude");
+  // persona 와 /remember 규칙은 여기서도 붙인다. --append-system-prompt 는 호출마다 주는 값이라
+  // 세션에 저장되지 않는다 — 이어받은 세션은 지난 대화를 흉내내서 persona 가 남은 것처럼 보이지만,
+  // /new 직후처럼 이어받을 대화가 없으면 규칙이 통째로 빠진 맨 claude 가 뜬다. 붙일 대상은 설정과
+  // 파일에서 그대로 오는 것만 — 텔레그램용 문구(간결하게 답해라, 이미지 전송 규약 등)는 터미널에
+  // 해당하지 않아 뺀다. Codex 는 --append-system-prompt 가 없어 대화형에서는 끼워 넣을 자리가 없다.
+  const sysArgs = [];
+  if (provider === "claude" && !forwardedArgs.includes("--append-system-prompt")) {
+    let memory = "";
+    try { memory = readFileSync(join(botDir, "memory.md"), "utf8").trim(); } catch {}
+    // 메모리를 persona 앞에 두고 헤더를 세게 다는 것까지 bot.mjs 와 같게 — persona 가 덮어쓰지 않게.
+    const appendSys = [
+      memory ? `## RULES (must follow before anything else)\n${memory}` : null,
+      cfg.persona,
+    ].filter(Boolean).join("\n\n");
+    if (appendSys) sysArgs.push("--append-system-prompt", appendSys);
+  }
+  // forwardedArgs 는 항상 맨 끝 — `-p <프롬프트>` 로 끝나는 호출에서 순서가 깨지면 안 된다.
   const finalArgs = provider === "codex"
     ? (sessionId ? ["resume", sessionId, ...forwardedArgs] : forwardedArgs)
-    : (sessionId ? ["--resume", sessionId, ...forwardedArgs] : forwardedArgs);
+    : [...(sessionId ? ["--resume", sessionId] : []), ...sysArgs, ...forwardedArgs];
   // CTB_CHAT_ID: 여기서 띄운 백그라운드 작업(.ctb-jobs)이 끝났을 때 봇이 어느 방으로 알릴지.
   // 텔레그램 경로(bot.mjs 의 jobEnv)와 같은 값을 넣어 두 입구가 똑같이 동작하게 한다.
   const child = spawn(bin, finalArgs, {

@@ -398,7 +398,11 @@ ctb mybot.json --chat -1001234567890   # resume a specific room's session
 Sessions are stored per room at `state.sessions[chatId]` — Claude under `sessionId`, Codex under
 `codexSessionId` (resumed with `codex resume <session-id>`). `ctb` resumes the first entry of
 `allowedChatId` (usually your DM) unless `--chat <id>` names another room. The sessions remain
-separate. The `/plan` approval workflow currently
+separate. `ctb` also passes your `persona` and the `/remember` rules to Claude on every run, so a
+terminal session behaves like the bot even right after `/new`, when there is no prior conversation
+to carry the persona. Telegram-only wording (reply brevity, image sending, model-upgrade hints) is
+left out, and Codex has no `--append-system-prompt`, so this applies to `provider: "claude"` only.
+The `/plan` approval workflow currently
 requires `provider: "claude"`; normal messages, attachments, and scheduled jobs support both.
 
 `/provider` stores an override in state, survives bot restarts, and does not rewrite the config.
