@@ -299,7 +299,7 @@ const STR = {
     remembered: "💾 Saved to memory.",
     memoryCrowded: (n) => `⚠️ ${n} rules in memory. The more there are, the weaker each one pulls — trim with \`/memory\` · \`/memory rm <n>\`.`,
     rememberUsage: "Usage: /remember <text to remember>",
-    memoryUsage: (n) => `Usage: /memory · /memory rm <n> (also \`3 5 7\` or \`3-9\`) · /memory clear${n ? ` (1–${n})` : ""}`,
+    memoryUsage: (n) => `Usage: /memory · /memory rm <n>${n ? ` (1–${n})` : ""} — also \`3 5 7\` or \`3-9\` · /memory clear wipes all`,
     muteOn: "🙈 Comment mode — everything in this chat is ignored until a message starting with `*/`.",
     muteOff: "🙊 Comment mode off.",
     sessionsHeader: (p, n) =>
@@ -447,7 +447,7 @@ const STR = {
     remembered: "💾 메모리에 저장했습니다.",
     memoryCrowded: (n) => `⚠️ 메모리 ${n}개. 많아질수록 각 규칙의 구속력이 약해집니다 — \`/memory\` · \`/memory rm <번호>\` 로 정리하세요.`,
     rememberUsage: "사용법: /remember <기억할 내용>",
-    memoryUsage: (n) => `사용법: /memory · /memory rm <번호> (\`3 5 7\` · \`3-9\` 도 가능) · /memory clear${n ? ` (1~${n})` : ""}`,
+    memoryUsage: (n) => `사용법: /memory · /memory rm <번호>${n ? ` (1~${n})` : ""} — \`3 5 7\` · \`3-9\` 도 가능 · /memory clear 로 전체 삭제`,
     muteOn: "🙈 주석 모드 — `*/` 로 시작하는 메시지를 보낼 때까지 이 방의 입력을 전부 무시합니다.",
     muteOff: "🙊 주석 모드를 끝냈습니다.",
     sessionsHeader: (p, n) =>
@@ -2786,7 +2786,11 @@ async function handle(msg) {
         const m = tok.match(/^(\d+)(?:-(\d+))?$/);
         if (!m) { bad = true; break; }
         const from = Number(m[1]);
-        const to = m[2] === undefined ? from : Number(m[2]);
+        // 범위의 끝은 "여기까지"라는 뜻이라 목록 끝으로 줄여서 받는다 — 7개인데 `3-9` 를 쳤으면
+        // 3번부터 끝까지 지우려는 것이지 오타가 아니다(`sed -n '3,9p'` 도 같게 동작한다).
+        // 단건 번호(`rm 9`)는 그대로 거절한다 — 그건 없는 걸 콕 집은 거라 의도를 짐작할 수 없다.
+        // 시작이 목록 밖이면(`9-12`) from > to 가 되어 아래에서 걸린다.
+        const to = m[2] === undefined ? from : Math.min(Number(m[2]), items.length);
         if (from < 1 || to > items.length || from > to) { bad = true; break; }
         for (let i = from; i <= to; i++) picked.add(i);
       }
