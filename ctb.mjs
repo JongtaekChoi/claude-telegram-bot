@@ -178,10 +178,12 @@ async function main() {
     // DM 을 이어받았는지 그룹을 이어받았는지 확인할 방법이 없었다.
     process.stderr.write(`Resuming ${provider} session: ${sessionId} (chat ${primaryChatId})\n`);
     if (provider === "claude") {
-      // 텔레그램 이전 대화와 구분하기 위해 Claude 세션에 시작 마커 삽입
+      // 텔레그램 이전 대화와 구분하기 위해 Claude 세션에 시작 마커 삽입.
+      // 마커는 `-` 로 시작하면 안 된다 — claude 의 인자 파서가 `-p` 의 값이 아니라 옵션으로 읽고
+      // `unknown option` 으로 죽는다. 예전 마커(`---ctb:start---`)가 그래서 한 번도 안 들어갔다.
       await new Promise((resolve) => {
         const marker = spawn(cfg.claudeBin || "claude", [
-          "--resume", sessionId, "-p", "---ctb:start---", "--output-format", "json",
+          "--resume", sessionId, "-p", "<ctb:start>", "--output-format", "json",
         ], { cwd: cfg.projectDir, env: { ...process.env, ...(cfg.env || {}) }, stdio: ["ignore", "ignore", "ignore"] });
         marker.on("close", resolve);
         marker.on("error", resolve);
@@ -235,10 +237,12 @@ async function main() {
 // 것이므로, 남은 사람이 이어받는 데 필요한 걸 물어야 한다 — 끝내지 못한 것, 확인이 필요한 것,
 // 주의할 점. 넘길 게 없으면 SKIP 으로 물러서는 건 그대로다(알림이 잡음이 되면 안 읽힌다).
 async function summarizeSession(provider, sid, lang, cfg) {
-  // `---ctb:` 로 시작하는 건 사람이 친 게 아니라 ctb 가 끼워 넣은 턴이다. 세션 시작 마커도 같은
+  // `<ctb:` 로 시작하는 건 사람이 친 게 아니라 ctb 가 끼워 넣은 턴이다. 세션 시작 마커도 같은
   // 규칙을 쓰고, bot.mjs 의 /sessions 미리보기가 이 접두사 하나로 둘 다 걸러낸다 — 문구가 바뀔
   // 때마다 저쪽 정규식을 따라 고치던 걸 없애려고 태그로 묶었다.
-  const langInstruction = "---ctb:handoff---\n" + (lang && lang.startsWith("ko")
+  // `<` 로 여는 건 취향이 아니라 필수다 — `-` 로 시작하면 claude 가 `-p` 의 값이 아니라 옵션으로
+  // 읽고 `unknown option` 으로 죽는다(그래서 인수인계가 통째로 실패했다).
+  const langInstruction = "<ctb:handoff>\n" + (lang && lang.startsWith("ko")
     ? "이 로컬 터미널 세션을 지금 끝내고, 같은 사람과 텔레그램에서 대화를 이어갑니다. 넘길 말이 있으면 알려주세요 — 방금 한 일 중 알아야 할 것, 끝내지 못한 것, 확인이나 결정이 필요한 것, 주의할 점. 한국어로 3줄 이내, 마크다운 없이 텍스트만. 넘길 게 없으면 정확히 이렇게만 답해: SKIP"
     : "This local terminal session is ending now, and the conversation continues with the same person on Telegram. If there is anything to hand over, say it — what was done that they need to know, what is unfinished, what needs a check or a decision, anything to watch out for. 3 lines max, plain text, no markdown. If there is nothing to hand over, reply exactly: SKIP");
   // 결과는 세 갈래로 갈라서 돌려준다 — `{ text }` 넘길 말이 있음, `{ skip: true }` 모델이 없다고
