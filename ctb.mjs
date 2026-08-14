@@ -174,7 +174,9 @@ async function main() {
   } catch {}
 
   if (sessionId) {
-    process.stderr.write(`Resuming ${provider} session: ${sessionId}\n`);
+    // 어느 방의 세션인지 같이 찍는다 — 방마다 세션이 갈리는데 화면에는 세션 ID 만 떠서,
+    // DM 을 이어받았는지 그룹을 이어받았는지 확인할 방법이 없었다.
+    process.stderr.write(`Resuming ${provider} session: ${sessionId} (chat ${primaryChatId})\n`);
     if (provider === "claude") {
       // 텔레그램 이전 대화와 구분하기 위해 Claude 세션에 시작 마커 삽입
       await new Promise((resolve) => {
@@ -218,7 +220,7 @@ async function main() {
   });
   child.on("close", async (code) => {
     cleanup();
-    if (sessionId) await notifyTelegram(configPath, provider, sessionId);
+    if (sessionId) await notifyTelegram(configPath, provider, sessionId, primaryChatId);
     process.exit(signalExitCode ?? code ?? 0);
   });
   child.on("error", (e) => {
@@ -228,10 +230,17 @@ async function main() {
   });
 }
 
+// 세션이 끝날 때 텔레그램으로 보낼 한 마디. 예전에는 "무엇을 했는지 10단어로 요약"이었는데,
+// 그건 사후 기록이지 인수인계가 아니다. 대화는 끝나는 게 아니라 텔레그램으로 자리를 옮기는
+// 것이므로, 남은 사람이 이어받는 데 필요한 걸 물어야 한다 — 끝내지 못한 것, 확인이 필요한 것,
+// 주의할 점. 넘길 게 없으면 SKIP 으로 물러서는 건 그대로다(알림이 잡음이 되면 안 읽힌다).
 async function summarizeSession(provider, sid, lang, cfg) {
-  const langInstruction = lang && lang.startsWith("ko")
-    ? "방금 로컬 터미널 코딩 세션이 끝났어. 이 대화에서 가장 최근에 나눈 내용(이 메시지 직전까지)을 바탕으로, 그 세션에서 무엇을 했는지 한국어로 짧은 구문(10단어 이내)으로 요약해줘. 마크다운 없이 텍스트만. 중요한 작업이 없었으면 정확히 이렇게만 답해: SKIP"
-    : "A local terminal coding session just ended. Based on the most recent exchanges in this conversation (just before this message), summarize in one short phrase (10 words max) what was accomplished. Plain text only. If nothing significant was done, reply exactly: SKIP";
+  // `---ctb:` 로 시작하는 건 사람이 친 게 아니라 ctb 가 끼워 넣은 턴이다. 세션 시작 마커도 같은
+  // 규칙을 쓰고, bot.mjs 의 /sessions 미리보기가 이 접두사 하나로 둘 다 걸러낸다 — 문구가 바뀔
+  // 때마다 저쪽 정규식을 따라 고치던 걸 없애려고 태그로 묶었다.
+  const langInstruction = "---ctb:handoff---\n" + (lang && lang.startsWith("ko")
+    ? "이 로컬 터미널 세션을 지금 끝내고, 같은 사람과 텔레그램에서 대화를 이어갑니다. 넘길 말이 있으면 알려주세요 — 방금 한 일 중 알아야 할 것, 끝내지 못한 것, 확인이나 결정이 필요한 것, 주의할 점. 한국어로 3줄 이내, 마크다운 없이 텍스트만. 넘길 게 없으면 정확히 이렇게만 답해: SKIP"
+    : "This local terminal session is ending now, and the conversation continues with the same person on Telegram. If there is anything to hand over, say it — what was done that they need to know, what is unfinished, what needs a check or a decision, anything to watch out for. 3 lines max, plain text, no markdown. If there is nothing to hand over, reply exactly: SKIP");
   return new Promise((resolve) => {
     const isCodex = provider === "codex";
     const bin = isCodex ? (cfg.codexBin || "codex") : (cfg.claudeBin || "claude");
@@ -267,27 +276,32 @@ async function summarizeSession(provider, sid, lang, cfg) {
   });
 }
 
-async function notifyTelegram(configPath, provider, sessionId) {
+async function notifyTelegram(configPath, provider, sessionId, chatId) {
   try {
     const cfg = JSON.parse(readFileSync(configPath, "utf8"));
     // allowedChatId 는 문자열 또는 배열 모두 허용 (bot.mjs의 allowedIds와 동일 규칙).
     const chatIds = [].concat(cfg.allowedChatId).filter(Boolean).map(String);
     if (!cfg.token || !chatIds.length || cfg.ctbNotify === false) return;
+    // 이어받은 그 방에만 보낸다. 전에는 allowedChatId 전부에 뿌려서, DM 세션을 붙잡고 일한
+    // 내용이 그룹방에도 그대로 떴다. 방마다 세션이 갈리는데 알림만 안 갈린 셈이다.
+    // 화이트리스트 밖의 방(--chat 오타 등)이면 첫 방으로 물러선다 — 봇이 서비스하지 않는
+    // 방으로 세션 내용을 보내지 않기 위해서다.
+    const target = chatIds.includes(String(chatId)) ? String(chatId) : chatIds[0];
     const lang = cfg.lang || process.env.LANG || "";
-    process.stderr.write("ctb: summarizing session...\n");
+    process.stderr.write("ctb: preparing handoff...\n");
     const summary = await summarizeSession(provider, sessionId, lang, cfg);
-    if (!summary) { process.stderr.write("ctb: nothing to summarize (SKIP)\n"); return; }
-    process.stderr.write(`ctb: sending to Telegram — ${summary}\n`);
+    if (!summary) { process.stderr.write("ctb: nothing to hand over (SKIP)\n"); return; }
+    process.stderr.write(`ctb: sending to Telegram (chat ${target}) — ${summary}\n`);
     const label = lang.startsWith("ko") ? "[터미널]" : "[local]";
-    for (const chatId of chatIds) {
-      const r = await fetch(`https://api.telegram.org/bot${cfg.token}/sendMessage`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text: `💻 ${label} ${summary}` }),
-      });
-      const json = await r.json();
-      if (!json.ok) process.stderr.write(`ctb: Telegram error — ${JSON.stringify(json)}\n`);
-    }
+    // 여러 줄이면 꼬리표를 따로 한 줄로 — 본문이 길어지면 한 줄에 붙일 때 읽기 나쁘다.
+    const text = `💻 ${label}${summary.includes("\n") ? "\n" : " "}${summary}`;
+    const r = await fetch(`https://api.telegram.org/bot${cfg.token}/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chat_id: target, text }),
+    });
+    const json = await r.json();
+    if (!json.ok) process.stderr.write(`ctb: Telegram error — ${JSON.stringify(json)}\n`);
   } catch (e) {
     process.stderr.write(`ctb: notify error — ${e.message}\n`);
   }

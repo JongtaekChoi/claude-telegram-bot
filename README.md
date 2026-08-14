@@ -304,7 +304,7 @@ Core commands:
 > long it has been running) with a button to end it. That's for the case where you walked away from
 > the desk with `ctb` still open and the bot answers every message with "a local session is active":
 > tapping the button sends `SIGTERM` to the session's process group — the same path as pressing
-> `Ctrl-C` in that terminal, so `ctb` releases the lock and still sends its end-of-session summary.
+> `Ctrl-C` in that terminal, so `ctb` releases the lock and still sends its end-of-session handoff.
 > `/stop` offers the same button when no bot task is running. Use `/local kill` to skip the button.
 
 > **`/restart`** runs `node --check` on `bot.mjs` first and **aborts the restart if it has a syntax
@@ -384,6 +384,7 @@ The only keys you need to start are `token`, `allowedChatId`, `projectDir`, `cla
 | `ollamaTimeout` | (optional) Milliseconds to wait for an Ollama reply before giving up (default: `360000` — local models can be slow to cold-start) |
 | `autoCompactThreshold` | (optional) Offer to compact when the estimated context size exceeds this value (default: `100000`). Set to `0` to disable. Override at runtime with `/autocompact` (persists in state). |
 | `autoCompactConfirm` | (optional) Ask before compacting instead of doing it silently (default: `true`). Set to `false` to compact automatically as soon as the threshold is crossed. |
+| `ctbNotify` | (optional) Post a handoff message to the resumed room when a local `ctb` session ends (default: `true`). Set to `false` to stay silent. |
 
 The same config also drives local interactive sessions. `ctb mybot.json` follows the same provider
 as the bot — the `/provider` override in state if one is set, otherwise `config.provider` — while an
@@ -402,6 +403,14 @@ separate. `ctb` also passes your `persona` and the `/remember` rules to Claude o
 terminal session behaves like the bot even right after `/new`, when there is no prior conversation
 to carry the persona. Telegram-only wording (reply brevity, image sending, model-upgrade hints) is
 left out, and Codex has no `--append-system-prompt`, so this applies to `provider: "claude"` only.
+
+When the terminal session ends, `ctb` asks it one last question — not "summarize what you did" but
+"the conversation continues on Telegram; is there anything to hand over?" — and posts the answer to
+**the room whose session it resumed** (the one printed as `Resuming … (chat <id>)` on startup), so a
+DM session's notes no longer land in your groups. The reply is capped at three lines and the session
+can decline with `SKIP`, which keeps the notification worth reading. Turn it off with
+`"ctbNotify": false`.
+
 The `/plan` approval workflow currently
 requires `provider: "claude"`; normal messages, attachments, and scheduled jobs support both.
 
