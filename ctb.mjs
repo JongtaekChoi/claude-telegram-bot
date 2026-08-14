@@ -192,9 +192,11 @@ async function main() {
   const finalArgs = provider === "codex"
     ? (sessionId ? ["resume", sessionId, ...forwardedArgs] : forwardedArgs)
     : (sessionId ? ["--resume", sessionId, ...forwardedArgs] : forwardedArgs);
+  // CTB_CHAT_ID: 여기서 띄운 백그라운드 작업(.ctb-jobs)이 끝났을 때 봇이 어느 방으로 알릴지.
+  // 텔레그램 경로(bot.mjs 의 jobEnv)와 같은 값을 넣어 두 입구가 똑같이 동작하게 한다.
   const child = spawn(bin, finalArgs, {
     cwd: cfg.projectDir,
-    env: { ...process.env, ...(cfg.env || {}) },
+    env: { ...process.env, ...(cfg.env || {}), ...(primaryChatId ? { CTB_CHAT_ID: primaryChatId } : {}) },
     stdio: "inherit",
   });
   child.on("close", async (code) => {

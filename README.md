@@ -260,6 +260,9 @@ Core commands:
 | `/provider [claude\|codex\|default]` | View or switch the Telegram bot's provider override |
 | `/model [name\|default]` | View or switch the active provider's model; suggestions are provider-specific |
 | `/new` | Reset the active provider's conversation session |
+| `/sessions` | List this project's past sessions for the active provider and pick one to carry on from (🔒 held by another room, 💻 open in a terminal — both are blocked) |
+| `/name <name>` | Name the current session so it stands out in `/sessions` (`/name -` removes it) |
+| `/jobs` | Background jobs that outlive replies — ▶ running, ✅ finished |
 | `/plan <request>` | Produce a plan and wait for approval (Claude only) |
 | `/compact` | Compact the current context (Claude only) |
 | `/stop [--reset]` | Stop the task; optionally restore its previous session ID |
@@ -431,6 +434,14 @@ your launchd plist points them.
   inside that folder are accepted — `png/jpg/jpeg/gif/webp`, ≤10 MB; path traversal, symlinks escaping
   the folder, and other file types are rejected. The provider learns this convention automatically via
   the system prompt. Disable the whole feature with `"sendImages": false`.
+- **Background jobs**: the agent runs as a fresh process per message and exits when its reply is sent —
+  anything it launched in the background dies with it. So work that must outlive the reply (dev servers,
+  long builds, watchers) is detached with `nohup … & disown` and registered in `.ctb-jobs/` as a
+  `<name>.json` record plus a `<name>.log`. The bot **watches but never owns** these jobs: every 30s it
+  checks each PID with `kill(pid, 0)` and messages the chat when one exits, with the tail of its log.
+  Because the bot doesn't own them, `/restart` doesn't kill them, and the watcher picks them back up on
+  boot. `/jobs` lists them; the same records are produced whether the job was started from Telegram or
+  from a local `ctb` session. Disable with `"backgroundJobs": false`.
 - **Sessions**: Claude and Codex keep separate session IDs, so switching providers preserves both
   conversations. `/new` resets only the active provider's session.
 - **Per-chat sessions**: your DM and each group hold independent Claude/Codex sessions (`state.sessions[chatId]`); what you say in one room never carries into another room's session. Settings like `provider` and `model` are bot-wide.

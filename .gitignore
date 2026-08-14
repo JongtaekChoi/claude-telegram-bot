@@ -8,6 +8,7 @@ state.*.json
 *.state.json
 attachments/
 .ctb-outbox/
+.ctb-jobs/
 bot.log
 bot.error.log
 npmSecKey

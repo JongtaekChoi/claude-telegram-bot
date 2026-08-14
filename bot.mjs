@@ -14,12 +14,12 @@
 // 자동 판별하고, cfg.lang 을 주면 그 언어로 고정함. 콘솔/CLI 출력은 영어 단일.
 
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
 import dns from "node:dns";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 
 // 일부 네트워크에서 IPv6 경로가 막혀 있으면 Node의 fetch(undici)가 IPv6를
 // 물고 타임아웃남(api.telegram.org가 IPv6를 가짐). IPv4 우선 + 자동선택 끄기로 회피.
@@ -104,6 +104,7 @@ function migrateData() {
       console.log(`Migrated attachments → ${ATTACH_DIR}`);
     }
     if (IMAGE_SEND) mkdirSync(OUTBOX_DIR, { recursive: true }); // 에이전트가 보낼 이미지를 놓는 폴더
+    if (JOBS) mkdirSync(JOBS_DIR, { recursive: true }); // 에이전트가 띄운 백그라운드 작업 기록
   } catch (e) {
     console.error("Data migration skipped:", e.message);
   }
@@ -131,6 +132,14 @@ const IMAGE_SEND = cfg.sendImages !== false;
 const OUTBOX_DIR = join(cfg.projectDir || DATA_DIR, ".ctb-outbox");
 const OUTBOX_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 const OUTBOX_MAX_BYTES = 10 * 1024 * 1024; // 텔레그램 sendPhoto 상한(대략)
+// 백그라운드 작업(.ctb-jobs): 텔레그램용 에이전트는 메시지마다 새 프로세스로 떴다가 답장과 함께
+// 죽는다. 에이전트가 띄운 백그라운드도 그때 같이 죽으므로, 오래 살아야 할 작업은 nohup 으로 프로세스
+// 그룹 밖에 내보내고 봇은 여기서 **생사만 지켜본다**. 봇이 자식으로 소유하면 /restart 한 번에 전부
+// 죽는다 — 배포 수단이 작업 학살 수단이 되면 안 된다. 아웃박스와 같은 파일시스템 인계 방식이다.
+const JOBS = cfg.backgroundJobs !== false;
+const JOBS_DIR = join(cfg.projectDir || DATA_DIR, ".ctb-jobs");
+const JOB_TICK_MS = 30_000;
+const JOB_LOG_TAIL = 1200; // 완료 알림에 붙일 로그 꼬리 길이
 // allowedChatId 는 문자열 또는 배열 모두 허용 (하위 호환)
 const allowedIds = []
   .concat(cfg.allowedChatId)
@@ -153,6 +162,9 @@ const STR = {
       "• Start a message with // and the bot ignores it — leave yourself a note in the chat\n" +
       "• /* ignores everything until a message starting with */ — for a run of notes or a pasted log\n" +
       "• /new — reset conversation context (new session)\n" +
+      "• /sessions — list past sessions in this project and pick one to carry on from\n" +
+      "• /name — name the current session so it stands out in /sessions\n" +
+      "• /jobs — background jobs that outlive replies · you get a message when one ends\n" +
       "• /compact — compress context to free up space (keeps the session)\n" +
       "• /plan <request> — plan only (no edits), then approve/cancel to run for real\n" +
       "• Codex fallback can run automatically when Claude hits a limit (if enabled)\n" +
@@ -290,6 +302,25 @@ const STR = {
     memoryUsage: (n) => `Usage: /memory · /memory rm <n> · /memory clear${n ? ` (1–${n})` : ""}`,
     muteOn: "🙈 Comment mode — everything in this chat is ignored until a message starting with `*/`.",
     muteOff: "🙊 Comment mode off.",
+    sessionsHeader: (p, n) =>
+      `🗂 ${n} recent ${p} session(s). Pick one to carry on from — ✅ this room's, 🔒 held by another room, 💻 open in a terminal.`,
+    sessionsEmpty: (p) => `No past ${p} sessions found for this project.`,
+    sessionSwitched: (p, label) => `🗂 Switched to ${p} session \`${label}\`. Your next message continues it.`,
+    sessionAlready: (label) => `✅ Already on \`${label}\` — nothing changed.`,
+    sessionHeld: "🔒 Another room is on that session. Two rooms on one session overwrite each other's context.",
+    sessionInTerminal: "💻 That session is open in a terminal right now. Close it there first — two processes on one session overwrite each other's context.",
+    nameUsage: "Usage: `/name Tom` — names this session so you can spot it in /sessions. `/name -` removes the name.",
+    nameCurrent: (n) => `🏷 This session is \`${n}\`. \`/name <new>\` to rename, \`/name -\` to remove.`,
+    nameSet: (n) => `🏷 This session is now \`${n}\`.`,
+    nameCleared: "🏷 Name removed.",
+    nameNoSession: "No session to name yet — send a message first, then name it.",
+    jobsOff: "Background jobs are off (`backgroundJobs: false` in config).",
+    jobsEmpty: "No background jobs. Ask for something long-running and it'll be started detached, so it survives the reply.",
+    jobsList: (run, done, body, dir) =>
+      `⚙️ Background jobs — ▶ ${run} running, ✅ ${done} finished\n\n${body}\n\nLogs: \`${dir}\``,
+    jobDone: (name, cmd, ran, tail) =>
+      `✅ Job \`${name}\` finished${ran ? ` after ${ran}` : ""}.${cmd ? `\n\`${cmd}\`` : ""}` +
+      (tail ? `\n\nLast output:\n\`\`\`\n${tail}\n\`\`\`` : "\n(no output)"),
     rateLimitQueued: (n, time) => `⏳ Queued (#${n}). Will retry at ${time}. /reserve rm to cancel.`,
     reserveStatus: (n, time) => `⏳ ${n} message(s) queued. Retrying at ${time}. /reserve rm to cancel.`,
     reserveAuto: (time) => `⏰ Auto-retry scheduled for ${time}. Cancel with /reserve rm.`,
@@ -304,6 +335,9 @@ const STR = {
       "• 메시지를 // 로 시작하면 봇이 무시합니다 — 채팅에 혼잣말 메모를 남기는 용도\n" +
       "• /* 를 보내면 */ 로 시작하는 메시지가 올 때까지 전부 무시합니다 — 메모를 연달아 남기거나 로그를 붙여넣을 때\n" +
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
+      "• /sessions — 이 프로젝트의 지난 세션 목록 · 골라서 이어가기\n" +
+      "• /name — 지금 세션에 이름 붙이기 · /sessions 에서 바로 찾기\n" +
+      "• /jobs — 답장 후에도 살아 있는 백그라운드 작업 · 끝나면 먼저 알려줌\n" +
       "• /compact — 컨텍스트 압축 (세션 유지, 공간 확보)\n" +
       "• /plan <요청> — 계획만 세우기 (편집 없음) → 승인/취소로 실제 실행\n" +
       "• Codex 폴백 활성화 시 Claude 한도 도달 때 자동으로 대신 실행\n" +
@@ -416,6 +450,25 @@ const STR = {
     memoryUsage: (n) => `사용법: /memory · /memory rm <번호> · /memory clear${n ? ` (1~${n})` : ""}`,
     muteOn: "🙈 주석 모드 — `*/` 로 시작하는 메시지를 보낼 때까지 이 방의 입력을 전부 무시합니다.",
     muteOff: "🙊 주석 모드를 끝냈습니다.",
+    sessionsHeader: (p, n) =>
+      `🗂 최근 ${p} 세션 ${n}개. 골라서 그 대화를 이어갈 수 있습니다 — ✅ 이 방의 세션, 🔒 다른 방이 쓰는 중, 💻 터미널에서 열려 있음.`,
+    sessionsEmpty: (p) => `이 프로젝트의 지난 ${p} 세션을 찾지 못했습니다.`,
+    sessionSwitched: (p, label) => `🗂 ${p} 세션 \`${label}\` 으로 바꿨습니다. 다음 메시지부터 그 대화를 이어갑니다.`,
+    sessionAlready: (label) => `✅ 이미 \`${label}\` 세션입니다 — 바뀐 것 없습니다.`,
+    sessionHeld: "🔒 다른 방이 쓰고 있는 세션입니다. 한 세션에 두 방이 붙으면 서로의 맥락을 덮어씁니다.",
+    sessionInTerminal: "💻 지금 터미널에서 열려 있는 세션입니다. 거기서 먼저 닫아주세요 — 한 세션에 두 프로세스가 붙으면 서로의 맥락을 덮어씁니다.",
+    nameUsage: "사용법: `/name 톰` — 지금 세션에 이름을 붙여 /sessions 에서 바로 찾게 합니다. 지우려면 `/name -`",
+    nameCurrent: (n) => `🏷 이 세션의 이름은 \`${n}\` 입니다. 바꾸려면 \`/name 새이름\`, 지우려면 \`/name -\``,
+    nameSet: (n) => `🏷 이 세션의 이름을 \`${n}\` 으로 정했습니다.`,
+    nameCleared: "🏷 이름을 지웠습니다.",
+    nameNoSession: "아직 이름 붙일 세션이 없습니다 — 메시지를 한 번 보낸 뒤에 붙여주세요.",
+    jobsOff: "백그라운드 작업이 꺼져 있습니다 (config 의 `backgroundJobs: false`).",
+    jobsEmpty: "돌고 있는 백그라운드 작업이 없습니다. 오래 걸리는 일을 시키면 답장과 무관하게 살아남도록 떼어 내서 띄웁니다.",
+    jobsList: (run, done, body, dir) =>
+      `⚙️ 백그라운드 작업 — ▶ 실행 중 ${run}개, ✅ 끝난 것 ${done}개\n\n${body}\n\n로그: \`${dir}\``,
+    jobDone: (name, cmd, ran, tail) =>
+      `✅ 작업 \`${name}\` 이 끝났습니다${ran ? ` (${ran} 걸림)` : ""}.${cmd ? `\n\`${cmd}\`` : ""}` +
+      (tail ? `\n\n마지막 출력:\n\`\`\`\n${tail}\n\`\`\`` : "\n(출력 없음)"),
     rateLimitQueued: (n, time) => `⏳ 대기열에 추가됨 (${n}번째). ${time}에 자동 재시도. 취소: /reserve rm`,
     reserveStatus: (n, time) => `⏳ 대기 중인 메시지 ${n}개. ${time}에 재시도 예약됨. 취소: /reserve rm`,
     reserveAuto: (time) => `⏰ ${time}에 자동 재시도 예약됨. 취소: /reserve rm`,
@@ -487,10 +540,207 @@ function codexModelSuggestions() {
   }
 }
 
+// ── 지난 세션 목록 (/sessions) ────────────────────────────────────────────
+// Claude·Codex 모두 세션 기록을 jsonl 로 남긴다. 파일명이 곧 세션 ID 라, 목록을 만들어
+// 고르게 하고 setSid 로 갈아끼우면 지난 대화를 그대로 이어받을 수 있다(이미 --resume 을 쓰고 있다).
+// 기록 파일은 14MB 를 넘기도 하므로 통째로 읽지 않고 앞부분만 잘라 읽는다.
+const SESSION_LIST_MAX = 10; // 버튼으로 보여줄 개수
+const SESSION_SCAN_MAX = 200; // Codex 는 전 프로젝트가 한 폴더에 섞여 있어 훑는 개수를 막아둔다
+const SESSION_HEAD_BYTES = 128 * 1024; // cwd 와 세션 ID 가 들어올 만큼만
+const SESSION_TAIL_BYTES = 64 * 1024; // 마지막 사용자 메시지를 찾을 만큼만
+
+function readHead(path, bytes = SESSION_HEAD_BYTES) {
+  let fd;
+  try {
+    fd = openSync(path, "r");
+    const buf = Buffer.alloc(bytes);
+    return buf.toString("utf8", 0, readSync(fd, buf, 0, bytes, 0));
+  } catch {
+    return "";
+  } finally {
+    if (fd !== undefined) try { closeSync(fd); } catch {}
+  }
+}
+
+function readTail(path, bytes = SESSION_TAIL_BYTES) {
+  let fd;
+  try {
+    const size = statSync(path).size;
+    const start = Math.max(0, size - bytes);
+    fd = openSync(path, "r");
+    const buf = Buffer.alloc(Math.min(bytes, size));
+    const text = buf.toString("utf8", 0, readSync(fd, buf, 0, buf.length, start));
+    // 중간부터 읽었으면 첫 줄은 잘려 있다 — JSON 도 깨지고 글자 중간에서 잘린 흔적도 여기 몰리니 버린다.
+    return start > 0 ? text.slice(text.indexOf("\n") + 1) : text;
+  } catch {
+    return "";
+  } finally {
+    if (fd !== undefined) try { closeSync(fd); } catch {}
+  }
+}
+
+// 봇이 사용자 글 앞뒤에 붙이는 메타 줄 — 앞은 `[From: …]`·`[Forwarded …]`·`[Replying to …]`
+// (buildMsgMeta), 뒤는 `[Attachment] …`. 전부 따로 줄을 차지하므로 미리보기에선 걷어낸다.
+// 안 걷어내면 그룹방 세션은 죄다 같은 줄로 시작해 서로 구별이 안 되고, 아래 PREVIEW_SKIP 의
+// `[` 규칙에도 걸려 미리보기가 통째로 빈다. 메타만 있는 메시지는 빈 문자열이 되어 다음 후보로 넘어간다.
+// 앞쪽 메타는 `[…]` 로 줄이 끝나지만 첨부는 `[Attachment] 경로…` 처럼 태그 뒤에 본문이 이어져서
+// 같은 규칙으로 못 잡는다. 뒤쪽은 태그 이름을 박아 좁게 지운다.
+const stripMsgMeta = (text) =>
+  text.replace(/^(?:\s*\[[^\n]*\]\s*\n)+/, "").replace(/(?:\n\s*\[Attachment\][^\n]*)+$/, "");
+
+// 미리보기로 쓸 수 없는 턴 — 슬래시 명령 출력(`<…>`), 주의 문구, 그리고 훅이 사람 대신 끼워 넣는
+// 지시문. 훅 문구는 설정하기 나름이라 전부는 못 거르지만 흔한 것만 막아도 목록이 훨씬 읽힌다.
+// 걸리면 그 다음 후보로 물러선다.
+const PREVIEW_SKIP = /^\s*[<[]|^Caveat:|^A local terminal coding session just ended/;
+
+// Codex 는 프롬프트 앞에 규칙·persona 를 붙여 보내므로(runCodex 참고) 미리보기에선 걷어낸다.
+function sessionPreview(text) {
+  const body = text.includes("User request:") ? text.slice(text.indexOf("User request:") + 13) : text;
+  const line = stripMsgMeta(body).replace(/\s+/g, " ").trim();
+  return line.length > 48 ? `${line.slice(0, 47)}…` : line;
+}
+
+// Claude 기록 폴더는 프로젝트 경로를 인코딩한 이름(`/Users/x/y` → `-Users-x-y`)인데 비공식
+// 규칙이라 바뀔 수 있다. 그래서 이름으로 먼저 찾고, 없으면 각 폴더의 jsonl 에 박혀 있는
+// cwd 로 되짚는다 — 규칙이 바뀌어도 목록이 통째로 사라지지는 않게.
+function claudeSessionDir() {
+  const root = join(process.env.HOME || "", ".claude", "projects");
+  const guess = join(root, resolve(cfg.projectDir).replace(/[^a-zA-Z0-9]/g, "-"));
+  if (existsSync(guess)) return guess;
+  let dirs;
+  try { dirs = readdirSync(root); } catch { return null; }
+  for (const d of dirs) {
+    const full = join(root, d);
+    let files;
+    try { files = readdirSync(full).filter((f) => f.endsWith(".jsonl")); } catch { continue; }
+    if (!files.length) continue;
+    if (readHead(join(full, files[0]), 8192).includes(`"cwd":"${resolve(cfg.projectDir)}"`)) return full;
+  }
+  return null;
+}
+
+function claudeSessions() {
+  const dir = claudeSessionDir();
+  if (!dir) return [];
+  let files;
+  try { files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")); } catch { return []; }
+  return files
+    .map((f) => {
+      try { return { id: f.slice(0, -6), path: join(dir, f), at: statSync(join(dir, f)).mtimeMs }; }
+      catch { return null; }
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.at - a.at)
+    .slice(0, SESSION_LIST_MAX)
+    .map((s) => ({ ...s, preview: claudeSessionPreview(s.path) }));
+}
+
+// 미리보기는 첫 메시지가 아니라 **마지막** 사용자 메시지다. 며칠 이어온 세션일수록 "뭘로
+// 시작했나" 보다 "뭘 하다 말았나" 가 알아보기 쉽고, 버튼에 같이 붙는 시각(mtime)과도 같은
+// 시점을 가리킨다. 꼬리에서 쓸 만한 줄을 못 찾으면 앞부분으로 물러선다.
+function claudeSessionPreview(path) {
+  return claudePreviewFrom(readTail(path).split("\n").reverse()) || claudePreviewFrom(readHead(path).split("\n"));
+}
+
+function claudePreviewFrom(lines) {
+  for (const line of lines) {
+    if (!line.includes('"type":"user"')) continue;
+    let content;
+    try { content = JSON.parse(line)?.message?.content; } catch { continue; }
+    if (Array.isArray(content)) content = content.find((c) => c?.type === "text")?.text;
+    if (typeof content !== "string") continue;
+    // 판정은 메타를 걷어낸 뒤에 한다 — 순서가 바뀌면 그룹방 메시지가 `[From: …]` 때문에 전부 걸린다.
+    const body = stripMsgMeta(content);
+    if (PREVIEW_SKIP.test(body)) continue;
+    const preview = sessionPreview(body);
+    if (preview) return preview;
+  }
+  return "";
+}
+
+// Codex 는 날짜별 폴더(YYYY/MM/DD)에 전 프로젝트가 섞여 쌓인다. 대신 첫 줄 session_meta 에
+// cwd 가 들어 있어 경로 인코딩을 추측할 필요가 없다 — 최신 파일부터 훑다가 필요한 만큼 찾으면 멈춘다.
+function codexSessions() {
+  const root = join(process.env.HOME || "", ".codex", "sessions");
+  const paths = [];
+  const walk = (dir, depth) => {
+    if (paths.length >= SESSION_SCAN_MAX) return;
+    let names;
+    try { names = readdirSync(dir); } catch { return; }
+    for (const n of names.sort().reverse()) { // 최신 연·월·일, 파일명도 시각순이라 역순이 최신
+      if (paths.length >= SESSION_SCAN_MAX) return;
+      if (depth < 3) walk(join(dir, n), depth + 1);
+      else if (n.endsWith(".jsonl")) paths.push(join(dir, n));
+    }
+  };
+  walk(root, 0);
+  // 파일명은 만든 시각이라 정렬 기준으로 못 쓴다 — `codex exec resume` 은 원본 파일에 계속
+  // 덧붙이므로, 7월에 만든 세션이 어제 쓴 세션일 수 있다. mtime(마지막 사용)으로 줄 세우고
+  // 그 순서대로 앞부분만 읽어 cwd 를 확인한다(stat 은 싸고 읽기는 비싸다).
+  const out = [];
+  const byRecent = paths
+    .map((path) => { try { return { path, at: statSync(path).mtimeMs }; } catch { return null; } })
+    .filter(Boolean)
+    .sort((a, b) => b.at - a.at);
+  for (const { path, at } of byRecent) {
+    if (out.length >= SESSION_LIST_MAX) break;
+    const head = readHead(path);
+    if (!head.includes(`"cwd":"${resolve(cfg.projectDir)}"`)) continue;
+    let id;
+    for (const line of head.split("\n")) {
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      if (e?.type === "session_meta") { id = e.payload?.id; break; }
+    }
+    if (!id) continue;
+    const preview =
+      codexPreviewFrom(readTail(path).split("\n").reverse()) || codexPreviewFrom(head.split("\n"));
+    out.push({ id, path, at, preview });
+  }
+  return out;
+}
+
+function codexPreviewFrom(lines) {
+  for (const line of lines) {
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    if (e?.payload?.type !== "user_message" || typeof e.payload.message !== "string") continue;
+    const preview = sessionPreview(e.payload.message);
+    if (preview) return preview;
+  }
+  return "";
+}
+
+// 세션 이름 — 미리보기는 마지막 메시지라 대화가 이어질수록 계속 바뀐다. 오래 붙잡아 둘 세션은
+// 직접 이름을 달아두는 편이 확실하다. 세션 ID 는 방과 무관하게 유일하니 봇 전역에 저장한다.
+const sessionName = (id) => (id && state.sessionNames?.[id]) || "";
+
+function sessionAge(ms, l) {
+  const min = Math.max(0, Math.round((Date.now() - ms) / 60000));
+  if (min < 1) return l === "ko" ? "방금" : "just now";
+  if (min < 60) return l === "ko" ? `${min}분 전` : `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return l === "ko" ? `${hr}시간 전` : `${hr}h ago`;
+  return l === "ko" ? `${Math.round(hr / 24)}일 전` : `${Math.round(hr / 24)}d ago`;
+}
+
+// 작업이 얼마나 돌았는지 — sessionAge 와 달리 시각이 아니라 **경과 시간(ms)** 을 받아 길이를 준다.
+function jobElapsed(ms, l) {
+  const min = Math.max(0, Math.round(ms / 60000));
+  if (min < 1) return l === "ko" ? "1분 미만" : "under a minute";
+  if (min < 60) return l === "ko" ? `${min}분` : `${min}m`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return l === "ko" ? `${hr}시간` : `${hr}h`;
+  return l === "ko" ? `${Math.round(hr / 24)}일` : `${Math.round(hr / 24)}d`;
+}
+
 // /(슬래시) 자동완성 메뉴용 명령 목록 (언어별). setMyCommands 로 등록.
 const COMMANDS = {
   en: [
     { command: "new", description: "Reset context (new session)" },
+    { command: "sessions", description: "List past sessions · pick one to carry on from" },
+    { command: "name", description: "Name the current session" },
+    { command: "jobs", description: "Background jobs still running (survive replies)" },
     { command: "compact", description: "Compress context to free up space (keeps session)" },
     { command: "plan", description: "Plan only (no edits), then approve/cancel to run for real" },
     { command: "ollama", description: "Toggle Ollama chat mode (bypass Claude, use local LLM)" },
@@ -510,6 +760,9 @@ const COMMANDS = {
   ],
   ko: [
     { command: "new", description: "대화 맥락 초기화 (새 세션)" },
+    { command: "sessions", description: "지난 세션 목록 · 골라서 이어가기" },
+    { command: "name", description: "지금 세션에 이름 붙이기" },
+    { command: "jobs", description: "백그라운드 작업 목록 (답장 후에도 살아 있는 것)" },
     { command: "compact", description: "컨텍스트 압축 (세션 유지, 공간 확보)" },
     { command: "plan", description: "계획만 세우기 (편집 없음) → 승인/취소로 실제 실행" },
     { command: "ollama", description: "Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM)" },
@@ -938,6 +1191,32 @@ function imageSendInstruction() {
     + `visible reply and the file is delivered as a Telegram photo. Only do this when the user wants an image.`;
 }
 
+// 작업 기록에 "어느 방으로 알릴지"를 적으려면 에이전트가 방 번호를 알아야 한다. 시스템 프롬프트에
+// 실으면 매 턴 토큰을 먹으니 env 로 넘긴다. 방이 없는 경로(예약 작업)엔 넣지 않고, 그 경우 감시자가
+// allowedIds[0] 로 폴백한다.
+const jobEnv = (chatId) => ({
+  ...process.env,
+  ...(cfg.env || {}),
+  ...(JOBS && chatId ? { CTB_CHAT_ID: String(chatId) } : {}),
+});
+
+// 에이전트에게 오래 걸리는 작업 띄우는 법을 알려주는 시스템 프롬프트 조각.
+// 스킬이 아니라 시스템 프롬프트인 이유: 스킬은 에이전트가 "관련 있다"고 판단해야 로드된다. 안 걸리면
+// run_in_background 를 써서 작업이 죽는데, 그게 바로 이 규칙이 막으려는 일이다. 항상 켜져 있어야 한다.
+function jobInstruction() {
+  return `Background work in this chat: your process exits when this reply is sent, and anything you `
+    + `started with run_in_background dies with it.\n`
+    + `- Work you will read back BEFORE replying (a quick build, a test run you wait on): run_in_background is fine.\n`
+    + `- Work that must OUTLIVE this reply (dev servers, long builds, watchers, anything you report back on later): `
+    + `detach it from this process and register it, or it will be killed.\n\n`
+    + `To detach and register, run this as ONE Bash call from ${cfg.projectDir || DATA_DIR} `
+    + `(one call so $! still refers to the job when the record is written):\n`
+    + `  nohup <command> > .ctb-jobs/<name>.log 2>&1 & PID=$!; disown; echo "{\\"pid\\":$PID,\\"cmd\\":\\"<command>\\",\\"log\\":\\"<name>.log\\",\\"chat\\":\\"$CTB_CHAT_ID\\",\\"at\\":$(date +%s000)}" > .ctb-jobs/<name>.json\n`
+    + `Use a short bare <name> (letters, digits, dash) — same name for both files, no subfolders. `
+    + `The bot watches these records and messages this chat when the job exits, so tell the user the job name `
+    + `and that they will be notified. They can also check with /jobs.`;
+}
+
 // ── Claude 에러 분류 ──────────────────────────────────────────────────────
 function parseResetTime(raw) {
   // ISO timestamp: 2026-06-17T14:00:00Z
@@ -1045,7 +1324,8 @@ function runClaude(prompt, sessionId, opts = {}) {
       ? `## CODEX FALLBACK HANDOFF\nClaude and Codex sessions are separate. The notes below summarize work Codex handled while Claude was unavailable; use them as context, not as your own prior messages.\n${handoff}`
       : null;
     const imageHint = IMAGE_SEND ? imageSendInstruction() : null;
-    const appendSys = [memoryBlock, handoffBlock, cfg.persona, brevity, modelHint, imageHint].filter(Boolean).join("\n\n");
+    const jobHint = JOBS ? jobInstruction() : null;
+    const appendSys = [memoryBlock, handoffBlock, cfg.persona, brevity, modelHint, imageHint, jobHint].filter(Boolean).join("\n\n");
     if (appendSys) args.push("--append-system-prompt", appendSys);
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
@@ -1055,7 +1335,7 @@ function runClaude(prompt, sessionId, opts = {}) {
 
     const child = spawn(cfg.claudeBin || "claude", args, {
       cwd: cfg.projectDir,
-      env: { ...process.env, ...(cfg.env || {}) },
+      env: jobEnv(opts.chatId),
     });
     if (opts.trackChild) opts.trackChild.child = child; // /stop 에서 kill 가능하도록 방 런타임에 노출
 
@@ -1146,7 +1426,7 @@ function runCodex(prompt, lang = "en", opts = {}) {
       const mem = loadMemory();
       const context = resumeSessionId
         ? (mem ? `## RULES (must follow before anything else)\n${mem}` : "")
-        : [mem, cfg.persona, cfg.appendSystemPrompt, IMAGE_SEND ? imageSendInstruction() : null].filter(Boolean).join("\n\n");
+        : [mem, cfg.persona, cfg.appendSystemPrompt, IMAGE_SEND ? imageSendInstruction() : null, JOBS ? jobInstruction() : null].filter(Boolean).join("\n\n");
       if (context) codexPrompt = `Project instructions and persistent context:\n${context}\n\nUser request:\n${prompt}`;
     }
 
@@ -1162,7 +1442,7 @@ function runCodex(prompt, lang = "en", opts = {}) {
 
     const child = spawn(resolveCodexBin(), args, {
       cwd: cfg.projectDir,
-      env: { ...process.env, ...(cfg.env || {}) },
+      env: jobEnv(opts.chatId),
     });
     if (opts.trackChild) opts.trackChild.child = child;
 
@@ -1209,6 +1489,7 @@ function runPrimary(prompt, opts = {}) {
       trackChild: opts.trackChild,
       injectMemory: opts.injectMemory,
       recordHandoff: opts.recordHandoff,
+      chatId: opts.chatId, // 작업 기록에 적을 방 번호 (CTB_CHAT_ID 로 전달)
       ...(Object.prototype.hasOwnProperty.call(opts, "sessionId") ? { sessionId: opts.sessionId } : {}),
     });
   }
@@ -1289,7 +1570,7 @@ function runOllama(prompt, lang = "en", opts = {}) {
 
     const child = spawn(resolveOllamaBin(), args, {
       cwd: cfg.projectDir,
-      env: { ...process.env, ...(cfg.env || {}) },
+      env: jobEnv(opts.chatId),
     });
     // 로컬 4B 모델 콜드스타트는 첫 응답까지 수 분이 걸릴 수 있어 기본 타임아웃을 넉넉히 잡는다.
     const timer = setTimeout(() => child.kill("SIGKILL"), cfg.ollamaTimeout || 360_000);
@@ -1407,6 +1688,72 @@ async function runScheduled(job) {
   } finally {
     r.busy = false;
   }
+}
+
+// ── 백그라운드 작업 감시 (.ctb-jobs) ──────────────────────────────────────
+// 작업은 봇의 자식이 아니다. 에이전트가 nohup 으로 프로세스 그룹 밖에 내보내고, 봇은 주기적으로
+// pid 의 생사만 확인한다 — kill(pid, 0) 은 신호를 보내지 않고 존재 여부만 던진다(없으면 ESRCH).
+// 덕분에 감시자가 무상태다: 봇을 재시작해도 작업은 살아 있고 폴더만 다시 읽으면 감시가 이어진다.
+
+function jobRecords() {
+  try {
+    return readdirSync(JOBS_DIR)
+      .filter((f) => f.endsWith(".json"))
+      .sort()
+      .map((file) => {
+        try {
+          const rec = JSON.parse(readFileSync(join(JOBS_DIR, file), "utf8"));
+          return typeof rec?.pid === "number" ? { ...rec, file, name: basename(file, ".json") } : null;
+        } catch {
+          return null; // 에이전트가 쓰다 만 파일 — 다음 틱에 다시 본다
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function jobAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 로그는 기록에 적힌 이름을 그대로 믿지 않는다 — basename 만 취해 JOBS_DIR 밖으로 못 나가게 한다
+// (아웃박스 파일명 검증과 같은 방식).
+const jobLogPath = (rec) => (rec.log ? join(JOBS_DIR, basename(String(rec.log))) : null);
+
+async function sweepJobs() {
+  for (const rec of jobRecords()) {
+    if (rec.done || jobAlive(rec.pid)) continue;
+    // 알리기 **전에** 완료로 표시한다 — 전송이 실패해도 다음 틱에 또 보내지 않게.
+    try {
+      writeFileSync(join(JOBS_DIR, rec.file), JSON.stringify({ ...rec, file: undefined, name: undefined, done: Date.now() }));
+    } catch (e) {
+      console.error(`Job sweep: cannot mark ${rec.file}:`, e.message);
+      continue;
+    }
+    const chat = rec.chat || allowedIds[0];
+    if (!chat) continue;
+    const logPath = jobLogPath(rec);
+    const tail = logPath ? readTail(logPath, JOB_LOG_TAIL).trim() : "";
+    const ran = rec.at ? jobElapsed(Date.now() - rec.at, BOT_LANG) : "";
+    await send(chat, t(BOT_LANG, "jobDone", rec.name, rec.cmd || "", ran, tail)).catch((e) =>
+      console.error("Job notify failed:", e.message),
+    );
+  }
+}
+
+function startJobWatcher() {
+  if (!JOBS) return;
+  // 로컬 ctb 잠금은 보지 않는다 — 터미널에서 작업 중이어도 빌드가 끝나면 알리는 게 맞다.
+  const tick = () => sweepJobs().catch((e) => console.error("Job sweep error:", e.message));
+  tick(); // 부팅 직후 1회: 봇이 죽어 있는 동안 끝난 작업을 여기서 회수한다
+  setInterval(tick, JOB_TICK_MS);
 }
 
 function startScheduler() {
@@ -1676,6 +2023,141 @@ async function handleModel(chatId, arg, l, provider = currentProvider()) {
   await send(chatId, t(l, "modelSet", provider, arg));
 }
 
+// 지난 세션 목록·전환 — /sessions 와 버튼(`ss:*`)이 모두 여기로 온다.
+// 목록은 항상 현재 provider 기준이다. Claude 세션과 Codex 세션은 서로 호환되지 않아서
+// 섞어 보여주면 고르는 순간 사고다. 다른 방이 쓰고 있는 세션은 자물쇠를 달고 막는다 —
+// 한 기록 파일에 두 프로세스가 붙으면 양쪽 맥락이 서로를 덮어쓴다.
+async function handleSessions(chatId, arg, l, provider = currentProvider(), msgId) {
+  if (rt(chatId).busy) {
+    await send(chatId, t(l, "busy"));
+    return;
+  }
+  if (arg) {
+    // 이미 쓰고 있는 세션을 다시 고르는 건 흔한 오조작이다 — 그냥 넘기면 "바꿨다"고만 나와서
+    // 안 바뀐 걸 바뀐 줄 안다. 아무 일도 안 일어났다고 분명히 말해준다.
+    if (arg === getSid(chatId, provider)) {
+      await send(chatId, t(l, "sessionAlready", sessionName(arg) || `${arg.slice(0, 8)}…`));
+      return;
+    }
+    if (sessionsHeldElsewhere(chatId, provider).has(arg)) {
+      await send(chatId, t(l, "sessionHeld"));
+      return;
+    }
+    if (sessionsRunningInTerminal().has(arg)) {
+      await send(chatId, t(l, "sessionInTerminal"));
+      return;
+    }
+    setSid(chatId, arg, provider);
+    saveState(state);
+    await send(chatId, t(l, "sessionSwitched", provider, sessionName(arg) || `${arg.slice(0, 8)}…`));
+    // 목록 메시지는 그대로 두고 ✅ 만 옮겨 그린다 — 되돌아가서 다시 고를 수 있어야 하니까.
+    if (msgId)
+      tg("editMessageReplyMarkup", {
+        chat_id: chatId,
+        message_id: msgId,
+        reply_markup: sessionKeyboard(chatId, provider, l),
+      }).catch(() => {});
+    return;
+  }
+  const kb = sessionKeyboard(chatId, provider, l);
+  if (!kb.inline_keyboard.length) {
+    await send(chatId, t(l, "sessionsEmpty", provider));
+    return;
+  }
+  await send(chatId, t(l, "sessionsHeader", provider, kb.inline_keyboard.length), { replyMarkup: kb });
+}
+
+// 다른 방이 붙잡고 있는 세션 — 한 기록 파일에 두 프로세스가 붙으면 서로의 맥락을 덮어쓴다.
+function sessionsHeldElsewhere(chatId, provider) {
+  return new Set(
+    Object.entries(state.sessions || {})
+      .filter(([k]) => k !== String(chatId))
+      .map(([, b]) => b?.[sidKey(provider)])
+      .filter(Boolean),
+  );
+}
+
+// 터미널에서 열려 있는 세션. state.json 은 이 봇이 어느 방에 어느 세션을 물려놨는지만 알아서,
+// 같은 프로젝트를 터미널(`claude --resume …`, `codex exec resume …`)에서 열어둔 경우를 못 본다.
+// 다른 방이든 다른 창이든 한 기록 파일에 두 프로세스가 붙는 건 똑같으므로 여기서 같이 막는다.
+// ps 한 번이면 되고, 실패하면 빈 집합 — 안 보이던 이전 상태로 돌아갈 뿐 목록이 죽지는 않는다.
+const SESSION_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+function sessionsRunningInTerminal() {
+  let out;
+  try { out = execFileSync("ps", ["-Ao", "args="], { encoding: "utf8", timeout: 3000 }); }
+  catch { return new Set(); }
+  const ids = new Set();
+  for (const line of out.split("\n")) {
+    // 봇이 띄운 자식 프로세스도 여기 걸리지만, 그 세션은 이미 ✅ 아니면 🔒 라 표시가 밀리지 않는다.
+    if (!/\bresume\b/.test(line)) continue;
+    for (const id of line.match(SESSION_ID_RE) || []) ids.add(id);
+  }
+  return ids;
+}
+
+function sessionKeyboard(chatId, provider, l) {
+  const cur = getSid(chatId, provider);
+  const held = sessionsHeldElsewhere(chatId, provider);
+  const running = sessionsRunningInTerminal();
+  const list = provider === "codex" ? codexSessions() : claudeSessions();
+  return {
+    inline_keyboard: list.map((s) => {
+      const mark = s.id === cur ? "✅ " : held.has(s.id) ? "🔒 " : running.has(s.id) ? "💻 " : "";
+      // 이름을 붙여둔 세션은 이름이 미리보기를 밀어낸다 — 일부러 달아둔 쪽이 더 확실한 표시다.
+      const name = sessionName(s.id);
+      const label = `${mark}${sessionAge(s.at, l)} · ${name ? `🏷 ${name}` : s.preview || s.id.slice(0, 8)}`;
+      return [{ text: label, callback_data: `ss:${provider}:${s.id}` }];
+    }),
+  };
+}
+
+// 세션 이름 붙이기 — /name. 이름은 세션에 붙고 방에 붙지 않는다(세션을 옮기면 이름도 따라간다).
+async function handleName(chatId, arg, l) {
+  const id = getSid(chatId);
+  if (!id) {
+    await send(chatId, t(l, "nameNoSession"));
+    return;
+  }
+  const names = (state.sessionNames = state.sessionNames || {});
+  if (!arg) {
+    await send(chatId, names[id] ? t(l, "nameCurrent", names[id]) : t(l, "nameUsage"));
+    return;
+  }
+  if (arg === "-" || arg === "off") {
+    delete names[id];
+    saveState(state);
+    await send(chatId, t(l, "nameCleared"));
+    return;
+  }
+  names[id] = arg.replace(/\s+/g, " ").slice(0, 24); // 버튼 한 줄에 들어갈 만큼만
+  saveState(state);
+  await send(chatId, t(l, "nameSet", names[id]));
+}
+
+// 백그라운드 작업 목록 — /jobs. 방을 가리지 않고 전부 보여준다. 작업은 방이 아니라 이 기계에
+// 붙어 있고(로컬 ctb 에서 띄운 것도 여기 섞인다), 어느 방에서 띄웠든 돌고 있다는 사실이 중요하다.
+async function handleJobs(chatId, l) {
+  if (!JOBS) {
+    await send(chatId, t(l, "jobsOff"));
+    return;
+  }
+  const recs = jobRecords();
+  if (!recs.length) {
+    await send(chatId, t(l, "jobsEmpty"));
+    return;
+  }
+  const running = [], finished = [];
+  for (const rec of recs) (rec.done || !jobAlive(rec.pid) ? finished : running).push(rec);
+  const line = (rec, mark) =>
+    `${mark} \`${rec.name}\` · ${rec.at ? jobElapsed((rec.done || Date.now()) - rec.at, l) : "?"}` +
+    (rec.cmd ? `\n   ${rec.cmd}` : "");
+  const body = [
+    ...running.map((r) => line(r, "▶")),
+    ...finished.map((r) => line(r, "✅")),
+  ].join("\n");
+  await send(chatId, t(l, "jobsList", running.length, finished.length, body, JOBS_DIR));
+}
+
 // 로컬 세션 상태·종료 — /local, /stop(봇 작업이 없을 때), localBusy 버튼이 모두 여기로 온다.
 // 종료는 항상 버튼(또는 `/local kill`)으로 한 번 더 확인받는다 — 데스크탑 작업을 끊는 일이라.
 const localKillMarkup = (l) => ({
@@ -1892,7 +2374,7 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
     // Codex 폴백: 레이트리밋·크레딧 에러이고 codexFallback 켜져 있으면 reserve 전에 Codex로 재시도
     if (currentProvider() === "claude" && cfg.codexFallback && res.canFallback && !r.stopping) {
       try {
-        const cRes = await runCodex(prompt, l, { trackChild: r, sessionId: getSid(chatId, "codex") });
+        const cRes = await runCodex(prompt, l, { trackChild: r, sessionId: getSid(chatId, "codex"), chatId });
         if (cRes.ok) {
           if (cRes.sessionId) { setSid(chatId, cRes.sessionId, "codex"); saveState(state); }
           await deliver(chatId, cRes.text); return;
@@ -1908,6 +2390,7 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
         const oRes = await runOllama(prompt, l, {
           fallback: true,
           sessionId: currentProvider() === "claude" ? getSid(chatId, "claude") : undefined,
+          chatId,
         });
         if (oRes.ok) {
           if (oRes.sessionId) { setSid(chatId, oRes.sessionId, "claude"); saveState(state); }
@@ -1974,7 +2457,7 @@ async function runApprovedPlan(chatId, l) {
   try {
     await tg("sendChatAction", { chat_id: chatId, action: "typing" });
     r.prevSession = { chatId: String(chatId), provider: "claude", sessionId: getSid(chatId, "claude") };
-    const res = await runClaude(PLAN_PROCEED_PROMPT, pending.sessionId, { modelHint: true, trackChild: r, injectMemory: true });
+    const res = await runClaude(PLAN_PROCEED_PROMPT, pending.sessionId, { modelHint: true, trackChild: r, injectMemory: true, chatId });
     if (res.sessionId) {
       setSid(chatId, res.sessionId, "claude");
       saveState(state);
@@ -2004,22 +2487,28 @@ async function handleCallback(cq) {
     await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
     return;
   }
+  // 세션 목록은 확인 버튼이 아니라 메뉴다 — 하나 골랐다고 끝이 아니라 되돌아가서 또 고른다.
+  // 그래서 1회용 잠금과 버튼 제거에서 빼둔다. 세션 전환은 몇 번을 눌러도 결과가 같아 안전하다.
+  const menu = cq.data?.startsWith("ss:");
   const kbKey = `${chatId}:${cq.message.message_id}`;
-  if (handledKeyboards.has(kbKey)) {
-    await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
-    return;
+  if (!menu) {
+    if (handledKeyboards.has(kbKey)) {
+      await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
+      return;
+    }
+    handledKeyboards.add(kbKey);
+    if (handledKeyboards.size > HANDLED_KEYBOARD_MEMORY)
+      handledKeyboards.delete(handledKeyboards.values().next().value);
   }
-  handledKeyboards.add(kbKey);
-  if (handledKeyboards.size > HANDLED_KEYBOARD_MEMORY)
-    handledKeyboards.delete(handledKeyboards.values().next().value);
   const l = langOf({ from: cq.from });
   await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
   // 중복 클릭 방지 — 원본 메시지의 버튼 제거
-  tg("editMessageReplyMarkup", {
-    chat_id: chatId,
-    message_id: cq.message.message_id,
-    reply_markup: { inline_keyboard: [] },
-  }).catch(() => {});
+  if (!menu)
+    tg("editMessageReplyMarkup", {
+      chat_id: chatId,
+      message_id: cq.message.message_id,
+      reply_markup: { inline_keyboard: [] },
+    }).catch(() => {});
   if (cq.data === "plan:yes") {
     runApprovedPlan(chatId, l).catch((e) => console.error("Plan approval error:", e.message));
   } else if (cq.data === "plan:no") {
@@ -2039,6 +2528,9 @@ async function handleCallback(cq) {
   } else if (cq.data?.startsWith("md:")) {
     const sep = cq.data.indexOf(":", 3);
     await handleModel(chatId, cq.data.slice(sep + 1), l, cq.data.slice(3, sep));
+  } else if (cq.data?.startsWith("ss:")) {
+    const sep = cq.data.indexOf(":", 3);
+    await handleSessions(chatId, cq.data.slice(sep + 1), l, cq.data.slice(3, sep), cq.message.message_id);
   } else if (cq.data === "local:kill") {
     await handleLocal(chatId, "kill", l);
   }
@@ -2152,6 +2644,18 @@ async function handle(msg) {
     await handleModel(chatId, text.slice(6).trim(), l);
     return;
   }
+  if (text === "/sessions" || text.startsWith("/sessions ")) {
+    await handleSessions(chatId, text.slice(9).trim(), l);
+    return;
+  }
+  if (text === "/name" || text.startsWith("/name ")) {
+    await handleName(chatId, text.slice(5).trim(), l);
+    return;
+  }
+  if (text === "/jobs") {
+    await handleJobs(chatId, l);
+    return;
+  }
   if (text === "/autocompact" || text.startsWith("/autocompact ")) {
     await handleAutoCompact(chatId, text.slice(13).trim(), l);
     return;
@@ -2199,8 +2703,8 @@ async function handle(msg) {
         ? "Reply with exactly one sentence: Codex fallback is working."
         : "Reply with exactly one sentence: Ollama fallback is working.";
       const res = cfg.codexFallback
-        ? await runCodex(prompt, l, { trackChild: r, recordHandoff: false, sessionId: getSid(chatId, "codex") })
-        : await runOllama(prompt, l);
+        ? await runCodex(prompt, l, { trackChild: r, recordHandoff: false, sessionId: getSid(chatId, "codex"), chatId })
+        : await runOllama(prompt, l, { chatId });
       if (res.ok) {
         if (cfg.codexFallback && res.sessionId) { setSid(chatId, res.sessionId, "codex"); saveState(state); }
         await send(chatId, res.text);
@@ -2335,7 +2839,7 @@ async function handle(msg) {
       const planReq = text.slice(5).trim();
       if (!planReq) { await send(chatId, t(l, "planUsage")); return; }
       r.prevSession = { chatId: String(chatId), provider: "claude", sessionId: getSid(chatId, "claude") };
-      const res = await runClaude(planReq, getSid(chatId, "claude"), { permissionMode: "plan", modelHint: true, trackChild: r, injectMemory: true });
+      const res = await runClaude(planReq, getSid(chatId, "claude"), { permissionMode: "plan", modelHint: true, trackChild: r, injectMemory: true, chatId });
       if (res.sessionId) {
         setSid(chatId, res.sessionId, "claude");
         saveState(state);
@@ -2380,7 +2884,7 @@ async function handle(msg) {
     if (meta) prompt = prompt ? `${meta}\n\n${prompt}` : meta;
     if (state.ollamaMode) {
       try {
-        const oRes = await runOllama(prompt, l, { noHeader: true, sessionId: getSid(chatId, "claude") });
+        const oRes = await runOllama(prompt, l, { noHeader: true, sessionId: getSid(chatId, "claude"), chatId });
         if (oRes.ok) {
           if (oRes.sessionId) { setSid(chatId, oRes.sessionId, "claude"); saveState(state); }
           await send(chatId, oRes.text);
@@ -2398,6 +2902,7 @@ async function handle(msg) {
       modelHint: true,
       trackChild: r,
       injectMemory: true,
+      chatId,
     });
     if (res.sessionId) {
       setSid(chatId, res.sessionId);
@@ -2505,6 +3010,7 @@ async function main() {
   } catch {}
 
   startScheduler();
+  startJobWatcher();
   checkForUpdate().catch(() => {});
 
   while (true) {
