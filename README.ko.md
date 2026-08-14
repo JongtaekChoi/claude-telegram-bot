@@ -223,6 +223,7 @@ CLI를 업데이트한 뒤에는 무인 실행에 맡기기 전에 `/testfallbac
 | `autoCompactThreshold` | (선택) 추정 컨텍스트 크기가 이 값을 넘으면 압축할지 물어봄 (기본값: `100000`). `0`이면 비활성화. 런타임에 `/autocompact`로 전환 가능(state에 저장) |
 | `autoCompactConfirm` | (선택) 압축 전에 물어볼지 여부 (기본값: `true`). `false`면 임계값을 넘는 즉시 묻지 않고 바로 압축 |
 | `ctbNotify` | (선택) 로컬 `ctb` 세션이 끝날 때 이어받았던 방으로 인수인계 메시지를 보낼지 여부 (기본값: `true`). `false`면 보내지 않음 |
+| `ctbNotifyTimeout` | (선택) 인수인계 답변을 기다리는 시간(ms, 기본값: `180000`). 세션이 크면 이어받는 데 오래 걸립니다 — `ctb` 가 시간 초과로 실패했다고 찍으면 이 값을 올리세요 |
 
 같은 config로 로컬 대화형 세션도 실행할 수 있습니다. `ctb mybot.json`은 봇과 같은 provider를
 따릅니다 — `/provider` override가 state에 있으면 그 값을, 없으면 `config.provider`를 씁니다.

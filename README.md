@@ -385,6 +385,7 @@ The only keys you need to start are `token`, `allowedChatId`, `projectDir`, `cla
 | `autoCompactThreshold` | (optional) Offer to compact when the estimated context size exceeds this value (default: `100000`). Set to `0` to disable. Override at runtime with `/autocompact` (persists in state). |
 | `autoCompactConfirm` | (optional) Ask before compacting instead of doing it silently (default: `true`). Set to `false` to compact automatically as soon as the threshold is crossed. |
 | `ctbNotify` | (optional) Post a handoff message to the resumed room when a local `ctb` session ends (default: `true`). Set to `false` to stay silent. |
+| `ctbNotifyTimeout` | (optional) How long to wait for the handoff answer, in ms (default: `180000`). Large sessions take longer to resume; raise this if `ctb` reports the handoff timed out. |
 
 The same config also drives local interactive sessions. `ctb mybot.json` follows the same provider
 as the bot — the `/provider` override in state if one is set, otherwise `config.provider` — while an

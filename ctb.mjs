@@ -241,6 +241,9 @@ async function summarizeSession(provider, sid, lang, cfg) {
   const langInstruction = "---ctb:handoff---\n" + (lang && lang.startsWith("ko")
     ? "이 로컬 터미널 세션을 지금 끝내고, 같은 사람과 텔레그램에서 대화를 이어갑니다. 넘길 말이 있으면 알려주세요 — 방금 한 일 중 알아야 할 것, 끝내지 못한 것, 확인이나 결정이 필요한 것, 주의할 점. 한국어로 3줄 이내, 마크다운 없이 텍스트만. 넘길 게 없으면 정확히 이렇게만 답해: SKIP"
     : "This local terminal session is ending now, and the conversation continues with the same person on Telegram. If there is anything to hand over, say it — what was done that they need to know, what is unfinished, what needs a check or a decision, anything to watch out for. 3 lines max, plain text, no markdown. If there is nothing to hand over, reply exactly: SKIP");
+  // 결과는 세 갈래로 갈라서 돌려준다 — `{ text }` 넘길 말이 있음, `{ skip: true }` 모델이 없다고
+  // 답함, `{ error }` 물어보지도 못함. 예전엔 셋 다 null 이라 화면에는 똑같이 SKIP 으로 떴고,
+  // 타임아웃으로 잘려도 "넘길 게 없다"로 보여서 실패한 줄을 알 방법이 없었다.
   return new Promise((resolve) => {
     const isCodex = provider === "codex";
     const bin = isCodex ? (cfg.codexBin || "codex") : (cfg.claudeBin || "claude");
@@ -250,11 +253,23 @@ async function summarizeSession(provider, sid, lang, cfg) {
     const child = spawn(bin, args, {
       cwd: cfg.projectDir,
       env: { ...process.env, ...(cfg.env || {}) },
-      stdio: ["ignore", "pipe", "ignore"],
+      // stderr 를 버리지 않는다. 실패 원인이 여기로만 나오는데 예전엔 ignore 였다.
+      stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
+    let err = "";
+    let timedOut = false;
     child.stdout.on("data", (d) => { out += d; });
-    child.on("close", () => {
+    child.stderr.on("data", (d) => { err += d; });
+    // 세션이 크면 이어받는 데만 한참 걸린다 — 17MB 세션에서 첫 응답까지 12초가 나왔다.
+    // 30초는 그 경계에 너무 붙어 있어서, 될 일도 잘려서 SKIP 으로 둔갑했다.
+    const timeoutMs = cfg.ctbNotifyTimeout || 180_000;
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, timeoutMs);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const detail = err.trim().split("\n").pop() || "";
+      if (timedOut) return resolve({ error: `${bin} did not answer within ${Math.round(timeoutMs / 1000)}s (session may be too large — raise ctbNotifyTimeout)` });
+      if (code !== 0) return resolve({ error: `${bin} exited ${code}${detail ? ` — ${detail}` : ""}` });
       try {
         let text = "";
         if (isCodex) {
@@ -268,11 +283,13 @@ async function summarizeSession(provider, sid, lang, cfg) {
           text = JSON.parse(out).result || "";
         }
         text = text.trim();
-        resolve(/^skip$/i.test(text) ? null : text);
-      } catch { resolve(null); }
+        if (!text) return resolve({ error: `${bin} returned nothing${detail ? ` — ${detail}` : ""}` });
+        return resolve(/^skip$/i.test(text) ? { skip: true } : { text });
+      } catch {
+        return resolve({ error: `cannot read ${bin} output${detail ? ` — ${detail}` : ""}` });
+      }
     });
-    child.on("error", () => resolve(null));
-    setTimeout(() => { child.kill(); resolve(null); }, 30000);
+    child.on("error", (e) => { clearTimeout(timer); resolve({ error: `cannot run ${bin} — ${e.message}` }); });
   });
 }
 
@@ -289,8 +306,11 @@ async function notifyTelegram(configPath, provider, sessionId, chatId) {
     const target = chatIds.includes(String(chatId)) ? String(chatId) : chatIds[0];
     const lang = cfg.lang || process.env.LANG || "";
     process.stderr.write("ctb: preparing handoff...\n");
-    const summary = await summarizeSession(provider, sessionId, lang, cfg);
-    if (!summary) { process.stderr.write("ctb: nothing to hand over (SKIP)\n"); return; }
+    const result = await summarizeSession(provider, sessionId, lang, cfg);
+    // 실패와 "넘길 게 없음"을 갈라서 찍는다 — 둘을 한 문구로 뭉치면 조용히 망가진 걸 못 본다.
+    if (result.error) { process.stderr.write(`ctb: handoff failed — ${result.error}\n`); return; }
+    if (result.skip) { process.stderr.write("ctb: nothing to hand over (SKIP)\n"); return; }
+    const summary = result.text;
     process.stderr.write(`ctb: sending to Telegram (chat ${target}) — ${summary}\n`);
     const label = lang.startsWith("ko") ? "[터미널]" : "[local]";
     // 여러 줄이면 꼬리표를 따로 한 줄로 — 본문이 길어지면 한 줄에 붙일 때 읽기 나쁘다.
