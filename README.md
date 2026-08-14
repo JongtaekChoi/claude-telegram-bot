@@ -270,7 +270,7 @@ Core commands:
 | `/ollama` | Toggle local Ollama chat mode |
 | `/testfallback` | Test the configured Codex or Ollama fallback |
 | `/status` | Show version, provider, CLI versions, model, fallback, and session state |
-| `/remember <text>` · `/memory` | Save or inspect persistent memory (`/memory rm <n>` drops one line) |
+| `/remember <text>` · `/memory` | Save or inspect persistent memory (`/memory rm <n>` drops lines — `3`, `3 5 7`, or `3-9`) |
 | `/cron` · `/reserve` | Manage scheduled jobs and usage-limit retries |
 | `/autocompact` · `/restart` · `/id` · `/help` | Maintenance and help commands |
 

@@ -173,7 +173,7 @@ const STR = {
       "• /local — local `ctb` session status · end it from here when it's blocking the bot\n" +
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
       "• /remember <text> — save to persistent memory (survives /new)\n" +
-      "• /memory — view memory · /memory rm <n> to drop one line · /memory clear to wipe\n" +
+      "• /memory — view memory · /memory rm <n> to drop lines (`3`, `3 5 7`, `3-9`) · /memory clear to wipe\n" +
       "• /reserve — show retry queue status at usage-limit reset · /reserve rm to cancel\n" +
       "• /restart — restart the bot (after a syntax check)\n" +
       "• /status — bot status & version\n" +
@@ -293,13 +293,13 @@ const STR = {
     autoCompactOffBtn: "Off",
     autoCompactDefBtn: "Default",
     memoryEmpty: "No memory yet. Use `/remember <text>` to add.",
-    memoryShow: (m) => `💾 Memory:\n\`\`\`\n${m}\n\`\`\`\n\`/memory rm <n>\` removes one line.`,
+    memoryShow: (m) => `💾 Memory:\n\`\`\`\n${m}\n\`\`\`\n\`/memory rm <n>\` removes lines — \`3\`, \`3 5 7\`, or \`3-9\`. \`/memory clear\` wipes all.`,
     memoryCleared: "🧹 Memory cleared. The current chat may still follow it — `/new` starts a fresh chat without it.",
-    memoryRemoved: (s) => `🗑 Removed:\n\`\`\`\n${s}\n\`\`\`\nThe current chat may still follow it — \`/new\` starts a fresh chat without it.`,
+    memoryRemoved: (s, n) => `🗑 Removed${n > 1 ? ` ${n} rules` : ""}:\n\`\`\`\n${s}\n\`\`\`\nThe current chat may still follow ${n > 1 ? "them" : "it"} — \`/new\` starts a fresh chat without ${n > 1 ? "them" : "it"}.`,
     remembered: "💾 Saved to memory.",
     memoryCrowded: (n) => `⚠️ ${n} rules in memory. The more there are, the weaker each one pulls — trim with \`/memory\` · \`/memory rm <n>\`.`,
     rememberUsage: "Usage: /remember <text to remember>",
-    memoryUsage: (n) => `Usage: /memory · /memory rm <n> · /memory clear${n ? ` (1–${n})` : ""}`,
+    memoryUsage: (n) => `Usage: /memory · /memory rm <n> (also \`3 5 7\` or \`3-9\`) · /memory clear${n ? ` (1–${n})` : ""}`,
     muteOn: "🙈 Comment mode — everything in this chat is ignored until a message starting with `*/`.",
     muteOff: "🙊 Comment mode off.",
     sessionsHeader: (p, n) =>
@@ -346,7 +346,7 @@ const STR = {
       "• /local — 로컬 `ctb` 세션 상태 확인 · 봇을 막고 있으면 여기서 종료\n" +
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
       "• /remember <내용> — 퍼시스턴트 메모리에 저장 (/new 로 초기화해도 유지)\n" +
-      "• /memory — 메모리 보기 · /memory rm <번호> 로 한 줄 삭제 · /memory clear 로 전체 삭제\n" +
+      "• /memory — 메모리 보기 · /memory rm <번호> 로 삭제 (`3`, `3 5 7`, `3-9`) · /memory clear 로 전체 삭제\n" +
       "• /reserve — 한도 리셋 시 대기열 상태 확인 · /reserve rm 으로 취소\n" +
       "• /restart — 봇 재시작 (문법 검사 후 안전하게)\n" +
       "• /status — 봇 상태·버전 보기\n" +
@@ -441,13 +441,13 @@ const STR = {
     autoCompactOffBtn: "끄기",
     autoCompactDefBtn: "기본값",
     memoryEmpty: "저장된 메모리가 없습니다. `/remember <내용>`으로 추가하세요.",
-    memoryShow: (m) => `💾 메모리:\n\`\`\`\n${m}\n\`\`\`\n\`/memory rm <번호>\` 로 한 줄만 지울 수 있습니다.`,
+    memoryShow: (m) => `💾 메모리:\n\`\`\`\n${m}\n\`\`\`\n\`/memory rm <번호>\` 로 지웁니다 — \`3\`, \`3 5 7\`, \`3-9\`. 전부 비우려면 \`/memory clear\``,
     memoryCleared: "🧹 메모리를 삭제했습니다. 진행 중인 대화에는 한동안 남습니다 — `/new` 로 대화를 새로 시작하면 사라집니다.",
-    memoryRemoved: (s) => `🗑 삭제했습니다:\n\`\`\`\n${s}\n\`\`\`\n진행 중인 대화에는 한동안 남습니다 — \`/new\` 로 대화를 새로 시작하면 사라집니다.`,
+    memoryRemoved: (s, n) => `🗑 ${n > 1 ? `${n}개 ` : ""}삭제했습니다:\n\`\`\`\n${s}\n\`\`\`\n진행 중인 대화에는 한동안 남습니다 — \`/new\` 로 대화를 새로 시작하면 사라집니다.`,
     remembered: "💾 메모리에 저장했습니다.",
     memoryCrowded: (n) => `⚠️ 메모리 ${n}개. 많아질수록 각 규칙의 구속력이 약해집니다 — \`/memory\` · \`/memory rm <번호>\` 로 정리하세요.`,
     rememberUsage: "사용법: /remember <기억할 내용>",
-    memoryUsage: (n) => `사용법: /memory · /memory rm <번호> · /memory clear${n ? ` (1~${n})` : ""}`,
+    memoryUsage: (n) => `사용법: /memory · /memory rm <번호> (\`3 5 7\` · \`3-9\` 도 가능) · /memory clear${n ? ` (1~${n})` : ""}`,
     muteOn: "🙈 주석 모드 — `*/` 로 시작하는 메시지를 보낼 때까지 이 방의 입력을 전부 무시합니다.",
     muteOff: "🙊 주석 모드를 끝냈습니다.",
     sessionsHeader: (p, n) =>
@@ -747,7 +747,7 @@ const COMMANDS = {
     { command: "stop", description: "Stop the current task (--reset to roll back session)" },
     { command: "local", description: "Local ctb session status · end it from here" },
     { command: "remember", description: "Save to persistent memory (survives /new)" },
-    { command: "memory", description: "View memory · rm <n> drops one · clear wipes it" },
+    { command: "memory", description: "View memory · rm <n> drops lines (3-9 ok) · clear wipes it" },
     { command: "cron", description: "List / add / remove scheduled tasks" },
     { command: "restart", description: "Restart the bot (after syntax check)" },
     { command: "status", description: "Bot status / version" },
@@ -769,7 +769,7 @@ const COMMANDS = {
     { command: "stop", description: "작업 중단 (--reset 으로 세션 되돌리기)" },
     { command: "local", description: "로컬 ctb 세션 상태 확인·종료" },
     { command: "remember", description: "퍼시스턴트 메모리에 저장 (/new 후에도 유지)" },
-    { command: "memory", description: "메모리 보기 · rm <번호>로 한 줄 · clear로 전체 삭제" },
+    { command: "memory", description: "메모리 보기 · rm <번호>로 삭제(3-9 가능) · clear로 전체" },
     { command: "cron", description: "예약 작업 보기·추가·삭제" },
     { command: "restart", description: "봇 재시작 (문법 검사 후)" },
     { command: "status", description: "봇 상태·버전 보기" },
@@ -2767,11 +2767,24 @@ async function handle(msg) {
     const items = memoryItems();
     if (arg === "rm" || arg.startsWith("rm ")) {
       if (!items.length) { await send(chatId, t(l, "memoryEmpty")); return; }
-      const n = Number(arg.slice(2).trim());
-      if (!Number.isInteger(n) || n < 1 || n > items.length) { await send(chatId, t(l, "memoryUsage", items.length)); return; }
-      const [removed] = items.splice(n - 1, 1);
-      saveMemoryItems(items);
-      await send(chatId, t(l, "memoryRemoved", removed));
+      // `rm 3` · `rm 3 5 7` · `rm 3-9` — 섞어 써도 된다. 정리는 몰아서 하게 되는 일이라
+      // 하나씩 지우면 번호가 매번 밀려서 목록을 다시 봐야 한다.
+      // 하나라도 범위를 벗어나면 통째로 거절한다 — 일부만 지우고 나면 남은 번호가 어긋나서
+      // 이어 친 명령이 엉뚱한 규칙을 지운다.
+      const picked = new Set();
+      let bad = false;
+      for (const tok of arg.slice(2).split(/[\s,]+/).filter(Boolean)) {
+        const m = tok.match(/^(\d+)(?:-(\d+))?$/);
+        if (!m) { bad = true; break; }
+        const from = Number(m[1]);
+        const to = m[2] === undefined ? from : Number(m[2]);
+        if (from < 1 || to > items.length || from > to) { bad = true; break; }
+        for (let i = from; i <= to; i++) picked.add(i);
+      }
+      if (bad || !picked.size) { await send(chatId, t(l, "memoryUsage", items.length)); return; }
+      const removed = items.filter((_, i) => picked.has(i + 1));
+      saveMemoryItems(items.filter((_, i) => !picked.has(i + 1)));
+      await send(chatId, t(l, "memoryRemoved", removed.join("\n"), removed.length));
       return;
     }
     if (arg) { await send(chatId, t(l, "memoryUsage", items.length)); return; }

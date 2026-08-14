@@ -274,7 +274,7 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 | `/local [kill]` | 락을 물고 있는 로컬 `ctb` 세션 확인·텔레그램에서 종료 |
 | `/ollama` · `/testfallback` | 로컬 모드 전환·fallback 연결 테스트 |
 | `/status` | 버전, provider, CLI, 모델, fallback, 세션 상태 확인 |
-| `/remember <내용>` · `/memory` | 영구 메모리 저장·확인 (`/memory rm <번호>` 로 한 줄 삭제) |
+| `/remember <내용>` · `/memory` | 영구 메모리 저장·확인 (`/memory rm <번호>` 로 삭제 — `3`, `3 5 7`, `3-9`) |
 | `/cron` · `/reserve` | 예약 작업·한도 재시도 관리 |
 | `/autocompact` · `/restart` · `/id` · `/help` | 유지관리·도움말 |
 
