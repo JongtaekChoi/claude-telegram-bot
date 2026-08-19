@@ -162,7 +162,7 @@ const STR = {
       "• Start a message with // and the bot ignores it — leave yourself a note in the chat\n" +
       "• /* ignores everything until a message starting with */ — for a run of notes or a pasted log\n" +
       "• /new — reset conversation context (new session)\n" +
-      "• /newchat [name] — open a new topic and start fresh there (forum groups)\n" +
+      "• /newchat [name] — open a new topic and start fresh there (forum groups) · /newtopic works too\n" +
       "• /sessions — list past sessions in this project and pick one to carry on from\n" +
       "• /name — name the current session so it stands out in /sessions\n" +
       "• /jobs — background jobs that outlive replies · you get a message when one ends\n" +
@@ -343,7 +343,7 @@ const STR = {
       "• 메시지를 // 로 시작하면 봇이 무시합니다 — 채팅에 혼잣말 메모를 남기는 용도\n" +
       "• /* 를 보내면 */ 로 시작하는 메시지가 올 때까지 전부 무시합니다 — 메모를 연달아 남기거나 로그를 붙여넣을 때\n" +
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
-      "• /newchat [이름] — 새 주제를 만들어 거기서 새 세션 시작 (주제 켜진 그룹)\n" +
+      "• /newchat [이름] — 새 주제를 만들어 거기서 새 세션 시작 (주제 켜진 그룹) · /newtopic 도 같음\n" +
       "• /sessions — 이 프로젝트의 지난 세션 목록 · 골라서 이어가기\n" +
       "• /name — 지금 세션에 이름 붙이기 · /sessions 에서 바로 찾기\n" +
       "• /jobs — 답장 후에도 살아 있는 백그라운드 작업 · 끝나면 먼저 알려줌\n" +
@@ -764,7 +764,7 @@ function jobElapsed(ms, l) {
 const COMMANDS = {
   en: [
     { command: "new", description: "Reset context (new session)" },
-    { command: "newchat", description: "Open a new topic and start fresh there (forum groups)" },
+    { command: "newchat", description: "New topic + fresh session there (forum groups) · same as /newtopic" },
     { command: "sessions", description: "List past sessions · pick one to carry on from" },
     { command: "name", description: "Name the current session" },
     { command: "jobs", description: "Background jobs still running (survive replies)" },
@@ -787,7 +787,7 @@ const COMMANDS = {
   ],
   ko: [
     { command: "new", description: "대화 맥락 초기화 (새 세션)" },
-    { command: "newchat", description: "새 주제를 만들어 거기서 새 세션 시작 (주제 켜진 그룹)" },
+    { command: "newchat", description: "새 주제를 만들어 거기서 새 세션 시작 (주제 켜진 그룹) · /newtopic 도 같음" },
     { command: "sessions", description: "지난 세션 목록 · 골라서 이어가기" },
     { command: "name", description: "지금 세션에 이름 붙이기" },
     { command: "jobs", description: "백그라운드 작업 목록 (답장 후에도 살아 있는 것)" },
@@ -2192,7 +2192,7 @@ async function handleName(chatId, arg, l) {
   await send(chatId, t(l, "nameSet", names[id]));
 }
 
-// /newchat — 새 포럼 토픽을 만들고 거기서 새 세션으로 시작한다. 봇 API 로는 그룹 자체를
+// /newchat (= /newtopic) — 새 포럼 토픽을 만들고 거기서 새 세션으로 시작한다. 봇 API 로는 그룹 자체를
 // 만들 수 없어서(그룹 생성은 유저 계정 전용), "새 방"에 가장 가까운 게 주제(토픽)다. 슈퍼그룹에
 // 주제가 켜져 있고 봇에 '주제 관리' 권한이 있어야 한다 — 실패 사유는 텔레그램 설명을 그대로 보여준다.
 // 새 토픽의 방 키는 처음 보는 값이라(토픽 ID = 메시지 ID, 재사용 없음) 따로 세션을 비울 필요가 없다.
@@ -2806,12 +2806,10 @@ async function handle(msg) {
     }
     return;
   }
-  if (text === "/newchat" || text.startsWith("/newchat ")) {
-    await newTopic(chatId, text.slice(8).trim(), l);
-    return;
-  }
-  if (text === "/new --chat" || text.startsWith("/new --chat ")) { // 옛 문법 — 계속 받아준다
-    await newTopic(chatId, text.slice(11).trim(), l);
+  // 텔레그램 용어로는 '주제(topic)', 체감으로는 '새 대화방' — 어느 쪽을 칠지 갈려서 둘 다 받는다.
+  const newTopicCmd = text.match(/^\/(?:newchat|newtopic)(?:\s|$)/) || text.match(/^\/new --chat(?:\s|$)/);
+  if (newTopicCmd) {
+    await newTopic(chatId, text.slice(newTopicCmd[0].length).trim(), l);
     return;
   }
   if (text === "/new") {
