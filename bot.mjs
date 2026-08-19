@@ -162,7 +162,7 @@ const STR = {
       "• Start a message with // and the bot ignores it — leave yourself a note in the chat\n" +
       "• /* ignores everything until a message starting with */ — for a run of notes or a pasted log\n" +
       "• /new — reset conversation context (new session)\n" +
-      "• /new --chat [name] — open a new topic and start fresh there (forum groups)\n" +
+      "• /newchat [name] — open a new topic and start fresh there (forum groups)\n" +
       "• /sessions — list past sessions in this project and pick one to carry on from\n" +
       "• /name — name the current session so it stands out in /sessions\n" +
       "• /jobs — background jobs that outlive replies · you get a message when one ends\n" +
@@ -187,7 +187,7 @@ const STR = {
     newTopicDefaultName: (stamp) => `New chat ${stamp}`,
     newTopicCreated: (name) => `🆕 Opened a new topic: ${name}\nThe conversation continues there with a fresh session.`,
     newTopicHello: "🆕 New topic, new session. Go ahead.",
-    newTopicNotGroup: "/new --chat opens a new topic, so it only works in a group. In a DM use /new instead.",
+    newTopicNotGroup: "/newchat opens a new topic, so it only works in a group. In a DM use /new instead.",
     newTopicFail: (m) =>
       `⚠️ Could not create the topic: ${m}\n` +
       "The group must be a supergroup with Topics turned on, and the bot needs the “Manage topics” permission.",
@@ -343,7 +343,7 @@ const STR = {
       "• 메시지를 // 로 시작하면 봇이 무시합니다 — 채팅에 혼잣말 메모를 남기는 용도\n" +
       "• /* 를 보내면 */ 로 시작하는 메시지가 올 때까지 전부 무시합니다 — 메모를 연달아 남기거나 로그를 붙여넣을 때\n" +
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
-      "• /new --chat [이름] — 새 주제를 만들어 거기서 새 세션 시작 (주제 켜진 그룹)\n" +
+      "• /newchat [이름] — 새 주제를 만들어 거기서 새 세션 시작 (주제 켜진 그룹)\n" +
       "• /sessions — 이 프로젝트의 지난 세션 목록 · 골라서 이어가기\n" +
       "• /name — 지금 세션에 이름 붙이기 · /sessions 에서 바로 찾기\n" +
       "• /jobs — 답장 후에도 살아 있는 백그라운드 작업 · 끝나면 먼저 알려줌\n" +
@@ -368,7 +368,7 @@ const STR = {
     newTopicDefaultName: (stamp) => `새 대화 ${stamp}`,
     newTopicCreated: (name) => `🆕 새 주제를 만들었습니다: ${name}\n거기서 새 세션으로 이어집니다.`,
     newTopicHello: "🆕 새 주제, 새 세션입니다. 말씀하세요.",
-    newTopicNotGroup: "/new --chat 은 새 주제를 만드는 기능이라 그룹에서만 됩니다. DM 에서는 /new 를 쓰세요.",
+    newTopicNotGroup: "/newchat 은 새 주제를 만드는 기능이라 그룹에서만 됩니다. DM 에서는 /new 를 쓰세요.",
     newTopicFail: (m) =>
       `⚠️ 주제를 만들지 못했습니다: ${m}\n` +
       "슈퍼그룹에서 '주제(Topics)'가 켜져 있어야 하고, 봇에 '주제 관리' 권한이 있어야 합니다.",
@@ -763,7 +763,8 @@ function jobElapsed(ms, l) {
 // /(슬래시) 자동완성 메뉴용 명령 목록 (언어별). setMyCommands 로 등록.
 const COMMANDS = {
   en: [
-    { command: "new", description: "Reset context (new session) · --chat opens a new topic" },
+    { command: "new", description: "Reset context (new session)" },
+    { command: "newchat", description: "Open a new topic and start fresh there (forum groups)" },
     { command: "sessions", description: "List past sessions · pick one to carry on from" },
     { command: "name", description: "Name the current session" },
     { command: "jobs", description: "Background jobs still running (survive replies)" },
@@ -785,7 +786,8 @@ const COMMANDS = {
     { command: "help", description: "Help" },
   ],
   ko: [
-    { command: "new", description: "대화 맥락 초기화 (새 세션) · --chat 은 새 주제" },
+    { command: "new", description: "대화 맥락 초기화 (새 세션)" },
+    { command: "newchat", description: "새 주제를 만들어 거기서 새 세션 시작 (주제 켜진 그룹)" },
     { command: "sessions", description: "지난 세션 목록 · 골라서 이어가기" },
     { command: "name", description: "지금 세션에 이름 붙이기" },
     { command: "jobs", description: "백그라운드 작업 목록 (답장 후에도 살아 있는 것)" },
@@ -1045,6 +1047,15 @@ function stripBotMention(text) {
   if (at === -1) return text;
   if (botUsername && head.slice(at + 1).toLowerCase() !== botUsername.toLowerCase()) return text;
   return head.slice(0, at) + (sp === -1 ? "" : text.slice(sp));
+}
+
+// iOS 키보드의 스마트 문장부호는 `--` 를 em 대시(—) 하나로 바꿔버린다. 그래서 `/new --chat` 이
+// `/new —chat` 으로 도착하고, 어느 명령에도 안 걸려서 그대로 Claude 프롬프트로 흘러간다
+// (Claude 쪽 /new 는 /clear 별칭이라 세션이 조용히 날아간다). 명령어 메시지에 한해 되돌린다.
+// 뒤에 소문자 ASCII 가 붙은 것만 — `/remember 회의 — 결론` 같은 본문 대시는 건드리지 않는다.
+function normalizeDashFlags(text) {
+  if (!text.startsWith("/")) return text;
+  return text.replace(/(^|\s)[—–](?=[a-z]{2,})/g, "$1--");
 }
 
 async function tg(method, body) {
@@ -2181,7 +2192,7 @@ async function handleName(chatId, arg, l) {
   await send(chatId, t(l, "nameSet", names[id]));
 }
 
-// /new --chat — 새 포럼 토픽을 만들고 거기서 새 세션으로 시작한다. 봇 API 로는 그룹 자체를
+// /newchat — 새 포럼 토픽을 만들고 거기서 새 세션으로 시작한다. 봇 API 로는 그룹 자체를
 // 만들 수 없어서(그룹 생성은 유저 계정 전용), "새 방"에 가장 가까운 게 주제(토픽)다. 슈퍼그룹에
 // 주제가 켜져 있고 봇에 '주제 관리' 권한이 있어야 한다 — 실패 사유는 텔레그램 설명을 그대로 보여준다.
 // 새 토픽의 방 키는 처음 보는 값이라(토픽 ID = 메시지 ID, 재사용 없음) 따로 세션을 비울 필요가 없다.
@@ -2618,7 +2629,7 @@ async function handle(msg) {
   const chatId = roomOf(msg); // 포럼 그룹이면 토픽까지가 방이다 — 아래 chatId 는 전부 방 키
   const rawChatId = baseChatId(chatId); // 화이트리스트·리액션용 실제 채팅 ID
   const l = langOf(msg);
-  const text = stripBotMention((msg.text || msg.caption || "").trim());
+  const text = normalizeDashFlags(stripBotMention((msg.text || msg.caption || "").trim()));
   const attachment = msg._mediaGroup ? null : pickAttachment(msg);
   if (!text && !attachment && !msg._mediaGroup?.length) return;
 
@@ -2795,7 +2806,11 @@ async function handle(msg) {
     }
     return;
   }
-  if (text === "/new --chat" || text.startsWith("/new --chat ")) {
+  if (text === "/newchat" || text.startsWith("/newchat ")) {
+    await newTopic(chatId, text.slice(8).trim(), l);
+    return;
+  }
+  if (text === "/new --chat" || text.startsWith("/new --chat ")) { // 옛 문법 — 계속 받아준다
     await newTopic(chatId, text.slice(11).trim(), l);
     return;
   }
