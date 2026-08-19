@@ -1178,6 +1178,32 @@ async function send(chatId, text, opts = {}) {
   return lastId;
 }
 
+// ── 설정 메뉴 버튼의 수명 ────────────────────────────────────────────────
+// 모델·프로바이더·자동압축·세션 목록 버튼은 '보낸 시점의 상태'를 그린 스냅샷이다. 대화가 이어지면
+// 위로 밀려 올라갈 뿐 계속 눌리는 상태로 남아서, 스크롤을 올려 옛 메뉴를 누르면 그 사이 바꿔둔
+// 값이 조용히 되돌아간다. 그래서 방마다 살아 있는 메뉴는 하나만 두고, 다음 입력이 오면 걷어낸다.
+// 계획 승인(`plan:`)·로컬 종료(`local:kill`)는 아직 답을 안 받은 요청이라 여기 넣지 않는다 —
+// 그 둘은 눌러야 끝나고, 눌린 뒤에는 handleCallback 이 알아서 버튼을 지운다.
+const liveMenus = new Map(); // 방 키 → message_id
+
+async function sendMenu(chatId, text, replyMarkup) {
+  const id = await send(chatId, text, { replyMarkup });
+  if (id) liveMenus.set(chatId, id);
+  return id;
+}
+
+// 버튼 제거는 텔레그램 왕복이라 기다리지 않는다 — 새 입력 처리가 이것 때문에 늦어질 이유가 없다.
+function dropLiveMenu(chatId) {
+  const id = liveMenus.get(chatId);
+  if (!id) return;
+  liveMenus.delete(chatId);
+  tg("editMessageReplyMarkup", {
+    chat_id: baseChatId(chatId),
+    message_id: id,
+    reply_markup: { inline_keyboard: [] },
+  }).catch(() => {});
+}
+
 // ── 이미지 전송(아웃박스) ──────────────────────────────────────────────────
 // multipart/form-data 로 sendPhoto (Node 18+ 내장 FormData/Blob, 의존성 0 유지).
 async function tgSendPhoto(chatId, absPath, caption) {
@@ -1896,16 +1922,14 @@ async function handleAutoCompact(chatId, arg, l) {
   if (!arg) {
     const cur = state.autoCompactThreshold ?? def;
     const btn = (p) => ({ text: p, callback_data: `ac:${p}` });
-    await send(chatId, t(l, "autoCompactStatus", cur, def), {
-      replyMarkup: {
-        inline_keyboard: [
-          AUTOCOMPACT_PRESETS.map(btn),
-          [
-            { text: t(l, "autoCompactOffBtn"), callback_data: "ac:off" },
-            { text: t(l, "autoCompactDefBtn"), callback_data: "ac:default" },
-          ],
+    await sendMenu(chatId, t(l, "autoCompactStatus", cur, def), {
+      inline_keyboard: [
+        AUTOCOMPACT_PRESETS.map(btn),
+        [
+          { text: t(l, "autoCompactOffBtn"), callback_data: "ac:off" },
+          { text: t(l, "autoCompactDefBtn"), callback_data: "ac:default" },
         ],
-      },
+      ],
     });
     return;
   }
@@ -1941,14 +1965,12 @@ async function handleAutoCompact(chatId, arg, l) {
 
 // 임계값 초과 시 압축할지 묻는다 — 버튼 콜백은 `cp:*`.
 async function askAutoCompact(chatId, ctxTokens, l) {
-  await send(chatId, t(l, "autoCompactAsk", roundTokens(ctxTokens)), {
-    replyMarkup: {
-      inline_keyboard: [[
-        { text: t(l, "autoCompactNowBtn"), callback_data: "cp:yes" },
-        { text: t(l, "autoCompactLaterBtn"), callback_data: `cp:later:${ctxTokens}` },
-        { text: t(l, "autoCompactOffBtn"), callback_data: "ac:off" },
-      ]],
-    },
+  await sendMenu(chatId, t(l, "autoCompactAsk", roundTokens(ctxTokens)), {
+    inline_keyboard: [[
+      { text: t(l, "autoCompactNowBtn"), callback_data: "cp:yes" },
+      { text: t(l, "autoCompactLaterBtn"), callback_data: `cp:later:${ctxTokens}` },
+      { text: t(l, "autoCompactOffBtn"), callback_data: "ac:off" },
+    ]],
   });
 }
 
@@ -2019,13 +2041,11 @@ async function handleProvider(chatId, arg, l) {
   }
   if (!arg) {
     const cur = currentProvider();
-    await send(chatId, t(l, "providerStatus", cur, DEFAULT_PROVIDER), {
-      replyMarkup: {
-        inline_keyboard: [[
-          ...PROVIDERS.map((p) => ({ text: p === cur ? `✅ ${p}` : p, callback_data: `pv:${p}` })),
-          { text: t(l, "providerDefBtn"), callback_data: "pv:default" },
-        ]],
-      },
+    await sendMenu(chatId, t(l, "providerStatus", cur, DEFAULT_PROVIDER), {
+      inline_keyboard: [[
+        ...PROVIDERS.map((p) => ({ text: p === cur ? `✅ ${p}` : p, callback_data: `pv:${p}` })),
+        { text: t(l, "providerDefBtn"), callback_data: "pv:default" },
+      ]],
     });
     return;
   }
@@ -2063,15 +2083,13 @@ async function handleModel(chatId, arg, l, provider = currentProvider()) {
     for (let i = 0; i < codexModels.length; i += 2) {
       codexRows.push(codexModels.slice(i, i + 2).map((m) => btn(m === cur ? `✅ ${m}` : m, m)));
     }
-    await send(
+    await sendMenu(
       chatId,
       provider === "codex" ? t(l, "codexModelStatus", cur, codexModels) : t(l, "claudeModelStatus", cur),
       {
-        replyMarkup: {
-          inline_keyboard: provider === "codex"
-            ? [...codexRows, defRow]
-            : [CLAUDE_MODEL_SUGGESTIONS.map((m) => btn(m === cur ? `✅ ${m}` : m, m)), defRow],
-        },
+        inline_keyboard: provider === "codex"
+          ? [...codexRows, defRow]
+          : [CLAUDE_MODEL_SUGGESTIONS.map((m) => btn(m === cur ? `✅ ${m}` : m, m)), defRow],
       },
     );
     return;
@@ -2134,7 +2152,7 @@ async function handleSessions(chatId, arg, l, provider = currentProvider(), msgI
     await send(chatId, t(l, "sessionsEmpty", provider));
     return;
   }
-  await send(chatId, t(l, "sessionsHeader", provider, kb.inline_keyboard.length), { replyMarkup: kb });
+  await sendMenu(chatId, t(l, "sessionsHeader", provider, kb.inline_keyboard.length), kb);
 }
 
 // 다른 방이 붙잡고 있는 세션 — 한 기록 파일에 두 프로세스가 붙으면 서로의 맥락을 덮어쓴다.
@@ -2603,12 +2621,14 @@ async function handleCallback(cq) {
   const l = langOf({ from: cq.from });
   await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
   // 중복 클릭 방지 — 원본 메시지의 버튼 제거
-  if (!menu)
+  if (!menu) {
+    if (liveMenus.get(chatId) === cq.message.message_id) liveMenus.delete(chatId);
     tg("editMessageReplyMarkup", {
       chat_id: rawChatId,
       message_id: cq.message.message_id,
       reply_markup: { inline_keyboard: [] },
     }).catch(() => {});
+  }
   if (cq.data === "plan:yes") {
     runApprovedPlan(chatId, l).catch((e) => console.error("Plan approval error:", e.message));
   } else if (cq.data === "plan:no") {
@@ -2689,6 +2709,9 @@ async function handle(msg) {
     }
     return;
   }
+  // 대화가 이어졌으니 이전 설정 메뉴는 낡았다 — 위로 밀려 올라간 버튼을 먼저 걷어낸다.
+  // 주석(`//`·`/* */`)으로 무시한 입력은 대화가 아니라 메모라 여기까지 오지 않는다.
+  dropLiveMenu(chatId);
   const r = rt(chatId); // 이 방의 실행 상태 (busy·child·typing·queue…)
 
   // 레이트리밋 활성 중: 일반 메시지는 큐에 추가, 명령어는 통과
