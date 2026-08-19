@@ -91,6 +91,12 @@ run the tests and summarize any failures
 For a no-install trial, use `npx claude-telegram-bot init` and `npx claude-telegram-bot` instead. To
 run Codex instead of (or alongside) Claude, see [Configuration](#configuration).
 
+> **Running several things at once? Consider a group instead of a DM.** In a group with Topics
+> turned on, each topic is its own room — separate session, separate queue, running in parallel —
+> and `/newchat` opens a fresh one whenever you want to start something on the side. The cost: the
+> bot has to be a group admin, and **everyone in that group can command it**. If it's just you, a
+> DM is safer and needs no setup.
+
 ## Why this exists
 
 Sometimes you are away from your desk but still want to ask a coding agent to inspect a repo, run
@@ -143,7 +149,9 @@ to execute commands; that power is the point, and also the risk. Read this befor
 ### Threat model — who can run commands on your machine
 
 1. **The allowed chat.** Anyone with access to the Telegram account whose `chatId` you allow can
-   run commands. Lock your phone and Telegram account (2FA).
+   run commands. Lock your phone and Telegram account (2FA). If the allowed chat is a **group**, that
+   means every member of it — the whitelist is per *room*, not per person, so adding someone to the
+   group hands them the bot.
 2. **Whoever holds the bot token.** The token is the bot's password. With it, an attacker can read
    incoming messages and impersonate the bot. The `allowedChatId` whitelist still blocks command
    *execution* (Telegram-supplied `chatId`s can't be forged), but **treat a leaked token as an
