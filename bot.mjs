@@ -183,6 +183,10 @@ const STR = {
       "• /autocompact — view / set the auto-compact token threshold\n" +
       "• /id — show this chat ID\n" +
       `\nWorking dir: ${cfg.projectDir}\nPermission mode: ${cfg.permissionMode}`,
+    chatMigrated: (from, to) =>
+      "🔀 This group was upgraded to a supergroup, so Telegram issued it a new chat ID " +
+      `(${from} → ${to}). The bot followed the move — sessions came along and everything keeps working.\n` +
+      `Update \`allowedChatId\` in config.json to ${to} when you get a chance; the old ID is dead now.`,
     newSession: "🆕 Started a new conversation (previous context cleared).",
     newTopicDefaultName: (stamp) => `New chat ${stamp}`,
     newTopicCreated: (name) => `🆕 Opened a new topic: ${name}\nThe conversation continues there with a fresh session.`,
@@ -364,6 +368,10 @@ const STR = {
       "• /autocompact — 자동 압축 임계값 보기·설정\n" +
       "• /id — 이 채팅 ID 확인\n" +
       `\n작업 폴더: ${cfg.projectDir}\n권한 모드: ${cfg.permissionMode}`,
+    chatMigrated: (from, to) =>
+      "🔀 이 그룹이 슈퍼그룹으로 승격되면서 텔레그램이 채팅 ID 를 새로 발급했습니다 " +
+      `(${from} → ${to}). 봇이 알아서 따라왔고 세션도 그대로 옮겼습니다.\n` +
+      `언제든 config.json 의 \`allowedChatId\` 를 ${to} 로 바꿔두세요 — 옛 ID 는 이제 죽은 값입니다.`,
     newSession: "🆕 새 대화를 시작합니다 (이전 맥락 초기화).",
     newTopicDefaultName: (stamp) => `새 대화 ${stamp}`,
     newTopicCreated: (name) => `🆕 새 주제를 만들었습니다: ${name}\n거기서 새 세션으로 이어집니다.`,
@@ -981,6 +989,10 @@ if (state.provider && !["claude", "codex"].includes(state.provider)) {
   state.provider = undefined;
 }
 const currentProvider = () => state.provider || DEFAULT_PROVIDER;
+
+// 그룹 승격으로 물려받은 채팅 ID (adoptMigratedChat 참고). config.json 은 봇이 고칠 수 없으니
+// state 에 남겨서 재시작 후에도 화이트리스트가 유지되게 한다.
+for (const id of state.adoptedChatIds || []) if (!allowedIds.includes(id)) allowedIds.push(id);
 
 // ── 방(chatId)별 세션 ─────────────────────────────────────────────────────
 // 같은 봇이 여러 방(DM·그룹)을 담당할 때 방마다 대화 맥락을 분리한다. Claude와 Codex 세션은
@@ -3074,7 +3086,35 @@ function mergeMediaGroup(msgs) {
   return { ...msgs[0], text: captions.join("\n"), caption: undefined, _mediaGroup: fileIds };
 }
 
+// 일반 그룹에서 '주제(Topics)'를 켜거나 관리자가 슈퍼그룹으로 올리면 텔레그램이 그 방에 채팅 ID 를
+// 새로 발급한다(`-100…` 접두사). 그러면 allowedChatId 에 적힌 옛 ID 는 죽은 값이 되고, 봇은 새 방의
+// 메시지를 전부 "모르는 방"이라며 조용히 버린다 — 쓰는 사람 눈에는 봇이 죽은 것과 구분이 안 된다.
+// 승격 순간 텔레그램이 옛 방에는 migrate_to_chat_id 를, 새 방에는 migrate_from_chat_id 를 한 번씩
+// 보내주므로, 옛 ID 가 허용된 방이었을 때만 새 ID 를 물려받고 세션도 새 키로 옮긴다.
+// (허용된 방에서 출발한 승격만 따라가므로 아무 그룹이나 스스로 화이트리스트에 들어올 수는 없다.)
+async function adoptMigratedChat(msg) {
+  const [from, to] = msg.migrate_to_chat_id
+    ? [String(msg.chat.id), String(msg.migrate_to_chat_id)]
+    : [String(msg.migrate_from_chat_id), String(msg.chat.id)];
+  if (!allowedIds.includes(from) || allowedIds.includes(to)) return;
+  allowedIds.push(to);
+  state.adoptedChatIds = [...(state.adoptedChatIds || []), to];
+  // 방 키가 통째로 바뀌므로 세션·대기열도 옮긴다 — 안 그러면 승격과 동시에 맥락이 사라진다.
+  for (const k of Object.keys(state.sessions || {})) {
+    if (k !== from && !k.startsWith(`${from}:`)) continue;
+    state.sessions[to + k.slice(from.length)] = state.sessions[k];
+    delete state.sessions[k];
+  }
+  saveState(state);
+  console.warn(`Chat migrated: ${from} → ${to} (adopted)`);
+  await send(to, t(BOT_LANG, "chatMigrated", from, to)).catch(() => {});
+}
+
 function dispatch(msg) {
+  if (msg.migrate_to_chat_id || msg.migrate_from_chat_id) {
+    adoptMigratedChat(msg).catch((e) => console.error("Migration error:", e.message));
+    return;
+  }
   const gid = msg.media_group_id;
   if (!gid) { handle(msg).catch((e) => console.error("Handle error:", e.message)); return; }
   if (!mediaGroups.has(gid)) mediaGroups.set(gid, { msgs: [], timer: null });
