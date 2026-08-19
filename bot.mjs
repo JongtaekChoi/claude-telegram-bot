@@ -162,6 +162,7 @@ const STR = {
       "• Start a message with // and the bot ignores it — leave yourself a note in the chat\n" +
       "• /* ignores everything until a message starting with */ — for a run of notes or a pasted log\n" +
       "• /new — reset conversation context (new session)\n" +
+      "• /new --chat [name] — open a new topic and start fresh there (forum groups)\n" +
       "• /sessions — list past sessions in this project and pick one to carry on from\n" +
       "• /name — name the current session so it stands out in /sessions\n" +
       "• /jobs — background jobs that outlive replies · you get a message when one ends\n" +
@@ -183,6 +184,13 @@ const STR = {
       "• /id — show this chat ID\n" +
       `\nWorking dir: ${cfg.projectDir}\nPermission mode: ${cfg.permissionMode}`,
     newSession: "🆕 Started a new conversation (previous context cleared).",
+    newTopicDefaultName: (stamp) => `New chat ${stamp}`,
+    newTopicCreated: (name) => `🆕 Opened a new topic: ${name}\nThe conversation continues there with a fresh session.`,
+    newTopicHello: "🆕 New topic, new session. Go ahead.",
+    newTopicNotGroup: "/new --chat opens a new topic, so it only works in a group. In a DM use /new instead.",
+    newTopicFail: (m) =>
+      `⚠️ Could not create the topic: ${m}\n` +
+      "The group must be a supergroup with Topics turned on, and the bot needs the “Manage topics” permission.",
     compacting: "🗜️ Compacting… this can take a minute or two.",
     compactOk: "🗜️ Context compacted. The conversation continues with a summary.",
     compactFail: (m) => `⚠️ Compact failed: ${m}`,
@@ -335,6 +343,7 @@ const STR = {
       "• 메시지를 // 로 시작하면 봇이 무시합니다 — 채팅에 혼잣말 메모를 남기는 용도\n" +
       "• /* 를 보내면 */ 로 시작하는 메시지가 올 때까지 전부 무시합니다 — 메모를 연달아 남기거나 로그를 붙여넣을 때\n" +
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
+      "• /new --chat [이름] — 새 주제를 만들어 거기서 새 세션 시작 (주제 켜진 그룹)\n" +
       "• /sessions — 이 프로젝트의 지난 세션 목록 · 골라서 이어가기\n" +
       "• /name — 지금 세션에 이름 붙이기 · /sessions 에서 바로 찾기\n" +
       "• /jobs — 답장 후에도 살아 있는 백그라운드 작업 · 끝나면 먼저 알려줌\n" +
@@ -356,6 +365,13 @@ const STR = {
       "• /id — 이 채팅 ID 확인\n" +
       `\n작업 폴더: ${cfg.projectDir}\n권한 모드: ${cfg.permissionMode}`,
     newSession: "🆕 새 대화를 시작합니다 (이전 맥락 초기화).",
+    newTopicDefaultName: (stamp) => `새 대화 ${stamp}`,
+    newTopicCreated: (name) => `🆕 새 주제를 만들었습니다: ${name}\n거기서 새 세션으로 이어집니다.`,
+    newTopicHello: "🆕 새 주제, 새 세션입니다. 말씀하세요.",
+    newTopicNotGroup: "/new --chat 은 새 주제를 만드는 기능이라 그룹에서만 됩니다. DM 에서는 /new 를 쓰세요.",
+    newTopicFail: (m) =>
+      `⚠️ 주제를 만들지 못했습니다: ${m}\n` +
+      "슈퍼그룹에서 '주제(Topics)'가 켜져 있어야 하고, 봇에 '주제 관리' 권한이 있어야 합니다.",
     busy: "⏳ 이전 작업이 아직 진행 중입니다. 끝나면 다시 보내주세요.",
     queued: (n) => `⏳ 대기열에 추가됐습니다 (${n}번째). 현재 작업이 끝나면 자동으로 실행됩니다.`,
     stopOk: "🛑 작업을 중단했습니다.",
@@ -747,7 +763,7 @@ function jobElapsed(ms, l) {
 // /(슬래시) 자동완성 메뉴용 명령 목록 (언어별). setMyCommands 로 등록.
 const COMMANDS = {
   en: [
-    { command: "new", description: "Reset context (new session)" },
+    { command: "new", description: "Reset context (new session) · --chat opens a new topic" },
     { command: "sessions", description: "List past sessions · pick one to carry on from" },
     { command: "name", description: "Name the current session" },
     { command: "jobs", description: "Background jobs still running (survive replies)" },
@@ -769,7 +785,7 @@ const COMMANDS = {
     { command: "help", description: "Help" },
   ],
   ko: [
-    { command: "new", description: "대화 맥락 초기화 (새 세션)" },
+    { command: "new", description: "대화 맥락 초기화 (새 세션) · --chat 은 새 주제" },
     { command: "sessions", description: "지난 세션 목록 · 골라서 이어가기" },
     { command: "name", description: "지금 세션에 이름 붙이기" },
     { command: "jobs", description: "백그라운드 작업 목록 (답장 후에도 살아 있는 것)" },
@@ -968,6 +984,24 @@ const currentProvider = () => state.provider || DEFAULT_PROVIDER;
 // 같은 봇이 여러 방(DM·그룹)을 담당할 때 방마다 대화 맥락을 분리한다. Claude와 Codex 세션은
 // 서로 호환되지 않으므로 방마다 sessionId(Claude)와 codexSessionId(Codex)를 따로 저장한다.
 // provider·model·ollamaMode 같은 봇 단위 설정은 기존대로 state 최상위에 둔다(세션만 방별로 분리).
+//
+// 포럼(주제) 그룹에서는 토픽 하나가 곧 방이다 — 방 키를 "chatId:threadId" 로 확장해 토픽마다
+// 세션·대기열을 따로 둔다. 토픽이 아닌 방(DM·일반 그룹·General 토픽)의 키는 예전 그대로 "chatId"
+// 라서 기존 state.sessions 가 그대로 읽힌다(마이그레이션 불필요). 아래 코드의 chatId 인자에는
+// 이 방 키가 그대로 들어가고, 텔레그램 API 를 부를 때만 tgTarget() 으로 되돌린다.
+const roomKey = (chatId, threadId) => (threadId ? `${chatId}:${threadId}` : String(chatId));
+// 일반 supergroup 도 답글 스레드에 message_thread_id 를 붙이므로, 포럼 토픽을 뜻하는
+// is_topic_message 가 있을 때만 방을 나눈다 (안 그러면 답글마다 세션이 쪼개진다).
+const roomOf = (msg) => roomKey(msg?.chat?.id, msg?.is_topic_message ? msg.message_thread_id : undefined);
+// 방 키 → 텔레그램 전송 대상. chatId 는 숫자(그룹은 음수)라 ":" 와 겹치지 않는다.
+function tgTarget(room) {
+  const s = String(room);
+  const i = s.indexOf(":");
+  return i < 0 ? { chat_id: s } : { chat_id: s.slice(0, i), message_thread_id: Number(s.slice(i + 1)) };
+}
+// 화이트리스트 검사·리액션·버튼 수정처럼 토픽과 무관한 곳에 쓸 실제 채팅 ID.
+const baseChatId = (room) => tgTarget(room).chat_id;
+
 function chatBucket(chatId) {
   if (!state.sessions) state.sessions = {};
   const k = String(chatId);
@@ -1098,11 +1132,12 @@ function mdToTelegramHtml(md) {
 // 반환값: 마지막으로 보낸 메시지의 message_id (버튼 클릭 후 편집용, 실패 시 null).
 async function send(chatId, text, opts = {}) {
   const cs = [...chunks(text)];
+  const target = tgTarget(chatId); // 방 키가 토픽까지 담고 있으면 그 토픽으로 보낸다
   let lastId = null;
   for (let i = 0; i < cs.length; i++) {
     const isLast = i === cs.length - 1;
     const body = {
-      chat_id: chatId,
+      ...target,
       text: mdToTelegramHtml(cs[i]),
       parse_mode: "HTML",
       disable_web_page_preview: true,
@@ -1111,7 +1146,7 @@ async function send(chatId, text, opts = {}) {
     let r = await tg("sendMessage", body);
     // If our HTML is malformed for some edge case, resend as plain text.
     if (!r || r.ok === false) {
-      const plain = { chat_id: chatId, text: cs[i], disable_web_page_preview: true };
+      const plain = { ...target, text: cs[i], disable_web_page_preview: true };
       if (isLast && opts.replyMarkup) plain.reply_markup = opts.replyMarkup;
       r = await tg("sendMessage", plain);
     }
@@ -1124,7 +1159,9 @@ async function send(chatId, text, opts = {}) {
 // multipart/form-data 로 sendPhoto (Node 18+ 내장 FormData/Blob, 의존성 0 유지).
 async function tgSendPhoto(chatId, absPath, caption) {
   const fd = new FormData();
-  fd.append("chat_id", String(chatId));
+  const target = tgTarget(chatId);
+  fd.append("chat_id", String(target.chat_id));
+  if (target.message_thread_id) fd.append("message_thread_id", String(target.message_thread_id));
   if (caption) fd.append("caption", caption.slice(0, 1024));
   fd.append("photo", new Blob([readFileSync(absPath)]), basename(absPath));
   const r = await fetch(`${TG}/sendPhoto`, { method: "POST", body: fd });
@@ -1933,7 +1970,7 @@ async function runCompact(chatId, l, okKey) {
   }
   r.busy = true;
   r.typing = setInterval(
-    () => tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {}),
+    () => tg("sendChatAction", { ...tgTarget(chatId), action: "typing" }).catch(() => {}),
     5000,
   );
   try {
@@ -2063,7 +2100,7 @@ async function handleSessions(chatId, arg, l, provider = currentProvider(), msgI
     // 목록 메시지는 그대로 두고 ✅ 만 옮겨 그린다 — 되돌아가서 다시 고를 수 있어야 하니까.
     if (msgId)
       tg("editMessageReplyMarkup", {
-        chat_id: chatId,
+        chat_id: baseChatId(chatId),
         message_id: msgId,
         reply_markup: sessionKeyboard(chatId, provider, l),
       }).catch(() => {});
@@ -2144,6 +2181,35 @@ async function handleName(chatId, arg, l) {
   await send(chatId, t(l, "nameSet", names[id]));
 }
 
+// /new --chat — 새 포럼 토픽을 만들고 거기서 새 세션으로 시작한다. 봇 API 로는 그룹 자체를
+// 만들 수 없어서(그룹 생성은 유저 계정 전용), "새 방"에 가장 가까운 게 주제(토픽)다. 슈퍼그룹에
+// 주제가 켜져 있고 봇에 '주제 관리' 권한이 있어야 한다 — 실패 사유는 텔레그램 설명을 그대로 보여준다.
+// 새 토픽의 방 키는 처음 보는 값이라(토픽 ID = 메시지 ID, 재사용 없음) 따로 세션을 비울 필요가 없다.
+async function newTopic(chatId, name, l) {
+  const base = baseChatId(chatId);
+  if (!String(base).startsWith("-")) {
+    await send(chatId, t(l, "newTopicNotGroup"));
+    return;
+  }
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const stamp = `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  const title = (name || t(l, "newTopicDefaultName", stamp)).replace(/\s+/g, " ").slice(0, 128);
+  let r;
+  try {
+    r = await tg("createForumTopic", { chat_id: base, name: title });
+  } catch (e) {
+    r = { ok: false, description: e.message };
+  }
+  if (!r?.ok) {
+    await send(chatId, t(l, "newTopicFail", r?.description || "unknown error"));
+    return;
+  }
+  const room = roomKey(base, r.result.message_thread_id);
+  await send(room, t(l, "newTopicHello"));
+  await send(chatId, t(l, "newTopicCreated", title));
+}
+
 // 백그라운드 작업 목록 — /jobs. 방을 가리지 않고 전부 보여준다. 작업은 방이 아니라 이 기계에
 // 붙어 있고(로컬 ctb 에서 띄운 것도 여기 섞인다), 어느 방에서 띄웠든 돌고 있다는 사실이 중요하다.
 async function handleJobs(chatId, l) {
@@ -2208,7 +2274,7 @@ async function handleCron(chatId, rest, l) {
     }
     rtc.busy = true;
     try {
-      await tg("sendChatAction", { chat_id: chatId, action: "typing" });
+      await tg("sendChatAction", { ...tgTarget(chatId), action: "typing" });
       const r = await extractCron(input, l);
       if (r.error) {
         await send(chatId, `⚠️ ${r.error}`);
@@ -2460,12 +2526,12 @@ async function runApprovedPlan(chatId, l) {
   r.busy = true;
   const started = Date.now();
   r.typing = setInterval(
-    () => tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {}),
+    () => tg("sendChatAction", { ...tgTarget(chatId), action: "typing" }).catch(() => {}),
     5000,
   );
   const syntheticMsg = { chat: { id: chatId }, text: PLAN_PROCEED_PROMPT };
   try {
-    await tg("sendChatAction", { chat_id: chatId, action: "typing" });
+    await tg("sendChatAction", { ...tgTarget(chatId), action: "typing" });
     r.prevSession = { chatId: String(chatId), provider: "claude", sessionId: getSid(chatId, "claude") };
     const res = await runClaude(PLAN_PROCEED_PROMPT, pending.sessionId, { modelHint: true, trackChild: r, injectMemory: true, chatId });
     if (res.sessionId) {
@@ -2492,8 +2558,9 @@ const HANDLED_KEYBOARD_MEMORY = 200;
 
 // 텔레그램 인라인 버튼(✅/❌) 클릭 처리
 async function handleCallback(cq) {
-  const chatId = cq.message?.chat?.id;
-  if (!chatId || !allowedIds.includes(String(chatId))) {
+  const rawChatId = cq.message?.chat?.id;
+  const chatId = roomOf(cq.message); // 버튼도 눌린 토픽의 방에서 처리한다
+  if (!rawChatId || !allowedIds.includes(String(rawChatId))) {
     await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
     return;
   }
@@ -2515,7 +2582,7 @@ async function handleCallback(cq) {
   // 중복 클릭 방지 — 원본 메시지의 버튼 제거
   if (!menu)
     tg("editMessageReplyMarkup", {
-      chat_id: chatId,
+      chat_id: rawChatId,
       message_id: cq.message.message_id,
       reply_markup: { inline_keyboard: [] },
     }).catch(() => {});
@@ -2547,8 +2614,9 @@ async function handleCallback(cq) {
 }
 
 async function handle(msg) {
-  const chatId = msg.chat?.id;
-  if (!chatId) return;
+  if (!msg.chat?.id) return;
+  const chatId = roomOf(msg); // 포럼 그룹이면 토픽까지가 방이다 — 아래 chatId 는 전부 방 키
+  const rawChatId = baseChatId(chatId); // 화이트리스트·리액션용 실제 채팅 ID
   const l = langOf(msg);
   const text = stripBotMention((msg.text || msg.caption || "").trim());
   const attachment = msg._mediaGroup ? null : pickAttachment(msg);
@@ -2556,11 +2624,11 @@ async function handle(msg) {
 
   // 화이트리스트
   if (!allowedIds.length) {
-    await send(chatId, t(l, "needChatId", chatId));
+    await send(chatId, t(l, "needChatId", rawChatId));
     return;
   }
-  if (!allowedIds.includes(String(chatId))) {
-    console.warn(`Ignoring unauthorized chatId ${chatId}`);
+  if (!allowedIds.includes(String(rawChatId))) {
+    console.warn(`Ignoring unauthorized chatId ${rawChatId}`);
     return;
   }
   // 혼잣말 — `//` 로 시작하는 메시지는 봇이 무시한다. 작업 중 떠오른 딴 주제 메모를
@@ -2571,7 +2639,7 @@ async function handle(msg) {
   // 👀 를 남긴다 — 눈 아이콘만 계속 달리면 아직 주석 모드라는 게 바로 보인다.
   const seen = () =>
     tg("setMessageReaction", {
-      chat_id: chatId,
+      chat_id: rawChatId,
       message_id: msg.message_id,
       reaction: [{ type: "emoji", emoji: "👀" }],
     }).catch(() => {});
@@ -2614,7 +2682,9 @@ async function handle(msg) {
     return;
   }
   if (text === "/id") {
-    await send(chatId, `chatId: ${chatId}`);
+    // 화이트리스트에 넣을 값은 채팅 ID다 — 토픽은 방 구분용이라 참고로만 덧붙인다.
+    const topic = msg.is_topic_message ? `\ntopic: ${msg.message_thread_id}` : "";
+    await send(chatId, `chatId: ${rawChatId}${topic}`);
     return;
   }
   if (text === "/status") {
@@ -2723,6 +2793,10 @@ async function handle(msg) {
     } catch (e) {
       await send(chatId, t(l, "testFallbackFail", e.message));
     }
+    return;
+  }
+  if (text === "/new --chat" || text.startsWith("/new --chat ")) {
+    await newTopic(chatId, text.slice(11).trim(), l);
     return;
   }
   if (text === "/new") {
@@ -2851,14 +2925,14 @@ async function handle(msg) {
   // 긴 작업 동안 타이핑 표시 유지
   r.typing = setInterval(
     () =>
-      tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(
+      tg("sendChatAction", { ...tgTarget(chatId), action: "typing" }).catch(
         () => {},
       ),
     5000,
   );
 
   try {
-    await tg("sendChatAction", { chat_id: chatId, action: "typing" });
+    await tg("sendChatAction", { ...tgTarget(chatId), action: "typing" });
     // /plan <요청> — permission-mode를 강제로 plan으로 실행해 편집 없이 계획만 받고,
     // 승인 버튼을 눌러야 실제 permissionMode로 이어서 실행 (runApprovedPlan).
     if (text === "/plan" || text.startsWith("/plan ")) {
