@@ -232,6 +232,18 @@ const STR = {
     localKillFail: (pid) =>
       `⚠️ Couldn't end PID ${pid} — it may need to be closed in the terminal.`,
     needChatId: (id) => `Add this chat ID to "allowedChatId" in config.json:\n${id}`,
+    roomNotAllowed: (id, cfgPath, guide) =>
+      "👋 I'm in this chat, but it isn't on the allow list — until it is, I ignore everything said here.\n\n" +
+      "This chat's ID:\n" +
+      `\`${id}\`\n\n` +
+      "Add it to `allowedChatId` in the bot's config file, then restart the bot:\n" +
+      `\`${cfgPath}\`\n\n` +
+      "```json\n" +
+      `{ "allowedChatId": ["<existing id>", "${id}"] }\n` +
+      "```\n" +
+      `Group setup, including the BotFather privacy setting: ${guide}\n\n` +
+      "⚠️ Allowing a group hands the bot to **everyone in it** — the allow list is per room, not per person.\n" +
+      "*(Said once per chat, so I don't become a spam relay.)*",
     cronEmpty:
       "No scheduled tasks yet.\nAdd one in plain language, e.g. `/cron add summarize open issues every weekday at 9am`.",
     cronListHeader: "⏰ Scheduled tasks",
@@ -393,6 +405,18 @@ const STR = {
     localKilled: (pid) => `🛑 로컬 \`ctb\` 세션을 종료했습니다 (PID ${pid}).`,
     localKillFail: (pid) => `⚠️ PID ${pid} 를 종료하지 못했습니다 — 터미널에서 직접 닫아야 할 수 있습니다.`,
     needChatId: (id) => `이 채팅 ID를 config.json 의 allowedChatId 에 넣으세요:\n${id}`,
+    roomNotAllowed: (id, cfgPath, guide) =>
+      "👋 이 방에 들어왔지만 아직 허용 목록에 없습니다 — 등록되기 전까지는 여기서 하는 말을 전부 무시합니다.\n\n" +
+      "이 방의 채팅 ID 입니다:\n" +
+      `\`${id}\`\n\n` +
+      "봇 설정 파일의 `allowedChatId` 에 넣고 봇을 재시작하세요:\n" +
+      `\`${cfgPath}\`\n\n` +
+      "```json\n" +
+      `{ "allowedChatId": ["기존 ID", "${id}"] }\n` +
+      "```\n" +
+      `그룹 설정 방법 (BotFather privacy 설정 포함): ${guide}\n\n` +
+      "⚠️ 그룹을 허용하면 **그 방에 있는 모든 사람**에게 봇을 넘기는 것과 같습니다 — 화이트리스트는 사람이 아니라 방 단위입니다.\n" +
+      "*(스팸 중계기가 되지 않도록 이 안내는 방마다 한 번만 보냅니다.)*",
     cronEmpty:
       "등록된 예약 작업이 없습니다.\n`/cron add 매일 아침 9시에 …` 처럼 자연어로 추가해 보세요.",
     cronListHeader: "⏰ 예약 작업",
@@ -1225,6 +1249,36 @@ function dropLiveMenu(chatId) {
     message_id: id,
     reply_markup: { inline_keyboard: [] },
   }).catch(() => {});
+}
+
+// ── 모르는 방에서의 첫 인사 ───────────────────────────────────────────────
+// 봇을 새 그룹에 초대해도 `allowedChatId` 에 없으면 그 방의 메시지는 로그에만 남고 조용히 버려졌다.
+// 부른 사람 눈에는 봇이 죽은 것과 구분이 안 되고, 넣어야 할 chatId 를 알아낼 방법도 없었다 —
+// `/id` 조차 화이트리스트 뒤에 있어서 답이 없다. 그래서 모르는 방에서는 넣을 값과 넣을 자리를 알려준다.
+// **방 하나당 딱 한 번만** 말한다: 아무나 봇을 그룹에 끌어다 넣을 수 있어서, 메시지마다 답하면
+// 봇이 스팸 중계기가 된다. 이 안내로 새는 건 그 방 스스로의 chatId 뿐이라 비밀이 아니다.
+const GUIDE_URL = "https://github.com/JongtaekChoi/claude-telegram-bot/blob/main/docs/group-setup";
+const greetedRooms = new Set(); // 이미 안내한 방 (프로세스 수명 — 재시작하면 한 번 더 말한다)
+
+async function greetUnknownRoom(roomKey, rawChatId, from, l) {
+  const key = String(rawChatId);
+  if (greetedRooms.has(key)) return;
+  if (greetedRooms.size >= 200) greetedRooms.delete(greetedRooms.values().next().value); // 가장 오래된 것부터
+  greetedRooms.add(key);
+  // 설정 파일 경로에는 계정 이름 같은 게 묻어 있다 — 허용된 방의 주인일 때만 실제 경로를 알린다.
+  const isOwner = allowedIds.includes(String(from?.id));
+  const guide = `${GUIDE_URL}${l === "ko" ? ".ko" : ""}.md`;
+  await send(roomKey, t(l, "roomNotAllowed", key, isOwner ? CONFIG_PATH : "config.json", guide)).catch(() => {});
+}
+
+// 봇의 가입·탈퇴(my_chat_member)는 privacy mode 와 무관하게 항상 오는 업데이트다. 초대 직후 여기서
+// 안내하면, privacy mode 가 켜져 있어 일반 대화가 봇에게 아예 닿지 않는 방에서도 chatId 를 알려줄 수 있다.
+async function handleMyChatMember(upd) {
+  const status = upd.new_chat_member?.status;
+  if (status !== "member" && status !== "administrator") return; // 강퇴·탈퇴는 알릴 게 없다
+  if (!upd.chat?.id || upd.chat.type === "private") return; // DM 의 차단/해제도 이 업데이트로 온다
+  if (allowedIds.includes(String(upd.chat.id))) return; // 이미 허용된 방이면 조용히 들어간다
+  await greetUnknownRoom(String(upd.chat.id), upd.chat.id, upd.from, langOf(upd));
 }
 
 // ── 이미지 전송(아웃박스) ──────────────────────────────────────────────────
@@ -2699,6 +2753,8 @@ async function handle(msg) {
   }
   if (!allowedIds.includes(String(rawChatId))) {
     console.warn(`Ignoring unauthorized chatId ${rawChatId}`);
+    // 명령은 실행하지 않는다 — 넣어야 할 chatId 만 한 번 알려주고 끝이다.
+    await greetUnknownRoom(chatId, rawChatId, msg.from, l);
     return;
   }
   // 혼잣말 — `//` 로 시작하는 메시지는 봇이 무시한다. 작업 중 떠오른 딴 주제 메모를
@@ -3214,10 +3270,15 @@ async function main() {
     tg("setMyCommands", { commands: [...COMMANDS.ko, ...customCmdEntries], language_code: "ko" }).catch(() => {});
   }
 
+  // 받을 업데이트 종류를 명시한다. 텔레그램은 allowed_updates 를 생략하면 '직전에 지정한 값'을 계속
+  // 쓰므로, 같은 토큰을 예전에 다른 도구가 좁혀 놨으면 my_chat_member 가 조용히 안 오고 초대 안내가
+  // 통째로 사라진다. 여기 적힌 셋이 이 봇이 처리하는 전부다 — 핸들러를 늘리면 이 목록도 같이 늘린다.
+  const UPDATES = ["message", "callback_query", "my_chat_member"];
+
   // 시작 시 밀린 메시지 건너뛰기
   let offset = 0;
   try {
-    const init = await tg("getUpdates", { timeout: 0, offset: -1 });
+    const init = await tg("getUpdates", { timeout: 0, offset: -1, allowed_updates: UPDATES });
     if (init.ok && init.result.length)
       offset = init.result[init.result.length - 1].update_id + 1;
   } catch {}
@@ -3228,7 +3289,7 @@ async function main() {
 
   while (true) {
     try {
-      const res = await tg("getUpdates", { offset, timeout: 30 });
+      const res = await tg("getUpdates", { offset, timeout: 30, allowed_updates: UPDATES });
       if (!res.ok) {
         await new Promise((r) => setTimeout(r, 2000));
         continue;
@@ -3237,6 +3298,7 @@ async function main() {
         offset = upd.update_id + 1;
         if (upd.message) dispatch(upd.message);
         else if (upd.callback_query) handleCallback(upd.callback_query).catch((e) => console.error("Callback error:", e.message));
+        else if (upd.my_chat_member) handleMyChatMember(upd.my_chat_member).catch((e) => console.error("Membership error:", e.message));
       }
     } catch (e) {
       console.error("Polling error:", e.message);
