@@ -2389,7 +2389,8 @@ function pickAttachment(msg) {
 
 async function downloadAttachment(att) {
   const info = await tg("getFile", { file_id: att.fileId });
-  if (!info.ok) throw new Error("getFile failed");
+  // 실패 사유는 텔레그램 description 을 그대로 노출한다 — 용량 초과("file is too big")인지 네트워크 문제인지 구분돼야 진단이 된다.
+  if (!info.ok) throw new Error(info.description || "getFile failed");
   const filePath = info.result.file_path; // e.g. photos/file_3.jpg
   const r = await fetch(`https://api.telegram.org/file/bot${cfg.token}/${filePath}`);
   if (!r.ok) throw new Error(`download failed ${r.status}`);
@@ -3035,6 +3036,7 @@ async function handle(msg) {
       return;
     }
     let prompt = text;
+    let attachFailed = false;
     if (msg._mediaGroup?.length) {
       const notes = [];
       for (const fileId of msg._mediaGroup) {
@@ -3042,6 +3044,7 @@ async function handle(msg) {
           const { dest, name } = await downloadAttachment({ fileId, name: null });
           notes.push(`[Attachment] Absolute path: ${dest} (filename: ${name}). Open it with the Read tool if needed.`);
         } catch (e) {
+          attachFailed = true;
           await send(chatId, t(l, "attachFail", e.message));
         }
       }
@@ -3052,8 +3055,15 @@ async function handle(msg) {
         const note = `[Attachment] Absolute path: ${dest} (filename: ${name}). Open it with the Read tool if needed.`;
         prompt = text ? `${text}\n\n${note}` : note;
       } catch (e) {
+        attachFailed = true;
         await send(chatId, t(l, "attachFail", e.message));
       }
+    }
+    // 첨부만 보냈는데 다운로드가 실패하면 남는 게 없다. 여기서 멈추지 않으면 아래 buildMsgMeta 가
+    // `[From: ...]` 한 줄을 붙여 prompt 이 non-empty 가 되고, 내용 없는 프롬프트로 세션이 돌아간다.
+    if (attachFailed) {
+      if (!prompt) return;
+      prompt += "\n\n[Attachment] Download failed — the file the user sent is not available.";
     }
     const meta = buildMsgMeta(msg);
     if (meta) prompt = prompt ? `${meta}\n\n${prompt}` : meta;
