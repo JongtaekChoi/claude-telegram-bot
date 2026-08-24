@@ -11,6 +11,7 @@
   "persona": "System prompt defining this bot's role/voice (optional). Used to differentiate persona bots (developer/planner/...).",
   "appendSystemPrompt": "",
   "env": {},
+  "mergeWindowMs": 1000,
   "autoCompactThreshold": 100000,
   "autoCompactConfirm": true,
   "codexFallback": false,

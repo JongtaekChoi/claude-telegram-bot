@@ -140,6 +140,18 @@ const JOBS = cfg.backgroundJobs !== false;
 const JOBS_DIR = join(cfg.projectDir || DATA_DIR, ".ctb-jobs");
 const JOB_TICK_MS = 30_000;
 const JOB_LOG_TAIL = 1200; // 완료 알림에 붙일 로그 꼬리 길이
+// 사람은 한 생각을 여러 메시지로 쪼개 보낸다 — "아까 그 버그 말인데" / "테스트부터 돌려봐" / "아 로그도".
+// 첫 줄에 즉시 반응하면 나머지는 이미 시작된 작업 뒤에 줄을 서고(`⏳ 대기열에 추가됐습니다`), 반쪽짜리
+// 맥락으로 돌린 그 실행은 답까지 따로 와서 통째로 버려진다. 그래서 잠깐 기다렸다 합쳐 한 번만 돈다.
+// 길이는 /mergewindow 로 재시작 없이 바꾼다 — 손에 맞는 값은 사람마다 다른데(두 줄째를 치는 속도),
+// 상수로 박아두면 그걸 찾는 데 매번 재시작이 든다.
+// 텔레그램의 타이핑 표시는 보낸 지 5초면 스스로 꺼진다. 딱 5초마다 갱신하면 왕복 지연(수백 ms)만큼
+// 매번 늦게 도착해 주기마다 표시가 잠깐씩 끊긴다 — 긴 작업일수록 "돌고는 있나" 싶게 보인다.
+// 만료 전에 조금 일찍 덮어써서 끊김 없이 이어지게 한다.
+const TYPING_TICK_MS = 4000;
+const MERGE_WINDOW_DEFAULT = cfg.mergeWindowMs ?? 1000; // 0 이면 끔 — 예전처럼 즉시 실행
+const MERGE_HOLD_RATIO = 5; // 말이 계속 이어져도 첫 메시지 기준 이 배수에서는 끊고 시작한다
+const mergeWindowMs = () => state.mergeWindowMs ?? MERGE_WINDOW_DEFAULT;
 // allowedChatId 는 문자열 또는 배열 모두 허용 (하위 호환)
 const allowedIds = []
   .concat(cfg.allowedChatId)
@@ -181,6 +193,7 @@ const STR = {
       "• /provider — view / switch this room's provider\n" +
       "• /model — view / switch this room's model\n" +
       "• /autocompact — view / set the auto-compact token threshold\n" +
+      "• /mergewindow — view / set how long to wait for a follow-up message\n" +
       "• /id — show this chat ID\n" +
       `\nWorking dir: ${cfg.projectDir}\nPermission mode: ${cfg.permissionMode}`,
     chatMigrated: (from, to) =>
@@ -316,6 +329,19 @@ const STR = {
       "Use `/autocompact off` to disable it instead.",
     autoCompactOffBtn: "Off",
     autoCompactDefBtn: "Default",
+    mergeWindowStatus: (cur, def) =>
+      `⏱ Merge window: ${fmtDuration(cur)}${cur === def ? " (default)" : ""}\n` +
+      "Messages sent within this window are merged and answered in one pass.\n" +
+      "Tap a button below, or `/mergewindow 2s`",
+    mergeWindowSet: (n) => `⏱ Merge window: ${fmtDuration(n)} — messages sent that close together are answered together.`,
+    mergeWindowOff: "⏱ Merge window off — every message runs immediately.",
+    mergeWindowReset: (def) => `⏱ Merge window reset to default (${fmtDuration(def)}).`,
+    mergeWindowUsage: "Usage: `/mergewindow 2s` (or 2000) · `/mergewindow off` · `/mergewindow default`",
+    mergeWindowRange: (n, min, max) =>
+      `⚠️ ${fmtDuration(n)} is out of range — keep it between ${fmtDuration(min)} and ${fmtDuration(max)}. ` +
+      "Use `/mergewindow off` to disable it instead.",
+    mergeWindowOffBtn: "Off",
+    mergeWindowDefBtn: "Default",
     memoryEmpty: "No memory yet. Use `/remember <text>` to add.",
     memoryShow: (m) => `💾 Memory:\n\`\`\`\n${m}\n\`\`\`\n\`/memory rm <n>\` removes lines — \`3\`, \`3 5 7\`, or \`3-9\`. \`/memory clear\` wipes all.`,
     memoryCleared: "🧹 Memory cleared. The current chat may still follow it — `/new` starts a fresh chat without it.",
@@ -378,6 +404,7 @@ const STR = {
       "• /provider — 이 방의 provider 보기·전환\n" +
       "• /model — 이 방의 모델 보기·전환\n" +
       "• /autocompact — 자동 압축 임계값 보기·설정\n" +
+      "• /mergewindow — 다음 메시지를 얼마나 기다렸다 합칠지 보기·설정\n" +
       "• /id — 이 채팅 ID 확인\n" +
       `\n작업 폴더: ${cfg.projectDir}\n권한 모드: ${cfg.permissionMode}`,
     chatMigrated: (from, to) =>
@@ -488,6 +515,19 @@ const STR = {
       "끄려면 `/autocompact off`를 쓰세요.",
     autoCompactOffBtn: "끄기",
     autoCompactDefBtn: "기본값",
+    mergeWindowStatus: (cur, def) =>
+      `⏱ 병합 창: ${fmtDuration(cur, "ko")}${cur === def ? " (기본값)" : ""}\n` +
+      "이 시간 안에 연달아 보낸 메시지는 하나로 합쳐 한 번에 답합니다.\n" +
+      "아래 버튼을 누르거나 `/mergewindow 2s`",
+    mergeWindowSet: (n) => `⏱ 병합 창: ${fmtDuration(n, "ko")} — 이 안에 연달아 보내면 합쳐서 답합니다.`,
+    mergeWindowOff: "⏱ 병합 창을 껐습니다 — 메시지마다 바로 실행합니다.",
+    mergeWindowReset: (def) => `⏱ 병합 창을 기본값으로 되돌렸습니다 (${fmtDuration(def, "ko")}).`,
+    mergeWindowUsage: "사용법: `/mergewindow 2s` (또는 2000) · `/mergewindow off` · `/mergewindow default`",
+    mergeWindowRange: (n, min, max) =>
+      `⚠️ 범위를 벗어난 값입니다 (${fmtDuration(n, "ko")}) — ${fmtDuration(min, "ko")} ~ ${fmtDuration(max, "ko")} 사이로 넣어주세요. ` +
+      "끄려면 `/mergewindow off`를 쓰세요.",
+    mergeWindowOffBtn: "끄기",
+    mergeWindowDefBtn: "기본값",
     memoryEmpty: "저장된 메모리가 없습니다. `/remember <내용>`으로 추가하세요.",
     memoryShow: (m) => `💾 메모리:\n\`\`\`\n${m}\n\`\`\`\n\`/memory rm <번호>\` 로 지웁니다 — \`3\`, \`3 5 7\`, \`3-9\`. 전부 비우려면 \`/memory clear\``,
     memoryCleared: "🧹 메모리를 삭제했습니다. 진행 중인 대화에는 한동안 남습니다 — `/new` 로 대화를 새로 시작하면 사라집니다.",
@@ -559,6 +599,17 @@ function fmtTokens(n, l = "en") {
   const num =
     n >= 1e6 && n % 1e5 === 0 ? `${n / 1e6}m` : n % 1000 === 0 ? `${n / 1000}k` : String(n);
   return l === "ko" ? `${num} 토큰` : `${num} tokens`;
+}
+// 병합 창 길이 표시·해석. 밀리초가 원 단위지만(설정 키가 mergeWindowMs) 사람이 읽고 쓰는 건 "2s" 쪽이라
+// 둘 다 받는다. 단위 없는 숫자는 ms — `/mergewindow 2000` 이 2초여야지 2000초면 곤란하다.
+function fmtDuration(ms, l = "en") {
+  if (!ms) return l === "ko" ? "꺼짐" : "off";
+  return ms >= 100 ? `${+(ms / 1000).toFixed(2)}s` : `${ms}ms`;
+}
+function parseDuration(raw) {
+  const m = String(raw).replace(/[,_\s]/g, "").match(/^(\d+(?:\.\d+)?)(ms|s)?$/i);
+  if (!m) return NaN;
+  return Math.round(Number(m[1]) * (m[2] && m[2].toLowerCase() === "s" ? 1000 : 1));
 }
 function parseTokens(raw) {
   const m = String(raw).replace(/[,_\s]/g, "").match(/^(\d+(?:\.\d+)?)([km])?$/i);
@@ -813,6 +864,7 @@ const COMMANDS = {
     { command: "provider", description: "View / switch this room's provider" },
     { command: "model", description: "View / switch this room's model" },
     { command: "autocompact", description: "View / set the auto-compact token threshold" },
+    { command: "mergewindow", description: "View / set how long to wait for a follow-up message" },
     { command: "reserve", description: "Schedule retry when usage limit resets · /reserve rm to cancel" },
     { command: "id", description: "Show this chat ID" },
     { command: "help", description: "Help" },
@@ -836,6 +888,7 @@ const COMMANDS = {
     { command: "provider", description: "이 방의 provider 보기·전환" },
     { command: "model", description: "이 방의 모델 보기·전환" },
     { command: "autocompact", description: "자동 압축 임계값 보기·설정" },
+    { command: "mergewindow", description: "다음 메시지를 기다리는 시간 보기·설정" },
     { command: "reserve", description: "한도 리셋 시 재시도 예약 · /reserve rm 으로 취소" },
     { command: "id", description: "이 채팅 ID 확인" },
     { command: "help", description: "도움말" },
@@ -2040,6 +2093,54 @@ async function handleAutoCompact(chatId, arg, l) {
   await send(chatId, t(l, "autoCompactSet", n));
 }
 
+// /mergewindow — 인자 없으면 현재값 + 프리셋 버튼, 있으면 설정. 버튼 콜백(mw:*)도 같은 경로를 탄다.
+// 손에 맞는 길이는 몇 번 바꿔봐야 나오는데(두 줄째를 치는 속도가 사람마다 다르다), config 에만 두면
+// 그때마다 재시작이라 결국 안 만지게 된다. 그래서 state 에 저장하고 버튼으로 바꾼다.
+const MERGE_WINDOW_PRESETS = ["0.5s", "1s", "2s", "3s", "5s"];
+// 너무 짧으면 있으나 마나고(두 줄째를 치기 전에 창이 닫힌다), 너무 길면 한 줄만 보낸 사람이 봇이
+// 죽은 줄 안다. 끄는 건 `off` 로 명시해야 한다 — 1ms 로 사실상 꺼두는 길은 열어두지 않는다.
+const MERGE_WINDOW_MIN = 100;
+const MERGE_WINDOW_MAX = 30000;
+async function handleMergeWindow(chatId, arg, l) {
+  if (!arg) {
+    const btn = (p) => ({ text: p, callback_data: `mw:${p}` });
+    await sendMenu(chatId, t(l, "mergeWindowStatus", mergeWindowMs(), MERGE_WINDOW_DEFAULT), {
+      inline_keyboard: [
+        MERGE_WINDOW_PRESETS.map(btn),
+        [
+          { text: t(l, "mergeWindowOffBtn"), callback_data: "mw:off" },
+          { text: t(l, "mergeWindowDefBtn"), callback_data: "mw:default" },
+        ],
+      ],
+    });
+    return;
+  }
+  if (arg === "default" || arg === "reset") {
+    state.mergeWindowMs = undefined;
+    saveState(state);
+    await send(chatId, t(l, "mergeWindowReset", MERGE_WINDOW_DEFAULT));
+    return;
+  }
+  if (arg === "off") {
+    state.mergeWindowMs = 0;
+    saveState(state);
+    await send(chatId, t(l, "mergeWindowOff"));
+    return;
+  }
+  const n = parseDuration(arg);
+  if (!Number.isFinite(n) || n < 0) {
+    await send(chatId, t(l, "mergeWindowUsage"));
+    return;
+  }
+  if (n < MERGE_WINDOW_MIN || n > MERGE_WINDOW_MAX) {
+    await send(chatId, t(l, "mergeWindowRange", n, MERGE_WINDOW_MIN, MERGE_WINDOW_MAX));
+    return;
+  }
+  state.mergeWindowMs = n;
+  saveState(state);
+  await send(chatId, t(l, "mergeWindowSet", n));
+}
+
 // 임계값 초과 시 압축할지 묻는다 — 버튼 콜백은 `cp:*`.
 async function askAutoCompact(chatId, ctxTokens, l) {
   await sendMenu(chatId, t(l, "autoCompactAsk", roundTokens(ctxTokens)), {
@@ -2093,7 +2194,7 @@ async function runCompact(chatId, l, okKey) {
   r.busy = true;
   r.typing = setInterval(
     () => tg("sendChatAction", { ...tgTarget(chatId), action: "typing" }).catch(() => {}),
-    5000,
+    TYPING_TICK_MS,
   );
   try {
     // 압축은 오래 걸린다 — 즉시 응답이 없으면 버튼이 안 먹은 것처럼 보인다.
@@ -2649,7 +2750,7 @@ async function runApprovedPlan(chatId, l) {
   const started = Date.now();
   r.typing = setInterval(
     () => tg("sendChatAction", { ...tgTarget(chatId), action: "typing" }).catch(() => {}),
-    5000,
+    TYPING_TICK_MS,
   );
   const syntheticMsg = { chat: { id: chatId }, text: PLAN_PROCEED_PROMPT };
   try {
@@ -2717,6 +2818,8 @@ async function handleCallback(cq) {
     await send(chatId, t(l, "planCancelled"));
   } else if (cq.data?.startsWith("ac:")) {
     await handleAutoCompact(chatId, cq.data.slice(3), l);
+  } else if (cq.data?.startsWith("mw:")) {
+    await handleMergeWindow(chatId, cq.data.slice(3), l);
   } else if (cq.data === "cp:yes") {
     await runCompact(chatId, l, "autoCompact");
   } else if (cq.data?.startsWith("cp:later:")) {
@@ -2869,6 +2972,10 @@ async function handle(msg) {
     await handleAutoCompact(chatId, text.slice(13).trim(), l);
     return;
   }
+  if (text === "/mergewindow" || text.startsWith("/mergewindow ")) {
+    await handleMergeWindow(chatId, text.slice(13).trim(), l);
+    return;
+  }
   if (text === "/cron" || text.startsWith("/cron ")) {
     await handleCron(chatId, text.slice(5).trim(), l);
     return;
@@ -2942,6 +3049,14 @@ async function handle(msg) {
     return;
   }
   if (text === "/stop" || text.startsWith("/stop ")) {
+    // 아직 시작 안 한 병합 창을 물고 있을 수 있다 — 안 치우면 "작업해줘" → /stop 직후에 그 작업이
+    // 그대로 시작된다. 아직 프로세스를 띄운 게 없으니 죽일 자식도, 되돌릴 세션도 없다.
+    if (!r.busy && cancelHold(chatId)) {
+      r.queue.length = 0;
+      clearHeld(chatId);
+      await send(chatId, t(l, "stopOk"));
+      return;
+    }
     if (!r.busy || !r.child) {
       // 봇 작업은 없어도 로컬 ctb 가 물고 있을 수 있다 — 종료 버튼을 같이 준다.
       const info = localLockInfo();
@@ -2955,6 +3070,7 @@ async function handle(msg) {
     const reset = text.includes("--reset");
     r.stopping = true;
     r.queue.length = 0; // 이 방의 대기 메시지도 취소 (다른 방은 그대로)
+    clearHeld(chatId);
     r.child.kill();
     if (reset && r.prevSession) {
       setSid(r.prevSession.chatId, r.prevSession.sessionId, r.prevSession.provider);
@@ -3016,7 +3132,8 @@ async function handle(msg) {
       if (!rateLimitUntil && !rateLimitTimer) { await send(chatId, t(l, "reserveNone")); return; }
       if (rateLimitTimer) { clearTimeout(rateLimitTimer); rateLimitTimer = null; }
       rateLimitUntil = null;
-      for (const rr of chatRuntime.values()) rr.queue.length = 0; // 모든 방의 예약 대기열 취소
+      // 모든 방의 예약 대기열 취소 — 열려 있는 병합 창과 그 디스크 사본까지 같이 걷어낸다
+      for (const [id, rr] of chatRuntime) { cancelHold(id); rr.queue.length = 0; clearHeld(id); }
       await send(chatId, t(l, "reserveRm"));
       return;
     }
@@ -3051,6 +3168,13 @@ async function handle(msg) {
     await send(chatId, t(l, "localBusy"), { replyMarkup: localKillMarkup(l) });
     return;
   }
+  // 여기까지 왔다는 건 지금 당장 실행될 프롬프트라는 뜻이다 — 명령어는 위에서 전부 처리돼 이미
+  // 돌아갔고(그래서 /status·/stop 은 창과 무관하게 즉시 응답한다), 바쁘거나 락이 걸린 경우도
+  // 각자의 안내를 받고 빠졌다. 그러니 여기서만 잠깐 붙잡으면 뒤따라올 말과 합칠 수 있다.
+  if (mergeWindowMs() > 0 && !msg._drained) {
+    holdForMore(chatId, msg);
+    return;
+  }
   r.busy = true;
   const started = Date.now();
   // 긴 작업 동안 타이핑 표시 유지
@@ -3059,7 +3183,7 @@ async function handle(msg) {
       tg("sendChatAction", { ...tgTarget(chatId), action: "typing" }).catch(
         () => {},
       ),
-    5000,
+    TYPING_TICK_MS,
   );
 
   try {
@@ -3163,9 +3287,12 @@ async function handle(msg) {
 
 // 한 방(chat)의 대기열 전체를 꺼내 하나로 합침. 여러 개면 번호+경과시간 붙여 병합.
 // 큐가 방별로 분리돼 있어 이 안의 메시지는 모두 같은 방·같은 세션 → 안전하게 병합 가능.
+// 여기서 나온 메시지는 handle() 로 되돌아가므로 `_drained` 를 찍어 둔다 — 표시가 없으면 병합 창에
+// 또 붙잡혀 영영 실행되지 않는다. 작업이 끝난 뒤 드레인되는 메시지도 이미 충분히 기다렸으니 마찬가지다.
 function drainQueue(chatId) {
   const group = rt(chatId).queue.splice(0);
-  if (group.length === 1) return group[0].msg;
+  clearHeld(chatId); // 큐를 비우는 유일한 자리 — 창이 남긴 디스크 사본도 여기서 같이 지운다
+  if (group.length === 1) return Object.assign(group[0].msg, { _drained: true });
   const groupChat = isGroupChat(group[0].msg.chat);
   const merged = group
     .map((item, i) => {
@@ -3189,7 +3316,83 @@ function drainQueue(chatId) {
     // 줄마다 발신자를 이미 표기했으니 buildMsgMeta의 단일 [From: ] 태그(마지막 발신자 기준)는 중복이라 생략
     _merged: groupChat || undefined,
     _mediaGroup: fileIds.length ? fileIds : undefined,
+    _drained: true,
   };
+}
+
+// ── 연속 메시지 합치기 ────────────────────────────────────────────────────
+// 첫 메시지가 왔다고 바로 provider 를 띄우지 않고 잠깐 창을 열어 둔다. 그 사이 더 오면 창을 다시 열고,
+// 조용해지면 drainQueue() 로 한 덩어리를 만들어 한 번만 실행한다. 붙잡아 두는 곳이 별도 버퍼가 아니라
+// 기존 방 대기열(r.queue)인 게 요점이다 — /stop·/restart·/reserve 가 이미 그 큐를 보고 있어서
+// "대기 중인 메시지"를 세는 자리가 하나로 유지된다.
+const holdTimers = new Map(); // 방 키 → { timer, firstAt }
+
+// 붙잡아 둔 메시지는 메모리에만 있어서 재시작·크래시에 통째로 사라진다. 대기열에 밀린 메시지와 달리
+// `⏳` 안내조차 나가지 않은 상태라 보낸 사람은 답을 기다리고 있고, 텔레그램 Bot API 에는 지난 메시지를
+// 되가져올 수단이 없다 — getUpdates 는 아직 안 가져간 업데이트만, 그것도 한 번만 준다. 여기서 흘리면
+// 복구할 방법 자체가 없다는 뜻이라, 창이 열려 있는 동안만 state 에 적어 두고 부팅 때 이어 실행한다.
+function saveHeld(chatId) {
+  const q = rt(chatId).queue;
+  if (!q.length) return clearHeld(chatId);
+  (state.held ??= {})[chatId] = q.map(({ msg, receivedAt }) => ({ msg, receivedAt }));
+  saveState(state);
+}
+function clearHeld(chatId) {
+  if (!state.held?.[chatId]) return;
+  delete state.held[chatId];
+  if (!Object.keys(state.held).length) state.held = undefined;
+  saveState(state);
+}
+// 죽기 전에 창이 물고 있던 메시지를 부팅 직후 이어서 실행한다. 창은 이미 충분히(재시작 시간만큼)
+// 기다렸으므로 다시 열지 않고 바로 드레인한다.
+function resumeHeld() {
+  const held = state.held;
+  if (!held) return;
+  state.held = undefined;
+  saveState(state);
+  for (const [chatId, items] of Object.entries(held)) {
+    if (!items?.length) continue;
+    console.log(`Resuming ${items.length} held message(s) for ${chatId}`);
+    rt(chatId).queue.push(...items);
+    setImmediate(() => handle(drainQueue(chatId)).catch((e) => console.error("Handle error:", e.message)));
+  }
+}
+
+function holdForMore(chatId, msg) {
+  const r = rt(chatId);
+  r.queue.push({ msg, receivedAt: Date.now() });
+  saveHeld(chatId);
+  const held = holdTimers.get(chatId);
+  if (held) clearTimeout(held.timer);
+  // 첫 메시지에만 타이핑 표시를 한 번 띄운다 — 창이 열린 동안의 침묵이 "봇이 죽었나"로 보이면 안 된다.
+  else tg("sendChatAction", { ...tgTarget(chatId), action: "typing" }).catch(() => {});
+  const firstAt = held?.firstAt ?? Date.now();
+  // 말이 계속 이어지면 창이 무한정 밀린다 — 여럿이 떠드는 그룹에서 특히. 첫 메시지 기준 상한을 둔다.
+  const win = mergeWindowMs();
+  const wait = Math.max(0, Math.min(win, firstAt + win * MERGE_HOLD_RATIO - Date.now()));
+  const timer = setTimeout(() => {
+    holdTimers.delete(chatId);
+    if (!r.queue.length) return; // /stop 등이 이미 치웠다
+    // 리밋 해제 때 예약 큐가 통째로 드레인되므로 큐는 그대로 둔다. 다만 창에 붙잡힌 메시지는 대기
+    // 안내를 한 번도 못 받았다 — 여기서 알리지 않으면 보낸 사람 눈에는 그냥 무시당한 걸로 보인다.
+    if (roomRateLimited(chatId)) {
+      const l = langOf(msg);
+      const timeStr = rateLimitUntil.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
+      send(chatId, t(l, "rateLimitQueued", r.queue.length, timeStr)).catch(() => {});
+      return;
+    }
+    handle(drainQueue(chatId)).catch((e) => console.error("Handle error:", e.message));
+  }, wait);
+  holdTimers.set(chatId, { timer, firstAt });
+}
+
+// /stop 이나 재시작이 대기 중인 창을 취소할 때. 취소했으면 true.
+function cancelHold(chatId) {
+  const held = holdTimers.get(chatId);
+  if (!held) return false;
+  clearTimeout(held.timer);
+  holdTimers.delete(chatId);
+  return true;
 }
 
 // 미디어 그룹(여러 장 동시 전송) — 1초 대기 후 일괄 처리
@@ -3257,6 +3460,9 @@ async function main() {
     const me = await tg("getMe");
     if (me.ok && me.result?.username) botUsername = me.result.username;
   } catch {}
+  // 죽기 전에 병합 창이 물고 있던 메시지가 있으면 지금 이어서 실행. botUsername 이 채워진 뒤라야
+  // 그룹에서 온 `/cmd@BotName` 이 제대로 벗겨진다.
+  resumeHeld();
 
   // 텔레그램 명령어 자동완성(/ 입력 시 뜨는 메뉴) 등록. 직접 파싱과 별개로 한 번 알려줘야 함.
   // 기본 목록(BOT_LANG) + 한국어 변형(language_code: ko) → ko 클라이언트는 한국어, 그 외 기본.
