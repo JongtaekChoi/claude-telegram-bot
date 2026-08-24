@@ -178,8 +178,8 @@ const STR = {
       "• /reserve — show retry queue status at usage-limit reset · /reserve rm to cancel\n" +
       "• /restart — restart the bot (after a syntax check)\n" +
       "• /status — bot status & version\n" +
-      "• /provider — view / switch the default provider\n" +
-      "• /model — view / switch the model\n" +
+      "• /provider — view / switch this room's provider\n" +
+      "• /model — view / switch this room's model\n" +
       "• /autocompact — view / set the auto-compact token threshold\n" +
       "• /id — show this chat ID\n" +
       `\nWorking dir: ${cfg.projectDir}\nPermission mode: ${cfg.permissionMode}`,
@@ -285,12 +285,12 @@ const STR = {
       `⚠️ Set to ${m}, but it isn't in this Codex CLI's model list — runs may fail.\n` +
       `Listed: ${models.join(" · ")}\nRevert with /model default.`,
     modelDefBtn: "Default",
-    modelSet: (provider, m) => `🧠 ${provider} model set to: ${m}`,
-    modelReset: (provider, def) => `🧠 ${provider} model reset to default (${def}).`,
+    modelSet: (provider, m) => `🧠 This room's ${provider} model is now: ${m}`,
+    modelReset: (provider, def) => `🧠 This room's ${provider} model reset to default (${def}).`,
     providerStatus: (cur, def) => `🤖 Provider: ${cur}${cur === def ? " (config default)" : ` (config default: ${def})`}`,
     providerDefBtn: "Config default",
-    providerSet: (provider) => `🤖 Default provider set to ${provider}. Existing Claude and Codex sessions are preserved separately.`,
-    providerReset: (provider) => `🤖 Provider reset to the config default (${provider}).`,
+    providerSet: (provider) => `🤖 This room now uses ${provider}. Existing Claude and Codex sessions are preserved separately.`,
+    providerReset: (provider) => `🤖 This room returned to the config default (${provider}).`,
     providerUsage: "Usage: /provider claude · /provider codex · /provider default",
     autoCompactStatus: (cur, def) =>
       `🗜️ Auto-compact threshold: ${fmtTokens(cur)}${cur === def ? " (default)" : ""}\n` +
@@ -363,8 +363,8 @@ const STR = {
       "• /reserve — 한도 리셋 시 대기열 상태 확인 · /reserve rm 으로 취소\n" +
       "• /restart — 봇 재시작 (문법 검사 후 안전하게)\n" +
       "• /status — 봇 상태·버전 보기\n" +
-      "• /provider — 기본 provider 보기·전환\n" +
-      "• /model — 모델 보기·전환\n" +
+      "• /provider — 이 방의 provider 보기·전환\n" +
+      "• /model — 이 방의 모델 보기·전환\n" +
       "• /autocompact — 자동 압축 임계값 보기·설정\n" +
       "• /id — 이 채팅 ID 확인\n" +
       `\n작업 폴더: ${cfg.projectDir}\n권한 모드: ${cfg.permissionMode}`,
@@ -445,12 +445,12 @@ const STR = {
       `⚠️ ${m}(으)로 설정했지만 현재 Codex CLI의 목록에 없습니다 — 실행 중 오류가 날 수 있습니다.\n` +
       `목록: ${models.join(" · ")}\n되돌리기: /model default`,
     modelDefBtn: "기본값",
-    modelSet: (provider, m) => `🧠 ${provider} 모델을 ${m}(으)로 설정했습니다.`,
-    modelReset: (provider, def) => `🧠 ${provider} 모델을 기본값(${def})으로 되돌렸습니다.`,
+    modelSet: (provider, m) => `🧠 이 방의 ${provider} 모델을 ${m}(으)로 설정했습니다.`,
+    modelReset: (provider, def) => `🧠 이 방의 ${provider} 모델을 기본값(${def})으로 되돌렸습니다.`,
     providerStatus: (cur, def) => `🤖 현재 provider: ${cur}${cur === def ? " (config 기본값)" : ` (config 기본값: ${def})`}`,
     providerDefBtn: "config 기본값",
-    providerSet: (provider) => `🤖 기본 provider를 ${provider}(으)로 변경했습니다. Claude와 Codex의 기존 세션은 각각 유지됩니다.`,
-    providerReset: (provider) => `🤖 provider를 config 기본값(${provider})으로 되돌렸습니다.`,
+    providerSet: (provider) => `🤖 이 방의 provider를 ${provider}(으)로 변경했습니다. Claude와 Codex의 기존 세션은 각각 유지됩니다.`,
+    providerReset: (provider) => `🤖 이 방의 provider를 config 기본값(${provider})으로 되돌렸습니다.`,
     providerUsage: "사용법: /provider claude · /provider codex · /provider default",
     autoCompactStatus: (cur, def) =>
       `🗜️ 자동 압축 임계값: ${fmtTokens(cur, "ko")}${cur === def ? " (기본값)" : ""}\n` +
@@ -786,8 +786,8 @@ const COMMANDS = {
     { command: "cron", description: "List / add / remove scheduled tasks" },
     { command: "restart", description: "Restart the bot (after syntax check)" },
     { command: "status", description: "Bot status / version" },
-    { command: "provider", description: "View / switch the default provider" },
-    { command: "model", description: "View / switch the model" },
+    { command: "provider", description: "View / switch this room's provider" },
+    { command: "model", description: "View / switch this room's model" },
     { command: "autocompact", description: "View / set the auto-compact token threshold" },
     { command: "reserve", description: "Schedule retry when usage limit resets · /reserve rm to cancel" },
     { command: "id", description: "Show this chat ID" },
@@ -809,8 +809,8 @@ const COMMANDS = {
     { command: "cron", description: "예약 작업 보기·추가·삭제" },
     { command: "restart", description: "봇 재시작 (문법 검사 후)" },
     { command: "status", description: "봇 상태·버전 보기" },
-    { command: "provider", description: "기본 provider 보기·전환" },
-    { command: "model", description: "모델 보기·전환" },
+    { command: "provider", description: "이 방의 provider 보기·전환" },
+    { command: "model", description: "이 방의 모델 보기·전환" },
     { command: "autocompact", description: "자동 압축 임계값 보기·설정" },
     { command: "reserve", description: "한도 리셋 시 재시도 예약 · /reserve rm 으로 취소" },
     { command: "id", description: "이 채팅 ID 확인" },
@@ -988,16 +988,18 @@ if (state.provider && !["claude", "codex"].includes(state.provider)) {
   console.warn(`Ignoring invalid provider override in state: ${state.provider}`);
   state.provider = undefined;
 }
-const currentProvider = () => state.provider || DEFAULT_PROVIDER;
+function currentProvider(chatId) {
+  return (chatId !== undefined ? chatBucket(chatId).provider : undefined) || DEFAULT_PROVIDER;
+}
 
 // 그룹 승격으로 물려받은 채팅 ID (adoptMigratedChat 참고). config.json 은 봇이 고칠 수 없으니
 // state 에 남겨서 재시작 후에도 화이트리스트가 유지되게 한다.
 for (const id of state.adoptedChatIds || []) if (!allowedIds.includes(id)) allowedIds.push(id);
 
 // ── 방(chatId)별 세션 ─────────────────────────────────────────────────────
-// 같은 봇이 여러 방(DM·그룹)을 담당할 때 방마다 대화 맥락을 분리한다. Claude와 Codex 세션은
-// 서로 호환되지 않으므로 방마다 sessionId(Claude)와 codexSessionId(Codex)를 따로 저장한다.
-// provider·model·ollamaMode 같은 봇 단위 설정은 기존대로 state 최상위에 둔다(세션만 방별로 분리).
+// 같은 봇이 여러 방(DM·그룹)을 담당할 때 방마다 대화 맥락과 provider/model override 를 분리한다.
+// Claude와 Codex 세션은 서로 호환되지 않으므로 방마다 sessionId와 codexSessionId를 따로 저장한다.
+// ollamaMode·자동 compact 같은 운영 설정만 state 최상위에 둔다.
 //
 // 포럼(주제) 그룹에서는 토픽 하나가 곧 방이다 — 방 키를 "chatId:threadId" 로 확장해 토픽마다
 // 세션·대기열을 따로 둔다. 토픽이 아닌 방(DM·일반 그룹·General 토픽)의 키는 예전 그대로 "chatId"
@@ -1022,11 +1024,11 @@ function chatBucket(chatId) {
   if (!state.sessions[k]) state.sessions[k] = {};
   return state.sessions[k];
 }
-const sidKey = (provider = currentProvider()) => (provider === "codex" ? "codexSessionId" : "sessionId");
-function getSid(chatId, provider = currentProvider()) {
+const sidKey = (provider = DEFAULT_PROVIDER) => (provider === "codex" ? "codexSessionId" : "sessionId");
+function getSid(chatId, provider = currentProvider(chatId)) {
   return chatBucket(chatId)[sidKey(provider)];
 }
-function setSid(chatId, id, provider = currentProvider()) {
+function setSid(chatId, id, provider = currentProvider(chatId)) {
   chatBucket(chatId)[sidKey(provider)] = id;
 }
 
@@ -1043,6 +1045,27 @@ if (!state.sessions && (state.sessionId || state.codexSessionId)) {
     delete state.codexSessionId;
     saveState(state);
   }
+}
+
+// 0.4.13 이하의 provider/model override 는 봇 전체 공용이었다. 기존에 알려진 각 방으로
+// 복사한 뒤 최상위 키를 지워, 업그레이드 직후에는 동작이 그대로이면서 이후 변경은 방별로 갈린다.
+if (state.provider || state.model || state.codexModel) {
+  if (!state.sessions) state.sessions = {};
+  for (const id of allowedIds) if (!state.sessions[id]) state.sessions[id] = {};
+  for (const bucket of Object.values(state.sessions || {})) {
+    if (state.provider && !bucket.provider) bucket.provider = state.provider;
+    if (state.model && !bucket.model) bucket.model = state.model;
+    if (state.codexModel && !bucket.codexModel) bucket.codexModel = state.codexModel;
+  }
+  delete state.provider;
+  delete state.model;
+  delete state.codexModel;
+  saveState(state);
+}
+
+function currentModel(chatId, provider = currentProvider(chatId)) {
+  const key = provider === "codex" ? "codexModel" : "model";
+  return chatId !== undefined ? chatBucket(chatId)[key] : undefined;
 }
 
 // ── 텔레그램 헬퍼 ─────────────────────────────────────────────────────────
@@ -1403,7 +1426,7 @@ function runClaude(prompt, sessionId, opts = {}) {
       "--output-format", "json",
       "--permission-mode", opts.permissionMode || cfg.permissionMode || "acceptEdits",
     ];
-    const model = state.model || cfg.model; // /model 로 바꾸면 state.model 우선
+    const model = currentModel(opts.chatId, "claude") || cfg.model;
     const brevity =
       cfg.appendSystemPrompt ??
       "This reply is delivered over Telegram. Be concise — short paragraphs and lists, no filler intro/summary, avoid large tables. Reply in the user's language.";
@@ -1509,7 +1532,7 @@ function runCodex(prompt, lang = "en", opts = {}) {
   return new Promise((resolve) => {
     const header = opts.noHeader ? "" : (lang === "ko" ? "🤖 Codex 폴백\n\n" : "🤖 Codex fallback\n\n");
     const lastPath = join(BOT_DIR, `codex-last-message-${process.pid}.txt`);
-    const model = state.codexModel || cfg.codexModel;
+    const model = currentModel(opts.chatId, "codex") || cfg.codexModel;
     const timeoutMs = cfg.codexTimeout || 600_000;
     const args = ["exec"];
     const resumeSessionId = opts.sessionId; // 세션은 방별로 관리 — 호출부가 명시적으로 넘긴다
@@ -1579,7 +1602,7 @@ function runCodex(prompt, lang = "en", opts = {}) {
 }
 
 function runPrimary(prompt, opts = {}) {
-  if (currentProvider() === "codex") {
+  if (currentProvider(opts.chatId) === "codex") {
     return runCodex(prompt, opts.lang || BOT_LANG, {
       noHeader: true,
       trackChild: opts.trackChild,
@@ -1985,7 +2008,7 @@ const roundTokens = (n) => Math.max(Math.round(n / 1000), 1) * 1000;
 // 여기를 직접 부르고, 버튼·명령은 아래 runCompact() 를 거친다.
 async function doCompact(chatId, l, okKey) {
   try {
-    const cr = await runClaude("/compact", getSid(chatId, "claude"));
+    const cr = await runClaude("/compact", getSid(chatId, "claude"), { chatId });
     if (cr.sessionId) setSid(chatId, cr.sessionId, "claude");
     // 압축해도 임계값 아래로 안 내려갈 수 있다. 그때 snooze 를 지워버리면 바로 다음 턴에 또 물어서
     // 무한 반복이 되므로, 압축 직후 컨텍스트를 기준으로 다시 걸어둔다.
@@ -2001,7 +2024,7 @@ async function doCompact(chatId, l, okKey) {
 // 버튼(`cp:yes`)과 /compact 에서 부르는 압축 — busy 락·타이핑 표시를 handle() 과 같은 패턴으로 처리.
 // 락 없이 돌리면 압축이 도는 2분 사이에 들어온 메시지가 같은 세션에 동시 투입돼 답이 통째로 사라진다.
 async function runCompact(chatId, l, okKey) {
-  if (currentProvider() !== "claude") { await send(chatId, t(l, "compactProviderUnsupported")); return; }
+  if (currentProvider(chatId) !== "claude") { await send(chatId, t(l, "compactProviderUnsupported")); return; }
   if (!getSid(chatId, "claude")) { await send(chatId, t(l, "compactNoSession")); return; }
   const r = rt(chatId);
   if (r.busy) {
@@ -2026,7 +2049,7 @@ async function runCompact(chatId, l, okKey) {
     clearInterval(r.typing);
     r.typing = null;
     r.busy = false;
-    if (r.queue.length > 0 && !rateLimitUntil) setImmediate(() => handle(drainQueue(chatId)));
+    if (r.queue.length > 0 && !roomRateLimited(chatId)) setImmediate(() => handle(drainQueue(chatId)));
   }
 }
 
@@ -2040,7 +2063,7 @@ async function handleProvider(chatId, arg, l) {
     return;
   }
   if (!arg) {
-    const cur = currentProvider();
+    const cur = currentProvider(chatId);
     await sendMenu(chatId, t(l, "providerStatus", cur, DEFAULT_PROVIDER), {
       inline_keyboard: [[
         ...PROVIDERS.map((p) => ({ text: p === cur ? `✅ ${p}` : p, callback_data: `pv:${p}` })),
@@ -2049,34 +2072,35 @@ async function handleProvider(chatId, arg, l) {
     });
     return;
   }
-  const previousProvider = currentProvider();
+  const previousProvider = currentProvider(chatId);
+  const bucket = chatBucket(chatId);
   if (arg === "default" || arg === "reset") {
-    state.provider = undefined;
+    bucket.provider = undefined;
     saveState(state);
     await send(chatId, t(l, "providerReset", DEFAULT_PROVIDER));
-    resumeQueueAfterProviderSwitch(previousProvider);
+    resumeQueueAfterProviderSwitch(chatId, previousProvider);
     return;
   }
   if (!PROVIDERS.includes(arg)) {
     await send(chatId, t(l, "providerUsage"));
     return;
   }
-  state.provider = arg;
+  bucket.provider = arg;
   state.ollamaMode = false;
   saveState(state);
   await send(chatId, t(l, "providerSet", arg));
-  resumeQueueAfterProviderSwitch(previousProvider);
+  resumeQueueAfterProviderSwitch(chatId, previousProvider);
 }
 
 // 모델 확인·전환 — /model 과 버튼(`md:*`)이 모두 여기로 온다.
 // Claude 는 별칭 버튼을 주고, Codex 는 CLI의 계정별 모델 캐시를 버튼으로 보여준다.
 // 버튼에 표시 시점의 provider 를 실어 보낸다 — 누르기 전에 /provider 로 바꿔도 엉뚱한 쪽에 저장되지 않게.
-async function handleModel(chatId, arg, l, provider = currentProvider()) {
+async function handleModel(chatId, arg, l, provider = currentProvider(chatId)) {
   const modelStateKey = provider === "codex" ? "codexModel" : "model";
   const configuredModel = provider === "codex" ? cfg.codexModel : cfg.model;
   const codexModels = provider === "codex" ? codexModelSuggestions() : [];
   if (!arg) {
-    const cur = state[modelStateKey] || configuredModel || (l === "ko" ? "(기본값)" : "(default)");
+    const cur = chatBucket(chatId)[modelStateKey] || configuredModel || (l === "ko" ? "(기본값)" : "(default)");
     const btn = (text, v) => ({ text, callback_data: `md:${provider}:${v}` });
     const defRow = [btn(t(l, "modelDefBtn"), "default")];
     const codexRows = [];
@@ -2095,12 +2119,12 @@ async function handleModel(chatId, arg, l, provider = currentProvider()) {
     return;
   }
   if (arg === "default" || arg === "reset") {
-    state[modelStateKey] = undefined;
+    chatBucket(chatId)[modelStateKey] = undefined;
     saveState(state);
     await send(chatId, t(l, "modelReset", provider, configuredModel || (l === "ko" ? "기본값" : "default")));
     return;
   }
-  state[modelStateKey] = arg;
+  chatBucket(chatId)[modelStateKey] = arg;
   saveState(state);
   // 목록에 없어도 막지는 않는다 — 캐시는 Codex CLI 가 갱신하는 파일이라, 새로 나온 모델을 아직
   // 못 받았을 수 있다. 여기서 차단하면 정당한 모델을 텔레그램에서 영영 못 고른다. 경고만 남긴다.
@@ -2115,7 +2139,7 @@ async function handleModel(chatId, arg, l, provider = currentProvider()) {
 // 목록은 항상 현재 provider 기준이다. Claude 세션과 Codex 세션은 서로 호환되지 않아서
 // 섞어 보여주면 고르는 순간 사고다. 다른 방이 쓰고 있는 세션은 자물쇠를 달고 막는다 —
 // 한 기록 파일에 두 프로세스가 붙으면 양쪽 맥락이 서로를 덮어쓴다.
-async function handleSessions(chatId, arg, l, provider = currentProvider(), msgId) {
+async function handleSessions(chatId, arg, l, provider = currentProvider(chatId), msgId) {
   if (rt(chatId).busy) {
     await send(chatId, t(l, "busy"));
     return;
@@ -2452,7 +2476,7 @@ const PLAN_PROCEED_PROMPT = "Proceed with the plan you just approved above. Impl
 let rateLimitUntil = null;  // 레이트 리밋 활성 시 리셋 Date — 이 시간까지 메시지를 큐에 쌓음
 let rateLimitTimer = null;  // 리셋 시간에 큐를 드레인하는 타이머
 
-// 모든 방의 대기열을 각자 드레인 (레이트리밋 해제·provider 전환 시). 방마다 독립 실행됨.
+// 모든 방의 대기열을 각자 드레인 (레이트리밋 해제 시). 방마다 독립 실행됨.
 function drainAllQueues() {
   for (const [id, r] of chatRuntime) if (r.queue.length > 0) setImmediate(() => handle(drainQueue(id)));
 }
@@ -2473,14 +2497,16 @@ function totalQueued() {
   return n;
 }
 
-// 한도에 걸린 provider에서 다른 provider로 전환하면 예약을 기다릴 이유가 없다.
-// 기존 실패 메시지를 포함한 대기열을 새 provider로 즉시 이어서 처리한다.
-function resumeQueueAfterProviderSwitch(previousProvider) {
-  if (previousProvider === currentProvider() || (!rateLimitUntil && !rateLimitTimer)) return;
-  if (rateLimitTimer) clearTimeout(rateLimitTimer);
-  rateLimitTimer = null;
-  rateLimitUntil = null;
-  drainAllQueues();
+// 한도에 걸린 방만 다른 provider로 전환하면 그 방은 예약을 기다릴 이유가 없다.
+// 다른 Claude 방의 한도 타이머는 유지하고, 전환한 방의 대기열만 Codex로 즉시 이어서 처리한다.
+function roomRateLimited(chatId) {
+  return currentProvider(chatId) === "claude" && rateLimitUntil && Date.now() < rateLimitUntil;
+}
+
+function resumeQueueAfterProviderSwitch(chatId, previousProvider) {
+  if (previousProvider === currentProvider(chatId)) return;
+  const r = rt(chatId);
+  if (r.queue.length > 0 && !roomRateLimited(chatId)) setImmediate(() => handle(drainQueue(chatId)));
 }
 
 // runClaude 결과를 답장으로 변환 — 폴백/큐잉/자동 컴팩션 처리. handle()과 /plan 승인 실행이 공유.
@@ -2489,7 +2515,7 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
   const secs = Math.round((Date.now() - started) / 1000);
   if (!res.ok) {
     // Codex 폴백: 레이트리밋·크레딧 에러이고 codexFallback 켜져 있으면 reserve 전에 Codex로 재시도
-    if (currentProvider() === "claude" && cfg.codexFallback && res.canFallback && !r.stopping) {
+    if (currentProvider(chatId) === "claude" && cfg.codexFallback && res.canFallback && !r.stopping) {
       try {
         const cRes = await runCodex(prompt, l, { trackChild: r, sessionId: getSid(chatId, "codex"), chatId });
         if (cRes.ok) {
@@ -2506,7 +2532,7 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
       try {
         const oRes = await runOllama(prompt, l, {
           fallback: true,
-          sessionId: currentProvider() === "claude" ? getSid(chatId, "claude") : undefined,
+          sessionId: currentProvider(chatId) === "claude" ? getSid(chatId, "claude") : undefined,
           chatId,
         });
         if (oRes.ok) {
@@ -2538,7 +2564,7 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
     // 맥락이 갑자기 요약본으로 바뀌어 흐름이 끊기므로, 기본은 확인을 받는 쪽이다.
     // config 의 autoCompactConfirm:false 로 예전처럼 묻지 않고 바로 압축하게 할 수 있다.
     const compactThreshold = state.autoCompactThreshold ?? cfg.autoCompactThreshold ?? 100000;
-    if (currentProvider() === "claude" && compactThreshold > 0 && res.ctxTokens > compactThreshold && getSid(chatId, "claude") && !r.stopping) {
+    if (currentProvider(chatId) === "claude" && compactThreshold > 0 && res.ctxTokens > compactThreshold && getSid(chatId, "claude") && !r.stopping) {
       if (cfg.autoCompactConfirm === false) await doCompact(chatId, l, "autoCompact");
       else if (res.ctxTokens > (state.autoCompactSnooze || 0)) await askAutoCompact(chatId, res.ctxTokens, l);
     }
@@ -2587,7 +2613,7 @@ async function runApprovedPlan(chatId, l) {
     r.typing = null;
     r.stopping = false;
     r.busy = false;
-    if (r.queue.length > 0 && !rateLimitUntil) setImmediate(() => handle(drainQueue(chatId)));
+    if (r.queue.length > 0 && !roomRateLimited(chatId)) setImmediate(() => handle(drainQueue(chatId)));
   }
 }
 
@@ -2715,7 +2741,7 @@ async function handle(msg) {
   const r = rt(chatId); // 이 방의 실행 상태 (busy·child·typing·queue…)
 
   // 레이트리밋 활성 중: 일반 메시지는 큐에 추가, 명령어는 통과
-  if (rateLimitUntil && Date.now() < rateLimitUntil && !text.startsWith("/")) {
+  if (roomRateLimited(chatId) && !text.startsWith("/")) {
     r.queue.push({ msg, receivedAt: Date.now() });
     const timeStr = rateLimitUntil.toLocaleTimeString(l === "ko" ? "ko-KR" : "en-US", { hour: "2-digit", minute: "2-digit" });
     await send(chatId, t(l, "rateLimitQueued", r.queue.length, timeStr));
@@ -2742,12 +2768,12 @@ async function handle(msg) {
       chatId,
       t(l, "status", {
         version: versionStr,
-        provider: currentProvider(),
+        provider: currentProvider(chatId),
         cliVersions,
         name: cfg.name || "claude-telegram-bot",
-        model: (currentProvider() === "codex" ? state.codexModel || cfg.codexModel : state.model || cfg.model)
+        model: currentModel(chatId) || (currentProvider(chatId) === "codex" ? cfg.codexModel : cfg.model)
           || (l === "ko" ? "(기본값)" : "(default)"),
-        fallback: currentProvider() === "codex"
+        fallback: currentProvider(chatId) === "codex"
           ? (cfg.ollamaFallback ? "Ollama" : (l === "ko" ? "꺼짐" : "off"))
           : cfg.codexFallback
             ? `Codex${getSid(chatId, "codex") ? (l === "ko" ? " (세션 있음)" : " (session active)") : ""}`
@@ -2984,7 +3010,7 @@ async function handle(msg) {
     // /plan <요청> — permission-mode를 강제로 plan으로 실행해 편집 없이 계획만 받고,
     // 승인 버튼을 눌러야 실제 permissionMode로 이어서 실행 (runApprovedPlan).
     if (text === "/plan" || text.startsWith("/plan ")) {
-      if (currentProvider() !== "claude") { await send(chatId, t(l, "planProviderUnsupported")); return; }
+      if (currentProvider(chatId) !== "claude") { await send(chatId, t(l, "planProviderUnsupported")); return; }
       const planReq = text.slice(5).trim();
       if (!planReq) { await send(chatId, t(l, "planUsage")); return; }
       r.prevSession = { chatId: String(chatId), provider: "claude", sessionId: getSid(chatId, "claude") };
@@ -3044,7 +3070,7 @@ async function handle(msg) {
       }
       return;
     }
-    r.prevSession = { chatId: String(chatId), provider: currentProvider(), sessionId: getSid(chatId) }; // /stop --reset 복원 대상 저장
+    r.prevSession = { chatId: String(chatId), provider: currentProvider(chatId), sessionId: getSid(chatId) }; // /stop --reset 복원 대상 저장
     const res = await runPrimary(prompt, {
       sessionId: getSid(chatId),
       lang: l,
@@ -3065,7 +3091,7 @@ async function handle(msg) {
     r.typing = null;
     r.stopping = false;
     r.busy = false;
-    if (r.queue.length > 0 && !rateLimitUntil) setImmediate(() => handle(drainQueue(chatId)));
+    if (r.queue.length > 0 && !roomRateLimited(chatId)) setImmediate(() => handle(drainQueue(chatId)));
   }
 }
 

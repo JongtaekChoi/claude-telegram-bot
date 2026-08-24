@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.13] - Unreleased
+### Changed
+- **provider와 모델을 방별로 분리.** `/provider`와 `/model` override를
+  `state.sessions[roomKey]`에 저장해 DM·그룹·포럼 토픽이 서로 다른 Claude/Codex와 모델을 쓸 수 있다.
+  기존 전역 override는 알려진 방들로 자동 이관하고, `/provider default`·`/model default`는 현재 방만
+  config 기본값으로 돌린다. `ctb --chat`도 선택한 방의 provider와 모델을 따른다. Claude 한도 대기
+  중이어도 Codex 방은 해당 전역 대기열에 묶이지 않는다.
+
 ## [0.4.12] - 2026-08-21
 ### Added
 - **포럼 주제(토픽)마다 방 하나 — `/newchat`.** 텔레그램 봇 API 로는 그룹을 만들 수 없다

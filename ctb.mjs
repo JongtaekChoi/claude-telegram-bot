@@ -135,13 +135,15 @@ async function main() {
   const statePath = join(botDir, stateFile);
   const lockPath = join(botDir, "local.lock");
 
-  // 봇이 텔레그램에서 /provider 로 전환했을 수 있으니 state.json 의 provider 를
-  // cfg.provider 보다 우선한다 (bot.mjs의 currentProvider()와 동일한 우선순위).
-  let stateProvider;
-  try {
-    const p = JSON.parse(readFileSync(statePath, "utf8")).provider;
-    if (["claude", "codex"].includes(p)) stateProvider = p;
-  } catch {}
+  const primaryChatId = chatOverride
+    ? String(chatOverride)
+    : [].concat(cfg.allowedChatId).filter(Boolean).map(String)[0];
+  let st = {};
+  try { st = JSON.parse(readFileSync(statePath, "utf8")); } catch {}
+  const room = primaryChatId ? st.sessions?.[primaryChatId] : undefined;
+  // Telegram 의 /provider·/model override 는 방별이다. --chat 이 고른 방의 설정을 그대로 따른다.
+  // 최상위 키는 0.4.13 이하 state 파일을 bot이 아직 마이그레이션하지 않은 경우의 호환 폴백이다.
+  const stateProvider = room?.provider || st.provider;
   const provider = providerOverride || stateProvider || cfg.provider || "claude";
   if (!["claude", "codex"].includes(provider)) {
     throw new Error(`Unsupported provider: ${provider} (expected claude or codex)`);
@@ -164,14 +166,7 @@ async function main() {
   // 쓴다 — bot.mjs의 구버전 마이그레이션이 primary 로 고르는 방과 같은 규칙이다.
   // 최상위 키 폴백은 0.4.3 이전 state.json 을 위한 것.
   const sessionKey = provider === "codex" ? "codexSessionId" : "sessionId";
-  const primaryChatId = chatOverride
-    ? String(chatOverride)
-    : [].concat(cfg.allowedChatId).filter(Boolean).map(String)[0];
-  let sessionId;
-  try {
-    const st = JSON.parse(readFileSync(statePath, "utf8"));
-    sessionId = (primaryChatId && st.sessions?.[primaryChatId]?.[sessionKey]) || st[sessionKey];
-  } catch {}
+  const sessionId = room?.[sessionKey] || st[sessionKey];
 
   if (sessionId) {
     // 어느 방의 세션인지 같이 찍는다 — 방마다 세션이 갈리는데 화면에는 세션 ID 만 떠서,
@@ -210,9 +205,14 @@ async function main() {
     if (appendSys) sysArgs.push("--append-system-prompt", appendSys);
   }
   // forwardedArgs 는 항상 맨 끝 — `-p <프롬프트>` 로 끝나는 호출에서 순서가 깨지면 안 된다.
+  const hasModelArg = forwardedArgs.some((a) => a === "--model" || a.startsWith("--model="));
+  const roomModel = provider === "codex"
+    ? (room?.codexModel || st.codexModel || cfg.codexModel)
+    : (room?.model || st.model || cfg.model);
+  const modelArgs = roomModel && !hasModelArg ? ["--model", roomModel] : [];
   const finalArgs = provider === "codex"
-    ? (sessionId ? ["resume", sessionId, ...forwardedArgs] : forwardedArgs)
-    : [...(sessionId ? ["--resume", sessionId] : []), ...sysArgs, ...forwardedArgs];
+    ? (sessionId ? ["resume", ...modelArgs, sessionId, ...forwardedArgs] : [...modelArgs, ...forwardedArgs])
+    : [...(sessionId ? ["--resume", sessionId] : []), ...modelArgs, ...sysArgs, ...forwardedArgs];
   // CTB_CHAT_ID: 여기서 띄운 백그라운드 작업(.ctb-jobs)이 끝났을 때 봇이 어느 방으로 알릴지.
   // 텔레그램 경로(bot.mjs 의 jobEnv)와 같은 값을 넣어 두 입구가 똑같이 동작하게 한다.
   const child = spawn(bin, finalArgs, {

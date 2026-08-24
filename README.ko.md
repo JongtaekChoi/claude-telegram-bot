@@ -231,9 +231,9 @@ CLI를 업데이트한 뒤에는 무인 실행에 맡기기 전에 `/testfallbac
 | `ctbNotify` | (선택) 로컬 `ctb` 세션이 끝날 때 이어받았던 방으로 인수인계 메시지를 보낼지 여부 (기본값: `true`). `false`면 보내지 않음 |
 | `ctbNotifyTimeout` | (선택) 인수인계 답변을 기다리는 시간(ms, 기본값: `180000`). 세션이 크면 이어받는 데 오래 걸립니다 — `ctb` 가 시간 초과로 실패했다고 찍으면 이 값을 올리세요 |
 
-같은 config로 로컬 대화형 세션도 실행할 수 있습니다. `ctb mybot.json`은 봇과 같은 provider를
-따릅니다 — `/provider` override가 state에 있으면 그 값을, 없으면 `config.provider`를 씁니다.
-명시적인 옵션은 해당 실행에서만 둘 다 덮어씁니다.
+같은 config로 로컬 대화형 세션도 실행할 수 있습니다. `ctb mybot.json`은 `--chat`으로 고른 방
+(없으면 첫 `allowedChatId`)의 provider·model override를 따르고, 없으면 config 기본값을 씁니다.
+명시적인 provider 옵션은 해당 실행에서만 방 설정보다 우선합니다.
 
 ```sh
 ctb mybot.json --provider claude
@@ -258,9 +258,10 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 `/plan` 승인 흐름은 현재
 `provider: "claude"`에서만 지원하며, 일반 메시지·첨부 파일·예약 작업은 둘 다 지원합니다.
 
-`/provider`는 override를 state에 저장하므로 재시작 후에도 유지되지만 config 파일은 수정하지
-않습니다. 로컬 `ctb`도 같은 override를 읽으므로 봇과 터미널이 같은 provider를 씁니다. 우선순위는
-`--provider` 옵션 → state override → `config.provider` → `claude` 입니다.
+`/provider`와 `/model`은 현재 방의 state에 override를 저장하므로 재시작 후에도 유지되지만 config
+파일은 수정하지 않습니다. 다른 DM·그룹·토픽의 설정에는 영향을 주지 않습니다. 로컬 `ctb`도 선택한
+방의 override를 읽으며, provider 우선순위는 `--provider` 옵션 → 방 override → `config.provider` →
+`claude` 입니다.
 
 `state`와 첨부 파일은 config 파일 옆 **`.claude-bot/` 숨김 폴더**에 저장됩니다(프로젝트 격리). 구버전에서 올리면 첫 시작 때 기존 `state.json`·`attachments/`를 `.claude-bot/`로 **자동 이동**합니다(무손실). 로그는 launchd plist가 가리키는 위치 그대로입니다.
 
@@ -278,8 +279,8 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 
 | 명령어 | 기능 |
 |---|---|
-| `/provider [claude\|codex\|default]` | 텔레그램 봇 provider 확인·전환 |
-| `/model [이름\|default]` | 활성 provider 모델 확인·전환, provider별 안내 표시 |
+| `/provider [claude\|codex\|default]` | 현재 방의 provider 확인·전환 |
+| `/model [이름\|default]` | 현재 방의 활성 provider 모델 확인·전환 |
 | `/new` | 활성 provider의 대화 세션 초기화 |
 | `/newchat [이름]` *(= `/newtopic`)* | 이 그룹에 **새 주제(토픽)** 를 만들고 거기서 새 세션 시작 (주제 기능 켜짐 + 봇의 *주제 관리* 권한 필요) |
 | `/sessions` | 이 프로젝트의 지난 세션 목록(활성 provider 기준) · 골라서 이어가기 (🔒 다른 방이 쓰는 중, 💻 터미널에서 열려 있음 — 둘 다 못 고름) |
@@ -328,16 +329,16 @@ ctb mybot.json --chat -1001234567890   # 특정 방의 세션 재개
 <summary><b>평소 동작 방식</b> — 세션 · 큐 · 그룹 채팅 · 첨부 파일 · 폴백 · 자동 컴팩션</summary>
 
 - **세션 유지** — Claude와 Codex의 세션 ID를 따로 저장합니다. `/provider`로 전환해도 각각의 맥락이 유지되며 `/new`는 활성 provider 세션만 초기화합니다.
-- **방별 세션 분리** — DM과 각 그룹은 서로 독립된 Claude·Codex 세션을 가집니다(`state.sessions[chatId]`). 한 방에서 한 얘기는 다른 방 세션에 넘어가지 않습니다. `provider`·`model` 같은 설정은 봇 전체 공용입니다.
+- **방별 세션·설정 분리** — DM·그룹·포럼 토픽은 서로 독립된 Claude·Codex 세션과 provider·model override를 가집니다(`state.sessions[roomKey]`). 한 방에서 `/provider`나 `/model`을 바꿔도 다른 방은 바뀌지 않습니다. `/provider default`와 `/model default`는 그 방의 override만 지우고 config 기본값으로 돌아갑니다.
 - **포럼 주제(토픽)도 하나의 방** — 주제 기능을 켠 슈퍼그룹에서는 토픽마다 세션·대기열·실행이 따로 돕니다(`state.sessions["<chatId>:<토픽ID>"]`). 답장도 온 토픽으로 돌아갑니다. General 토픽과 일반 그룹은 예전처럼 `chatId` 키를 그대로 쓰므로 달라지는 게 없습니다. 일반 그룹에서 주제를 켜면 슈퍼그룹으로 승격되면서 텔레그램이 **채팅 ID 를 새로 발급**하는데, 봇이 그 승격을 자동으로 따라가 세션까지 옮기고 `allowedChatId` 갱신을 안내합니다 — 원래 허용된 방에서 출발한 승격만 따라갑니다. `/newchat [이름]` (또는 `/newtopic`) 으로 주제를 만들고 거기서 새 세션을 시작할 수 있습니다 — 봇에 *주제 관리* 권한이 필요하고, 봇 API 로는 그룹 자체를 만들 수 없어서 주제가 봇이 만들 수 있는 가장 "새 방"에 가깝습니다. 이름을 안 주면 날짜·시각으로 붙습니다.
 - **그룹 채팅** — 그룹에서 쓰려면 봇을 **그룹 관리자로 지정**하세요. 텔레그램 privacy mode 때문에 일반 멤버 봇은 멘션·명령·답장만 받지만, 관리자 봇은 모든 메시지를 받아 멘션 없이 대화할 수 있습니다(또는 BotFather `/setprivacy`로 Disable). 그룹 안에서는 참여자 전원이 그 그룹의 단일 세션을 공유합니다. 명령어는 텔레그램이 그룹에서 붙여 보내는 `/명령@봇이름` 형태도 그대로 인식하며, 다른 봇을 향한 `/명령@다른봇`은 무시합니다.
 - **방별 동시 실행** — 방끼리는 **병렬로** 돕니다. DM에서 긴 작업이 돌아도 그룹은 기다리지 않고, 반대도 마찬가지입니다. 방마다 세션이 독립적이라 서로 줄 세울 이유가 없습니다. 한 방 안에서는 여전히 한 번에 하나씩 처리합니다(아래 큐). 예약 작업은 전용 슬롯을 써서 예약끼리는 순서대로, 사용자 방과는 병렬로 돕니다. 로컬 `ctb` 세션은 여전히 머신 전체 락이라 모든 방이 멈춥니다 — 켜둔 채 나왔다면 `/local`로 텔레그램에서 끝낼 수 있습니다.
 - **메시지 큐** — 그 방의 작업 중에 새 메시지가 오면 버리지 않고 큐에 쌓아둡니다. 작업이 끝나면 **같은 방**의 대기 메시지를 하나의 프롬프트로 합쳐서 처리합니다(예: "A 해줘" → "아니다 B 해줘"를 한 번에 처리). 합치는 건 항상 방 안에서만 일어나므로 세션이 섞일 일이 없습니다. `/stop`으로 그 방의 실행 중인 작업과 큐를 취소할 수 있습니다. 큐에 넣지 **않고** 그냥 적어두고 싶으면 메시지를 `//`로 시작하세요 — 봇이 완전히 무시하고 👀 리액션만 남기므로, 작업이 도는 동안 채팅에 혼잣말 메모를 남길 수 있습니다. 메모를 연달아 남기거나 로그를 통째로 붙여넣을 때는 `/*` 를 한 번 보내세요. `*/` 로 시작하는 메시지가 올 때까지 그 방의 입력을 전부 무시합니다. 방별로 저장되고 재시작해도 유지되므로 재시작이 메모를 세션에 쏟아붓는 일이 없고, 무시할 때마다 👀 가 붙어서 블록이 아직 열려 있다는 게 계속 보입니다.
-- **모델 설정** — `/model`은 활성 provider를 따르며 Claude와 Codex override를 별도로 저장합니다. Claude에서는 `fable`·`opus`·`sonnet`·`haiku` 별칭을 버튼으로 보여주고(현재 모델은 ✅) 기본값 버튼이 함께 나옵니다. Codex에서는 설치된 CLI가 그 계정에 제공하는 모델을 버튼으로 보여주고, 목록에 없는 ID는 저장하지 않습니다 — CLI 캐시가 없으면 예전처럼 전체 모델 ID를 직접 입력할 수 있습니다. `/model <ID>` 타이핑도 그대로 동작하며, `/model default`는 활성 provider의 override만 해제합니다.
-- **설정 메뉴 버튼은 다음 입력에서 사라집니다** — `/model`·`/provider`·`/autocompact`·`/sessions`와 자동 컴팩션 물음의 버튼은 보낸 시점의 상태를 그린 스냅샷입니다. 그 방에 새 메시지가 오면 이전 메뉴의 버튼을 걷어내므로, 스크롤을 올려 옛 메뉴를 눌렀다가 그 사이 바꿔둔 값이 조용히 되돌아가는 일이 없습니다. 방마다 따로 관리되고, 아직 답하지 않은 **`/plan` 승인 버튼과 `/local` 종료 버튼은 그대로 남습니다** — 그 둘은 눌러야 끝나는 요청이라서입니다.
+- **모델 설정** — `/model`은 그 방의 활성 provider를 따르며 Claude와 Codex override를 방별로 따로 저장합니다. Claude에서는 `fable`·`opus`·`sonnet`·`haiku` 별칭을 버튼으로 보여주고(현재 모델은 ✅) 기본값 버튼이 함께 나옵니다. Codex에서는 설치된 CLI가 그 계정에 제공하는 모델을 버튼으로 보여줍니다. `/model <ID>` 타이핑도 그대로 동작하며, `/model default`는 그 방의 활성 provider override만 해제합니다.
+- **설정 메뉴 버튼은 다음 입력에서 사라집니다** — `/model`·`/provider`·`/autocompact`·`/mergewindow`·`/sessions`와 자동 컴팩션 물음의 버튼은 보낸 시점의 상태를 그린 스냅샷입니다. 그 방에 새 메시지가 오면 이전 메뉴의 버튼을 걷어내므로, 스크롤을 올려 옛 메뉴를 눌렀다가 그 사이 바꿔둔 값이 조용히 되돌아가는 일이 없습니다. 방마다 따로 관리되고, 아직 답하지 않은 **`/plan` 승인 버튼과 `/local` 종료 버튼은 그대로 남습니다** — 그 둘은 눌러야 끝나는 요청이라서입니다.
 - **한도 초과 큐** — Claude Max / API 레이트 리밋 에러에 리셋 시간이 포함되면, 먼저 활성화된 폴백을 시도합니다. 폴백이 없거나 모두 실패할 때만 해당 메시지를 큐에 넣고 리셋 시각에 재시도합니다 — 작업 중 큐와 같은 방식입니다. 한도가 걸린 동안 추가로 보내는 메시지도 자동으로 큐에 쌓입니다. `/reserve`로 대기 현황과 리셋 시각 확인, `/reserve rm`으로 큐 전체 취소.
 - **Codex 폴백** — `"codexFallback": true`로 설정하면 Claude 레이트 리밋·크레딧 부족 시 `codex exec`가 대신 실행됩니다. Codex는 `state.codexSessionId`에 별도 세션을 저장하고 `codex exec resume <id>`로 이어가지만, Claude 세션과 Codex 세션은 서로 호환되지 않습니다. 대신 성공한 Codex 폴백마다 `.claude-bot/codex-handoff.md`에 요약을 남기고, 이후 Claude 호출 때 최근 handoff 내용을 맥락으로 주입합니다.
-- **실행 중 provider 전환** — `/provider`는 현재 provider(✅ 표시)와 함께 전환 버튼을 보내므로 타이핑이 필요 없습니다. `/provider claude`, `/provider codex`로 봇 state override를 직접 저장하는 방식도 그대로 동작하고, `/provider default`(또는 config 기본값 버튼)는 config 값으로 되돌립니다.
+- **방별 provider 전환** — `/provider`는 현재 방의 provider(✅ 표시)와 함께 전환 버튼을 보냅니다. `/provider claude`, `/provider codex`는 현재 DM·그룹·포럼 토픽에만 적용되고, `/provider default`(또는 config 기본값 버튼)는 그 방만 config 값으로 되돌립니다.
 - **Ollama 폴백** — `"ollamaFallback": true`로 설정하고 `"ollamaModel"`에 로컬 [Ollama](https://ollama.ai) 모델을 지정하면(기본값: `"qwen3.5:4b"`), Codex가 꺼져 있거나 실패했을 때 보조 폴백으로 사용됩니다. `/ollama`로 Claude와 관계없이 로컬 모델을 기본 채팅 상대로 수동 전환할 수도 있습니다. 내부적으로 `ollama launch claude … --resume <세션>`을 사용하지만 로컬 모델 컨텍스트가 작으므로 최선 노력(best-effort)입니다.
 - **자동 컴팩션** — 세션 컨텍스트 추정 크기가 `autoCompactThreshold`(기본값 100,000)를 넘으면 압축할지 물어보고 **🗜️ 지금 압축 / 나중에 / 끄기** 버튼을 함께 보냅니다. **나중에**를 누르면 컨텍스트가 25% 더 커지기 전까지 다시 묻지 않아서 매 턴 성가시게 굴지 않습니다. `autoCompactConfirm: false`로 두면 묻지 않고 바로 압축합니다. 크기 추정은 그 턴의 **마지막 API 호출** 값으로 합니다 — 턴 전체 토큰 합계는 도구 호출마다 컨텍스트를 다시 읽은 것까지 더해지므로, 파일 5개를 읽은 30k 대화가 160k로 잡혀 그것만으로 임계값을 넘습니다. config에서 임계값을 조정하거나, 런타임에 `/autocompact`로 설정합니다. 인자 없이 보내면 현재값과 함께 프리셋 버튼(50k / 100k / 150k / 200k / 끄기 / 기본값)이 나와서 휴대폰으로 숫자를 칠 필요가 없습니다. 값을 직접 줄 수도 있고 축약 표기를 받습니다 — `/autocompact 120k`, `/autocompact 120000`, `/autocompact 80,000` (`off`로 비활성화, `default`로 초기화). 10k~1m 범위를 벗어난 값은 거절하므로, `100m` 같은 오타로 자동 압축이 조용히 꺼지는 일은 없습니다. 설정값은 `state.json`에 저장돼 재시작 후에도 유지됩니다. 수동으로 `/compact`를 써도 됩니다. 압축은 1~2분 걸리며 다른 프롬프트와 동일한 락을 잡습니다 — 그동안 보낸 메시지는 대기열에 쌓였다가 끝난 뒤 처리됩니다.
 - **간결한 답변** — 텔레그램에 맞게 짧게 답하도록 시스템 프롬프트가 기본으로 붙습니다. 바꾸려면 `appendSystemPrompt`에 직접 넣으세요 (빈 문자열이면 끔).
