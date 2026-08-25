@@ -13,8 +13,8 @@
 // package directory (where bot configs typically live alongside bot.mjs).
 // Absolute or explicitly relative paths (/ or ./) resolve as-is.
 //
-// While a provider runs, .claude-bot/local.lock (PID) is created so the bot defers
-// incoming Telegram messages until the local session ends.
+// While a provider runs, .claude-bot/local.lock records the PID and the room being held, so the
+// bot defers incoming Telegram messages for that room only — every other room keeps answering.
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -261,7 +261,11 @@ async function main() {
   }
 
   mkdirSync(botDir, { recursive: true });
-  writeFileSync(lockPath, String(process.pid));
+  // 어느 방을 잡고 있는지 같이 적는다 — 봇은 그 방만 미루고 나머지는 평소대로 답한다.
+  // 첫 줄은 PID 만 둔 채로 남긴다. 0.4.13 이전 봇은 이 파일을 `parseInt` 로 읽는데, 통째로 JSON 을
+  // 적으면 NaN 이 되고 그 경로는 "죽은 lock" 으로 판정해 **파일을 지워 버린다** — 잠금이 아예
+  // 풀린다. 옛 봇은 첫 줄만 읽고, 새 봇은 둘째 줄까지 읽는다.
+  writeFileSync(lockPath, `${process.pid}\n${JSON.stringify({ room: primaryChatId })}\n`);
   const cleanup = () => { try { unlinkSync(lockPath); } catch {} };
   process.on("exit", cleanup);
 

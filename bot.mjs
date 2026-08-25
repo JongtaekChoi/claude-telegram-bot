@@ -183,7 +183,7 @@ const STR = {
       "• Codex fallback can run automatically when Claude hits a limit (if enabled)\n" +
       "• /ollama — toggle Ollama chat mode (bypass Claude, use local LLM)\n" +
       "• /stop — stop the current task · /stop --reset to also roll back the session\n" +
-      "• /local — local `ctb` session status · end it from here when it's blocking the bot\n" +
+      "• /local — which room a local `ctb` session holds · end it from here\n" +
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
       "• /remember <text> — save to persistent memory (survives /new)\n" +
       "• /memory — view memory · /memory rm <n> to drop lines (`3`, `3 5 7`, `3-9`) · /memory clear to wipe\n" +
@@ -236,10 +236,11 @@ const STR = {
     stopOk: "🛑 Task stopped.",
     stopReset: "🛑 Task stopped and session rolled back to before the task.",
     stopNoop: "No task is running.",
-    localBusy: "💻 A local `ctb` session is active. Send a message when it's done, or end it here.",
+    localBusy: "💻 A local `ctb` session has this room open. Send a message when it's done, or end it here — other rooms are unaffected.",
     localKillBtn: "💻 End local session",
-    localActive: (pid, mins) =>
-      `💻 A local \`ctb\` session is running (PID ${pid}, started ${mins}m ago).`,
+    localActive: (pid, mins, where) =>
+      `💻 A local \`ctb\` session is running${where ? ` on **${where}**` : ""} ` +
+      `(PID ${pid}, started ${mins}m ago).${where ? "\nOther rooms keep working." : ""}`,
     localNone: "No local `ctb` session is running.",
     localKilled: (pid) => `🛑 Ended the local \`ctb\` session (PID ${pid}).`,
     localKillFail: (pid) =>
@@ -394,7 +395,7 @@ const STR = {
       "• Codex 폴백 활성화 시 Claude 한도 도달 때 자동으로 대신 실행\n" +
       "• /ollama — Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM 사용)\n" +
       "• /stop — 진행 중인 작업 중단 · /stop --reset 으로 세션도 되돌리기\n" +
-      "• /local — 로컬 `ctb` 세션 상태 확인 · 봇을 막고 있으면 여기서 종료\n" +
+      "• /local — 로컬 `ctb` 세션이 잡고 있는 방 확인 · 여기서 종료\n" +
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
       "• /remember <내용> — 퍼시스턴트 메모리에 저장 (/new 로 초기화해도 유지)\n" +
       "• /memory — 메모리 보기 · /memory rm <번호> 로 삭제 (`3`, `3 5 7`, `3-9`) · /memory clear 로 전체 삭제\n" +
@@ -424,10 +425,11 @@ const STR = {
     stopOk: "🛑 작업을 중단했습니다.",
     stopReset: "🛑 작업을 중단하고 세션을 작업 이전으로 되돌렸습니다.",
     stopNoop: "실행 중인 작업이 없습니다.",
-    localBusy: "💻 로컬 `ctb` 세션이 활성화되어 있습니다. 종료 후 메시지를 보내거나, 여기서 종료하세요.",
+    localBusy: "💻 이 방을 로컬 `ctb` 세션이 잡고 있습니다. 종료 후 메시지를 보내거나, 여기서 종료하세요 — 다른 방은 그대로 씁니다.",
     localKillBtn: "💻 로컬 세션 종료",
-    localActive: (pid, mins) =>
-      `💻 로컬 \`ctb\` 세션이 실행 중입니다 (PID ${pid}, ${mins}분 전 시작).`,
+    localActive: (pid, mins, where) =>
+      `💻 로컬 \`ctb\` 세션이 ${where ? `**${where}** 방에서 ` : ""}실행 중입니다 ` +
+      `(PID ${pid}, ${mins}분 전 시작).${where ? "\n다른 방은 그대로 동작합니다." : ""}`,
     localNone: "실행 중인 로컬 `ctb` 세션이 없습니다.",
     localKilled: (pid) => `🛑 로컬 \`ctb\` 세션을 종료했습니다 (PID ${pid}).`,
     localKillFail: (pid) => `⚠️ PID ${pid} 를 종료하지 못했습니다 — 터미널에서 직접 닫아야 할 수 있습니다.`,
@@ -855,7 +857,7 @@ const COMMANDS = {
     { command: "plan", description: "Plan only (no edits), then approve/cancel to run for real" },
     { command: "ollama", description: "Toggle Ollama chat mode (bypass Claude, use local LLM)" },
     { command: "stop", description: "Stop the current task (--reset to roll back session)" },
-    { command: "local", description: "Local ctb session status · end it from here" },
+    { command: "local", description: "Which room a local ctb session holds · end it" },
     { command: "remember", description: "Save to persistent memory (survives /new)" },
     { command: "memory", description: "View memory · rm <n> drops lines (3-9 ok) · clear wipes it" },
     { command: "cron", description: "List / add / remove scheduled tasks" },
@@ -879,7 +881,7 @@ const COMMANDS = {
     { command: "plan", description: "계획만 세우기 (편집 없음) → 승인/취소로 실제 실행" },
     { command: "ollama", description: "Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM)" },
     { command: "stop", description: "작업 중단 (--reset 으로 세션 되돌리기)" },
-    { command: "local", description: "로컬 ctb 세션 상태 확인·종료" },
+    { command: "local", description: "로컬 ctb 세션이 잡은 방 확인·종료" },
     { command: "remember", description: "퍼시스턴트 메모리에 저장 (/new 후에도 유지)" },
     { command: "memory", description: "메모리 보기 · rm <번호>로 삭제(3-9 가능) · clear로 전체" },
     { command: "cron", description: "예약 작업 보기·추가·삭제" },
@@ -896,31 +898,40 @@ const COMMANDS = {
 };
 
 // ── 로컬 세션 lock ────────────────────────────────────────────────────────
-// ctb claude 실행 시 .claude-bot/local.lock (PID) 을 생성하고 종료 시 삭제.
-// 봇은 claude 실행 전 이 파일을 확인해 동시 실행을 방지한다.
-// PID 가 이미 종료된 경우(stale lock) 자동 제거 후 진행.
+// ctb 실행 시 .claude-bot/local.lock 을 만들고 종료 시 지운다. 봇은 provider 를 띄우기 전에 이걸
+// 보고 같은 세션을 양쪽에서 동시에 --resume 하는 걸 막는다. PID 가 이미 죽었으면(stale) 지우고 진행.
+//
+// 락은 **그 방에만** 걸린다. 세션은 방마다 따로고 토픽끼리도 병렬로 도는데, 락만 봇 전체를 잠그면
+// DM 에서 터미널 작업 중이라는 이유로 그룹 토픽까지 멈춰 선다 — 막을 이유가 없는 조합이다.
+// 파일은 첫 줄이 PID, 둘째 줄이 나머지 정보(JSON)다 — 옛 봇이 첫 줄만 읽어도 깨지지 않게 나눠 뒀다.
+// 0.4.13 이전 ctb 는 PID 한 줄만 적어서 어느 방인지 알 수 없다. 그때는 예전처럼 전 방을 잠근다.
 const LOCAL_LOCK_PATH = join(BOT_DIR, "local.lock");
-function checkLocalLock() {
-  if (!existsSync(LOCAL_LOCK_PATH)) return false;
+function readLocalLock() {
+  if (!existsSync(LOCAL_LOCK_PATH)) return null;
   try {
-    const pid = parseInt(readFileSync(LOCAL_LOCK_PATH, "utf8"), 10);
+    const [head, rest] = readFileSync(LOCAL_LOCK_PATH, "utf8").split("\n");
+    const pid = parseInt(head, 10);
     process.kill(pid, 0); // throws if process is dead
-    return true; // lock is valid
+    let room;
+    try { room = JSON.parse(rest)?.room; } catch {}
+    return { pid, room: room ? String(room) : undefined };
   } catch {
     try { unlinkSync(LOCAL_LOCK_PATH); } catch {} // stale — remove
-    return false;
-  }
-}
-// 로컬 세션 정보 — lock 파일의 PID·생성 시각(경과 분).
-function localLockInfo() {
-  if (!checkLocalLock()) return null;
-  try {
-    const pid = parseInt(readFileSync(LOCAL_LOCK_PATH, "utf8"), 10);
-    const mins = Math.max(0, Math.round((Date.now() - statSync(LOCAL_LOCK_PATH).mtimeMs) / 60000));
-    return { pid, mins };
-  } catch {
     return null;
   }
+}
+function checkLocalLock(chatId) {
+  const lock = readLocalLock();
+  if (!lock) return false;
+  return !lock.room || lock.room === String(chatId);
+}
+// 로컬 세션 정보 — PID·생성 시각(경과 분)·어느 방인지. 방 이름은 목록과 같은 걸 쓴다.
+function localLockInfo() {
+  const lock = readLocalLock();
+  if (!lock) return null;
+  const mins = Math.max(0, Math.round((Date.now() - statSync(LOCAL_LOCK_PATH).mtimeMs) / 60000));
+  const where = lock.room ? state.sessions?.[lock.room]?.title || lock.room : "";
+  return { pid: lock.pid, mins, room: lock.room, where };
 }
 // 로컬 세션 강제 종료 — 밖에 나와 있는데 데스크탑에 ctb 를 켜둔 채였을 때 텔레그램에서 끝낸다.
 // ctb 는 셸 잡 컨트롤 아래에서 프로세스 그룹 리더라 그룹(-pid)에 신호를 보내야 자식 claude 까지
@@ -937,12 +948,12 @@ async function killLocalSession() {
   if (!signal("SIGTERM")) return { ok: false, pid: info.pid };
   // ctb 는 자식이 끝난 뒤 lock 을 지우므로 잠시 기다리고, 그래도 살아 있으면 SIGKILL.
   for (let i = 0; i < 20; i++) {
-    if (!checkLocalLock()) return { ok: true, pid: info.pid };
+    if (!readLocalLock()) return { ok: true, pid: info.pid };
     await new Promise((r) => setTimeout(r, 250));
   }
   signal("SIGKILL");
   for (let i = 0; i < 8; i++) {
-    if (!checkLocalLock()) return { ok: true, pid: info.pid, forced: true };
+    if (!readLocalLock()) return { ok: true, pid: info.pid, forced: true };
     await new Promise((r) => setTimeout(r, 250));
   }
   return { ok: false, pid: info.pid };
@@ -1919,7 +1930,8 @@ let schedule = buildSchedule();
 // 결과를 allowedChatId 로 보낸다. 전용 CRON_KEY 슬롯을 써 예약끼리는 직렬화하되 사용자 방과는 병렬로 돈다.
 async function runScheduled(job) {
   const r = rt(CRON_KEY); // 예약 작업끼리는 직렬화하되 사용자 방과는 병렬로 돈다
-  if (r.busy || checkLocalLock()) {
+  // 예약 작업은 방이 아니라 전용 슬롯에서 돈다 — 어느 방의 로컬 세션이든 있으면 건너뛴다.
+  if (r.busy || readLocalLock()) {
     console.warn(`Skipped scheduled job (busy): ${job.cron} — ${String(job.prompt).slice(0, 40)}`);
     return;
   }
@@ -2220,7 +2232,7 @@ async function runCompact(chatId, l, okKey) {
     await send(chatId, t(l, "queued", r.queue.length));
     return;
   }
-  if (checkLocalLock()) {
+  if (checkLocalLock(chatId)) {
     await send(chatId, t(l, "localBusy"), { replyMarkup: localKillMarkup(l) });
     return;
   }
@@ -2508,7 +2520,7 @@ async function handleLocal(chatId, arg, l) {
     await send(chatId, t(l, "localNone"));
     return;
   }
-  await send(chatId, t(l, "localActive", info.pid, info.mins), { replyMarkup: localKillMarkup(l) });
+  await send(chatId, t(l, "localActive", info.pid, info.mins, info.where), { replyMarkup: localKillMarkup(l) });
 }
 
 async function handleCron(chatId, rest, l) {
@@ -2777,7 +2789,7 @@ async function runApprovedPlan(chatId, l) {
     await send(chatId, t(l, "queued", r.queue.length));
     return;
   }
-  if (checkLocalLock()) {
+  if (checkLocalLock(chatId)) {
     await send(chatId, t(l, "localBusy"), { replyMarkup: localKillMarkup(l) });
     return;
   }
@@ -3108,7 +3120,7 @@ async function handle(msg) {
       // 봇 작업은 없어도 로컬 ctb 가 물고 있을 수 있다 — 종료 버튼을 같이 준다.
       const info = localLockInfo();
       if (info) {
-        await send(chatId, t(l, "localActive", info.pid, info.mins), { replyMarkup: localKillMarkup(l) });
+        await send(chatId, t(l, "localActive", info.pid, info.mins, info.where), { replyMarkup: localKillMarkup(l) });
         return;
       }
       await send(chatId, t(l, "stopNoop"));
@@ -3211,7 +3223,7 @@ async function handle(msg) {
     await send(chatId, t(l, "queued", r.queue.length));
     return;
   }
-  if (checkLocalLock()) {
+  if (checkLocalLock(chatId)) {
     await send(chatId, t(l, "localBusy"), { replyMarkup: localKillMarkup(l) });
     return;
   }
