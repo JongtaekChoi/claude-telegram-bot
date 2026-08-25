@@ -1109,6 +1109,39 @@ function setSid(chatId, id, provider = currentProvider(chatId)) {
   chatBucket(chatId)[sidKey(provider)] = id;
 }
 
+// 방 이름 — state 에는 방 키(숫자)만 남아서 터미널에서 어느 방인지 알아볼 방법이 없었다.
+// 메시지가 올 때 화면에 보이는 이름을 같이 적어둔다. 토픽 이름만은 일반 메시지에 실려 오지 않고
+// 생성·수정 서비스 메시지에만 붙으므로, 여기와 newTopic() 두 군데에서 잡는다.
+//
+// 이름의 출처는 신뢰도가 갈린다. 서비스 메시지(생성·이름 변경)와 /newchat 은 **그 순간의 진짜
+// 이름**이라 언제든 덮어쓴다(strong). 반면 답글에 딸려 오는 생성 정보는 **만들 당시 이름의
+// 스냅샷**이라 그 뒤 바뀐 이름을 모르고, `#11` 은 아예 이름을 못 구했을 때의 임시값이다(weak).
+// weak 로 덮어쓰게 두면 이름을 바꿔 반영해 놓아도 누군가 토픽 첫 메시지에 답장하는 순간 옛 이름으로
+// 되돌아간다 — 그래서 weak 는 아직 아는 이름이 없을 때만 쓴다.
+function roomTitleOf(msg, topicName) {
+  const c = msg.chat || {};
+  // 이미 있던 토픽은 서비스 메시지가 지나간 뒤라 이름을 얻을 통로가 없다 — 답글 대상으로 딸려 오는
+  // 생성 메시지가 유일한 뒷문이다(토픽 첫 메시지에 붙는다). 그마저 없으면 `#11` 로 적어 둔다.
+  // 그룹 이름만 적으면 General 과 구별이 안 되고, 비워 두면 목록에서 무엇인지 알 길이 없다.
+  const name = topicName || msg.reply_to_message?.forum_topic_created?.name;
+  if (msg.is_topic_message || name) {
+    return {
+      title: [c.title, name || `#${msg.message_thread_id}`].filter(Boolean).join(" / "),
+      weak: !topicName,
+    };
+  }
+  const title = c.title || [c.first_name, c.last_name].filter(Boolean).join(" ") || c.username || "";
+  return { title, weak: false };
+}
+function rememberRoomTitle(room, title, weak) {
+  if (!title) return;
+  const bucket = chatBucket(room);
+  if (bucket.title === title) return;
+  if (weak && bucket.title) return;
+  bucket.title = title;
+  saveState(state);
+}
+
 // 구버전(전역 단일 세션) → 방별 세션 마이그레이션. 어느 방의 세션인지 알 수 없으므로 주(primary)
 // 방(allowedIds[0], 보통 소유자 DM)으로 옮긴다. allowedChatId 미설정 시엔 메시지 처리 자체가
 // 안 되므로 그대로 두고, chatId가 생긴 뒤 재시작 때 이관된다.
@@ -2426,6 +2459,8 @@ async function newTopic(chatId, name, l) {
     return;
   }
   const room = roomKey(base, r.result.message_thread_id);
+  // 이름을 확실히 아는 건 여기뿐이다 — 서비스 메시지 경로는 손으로 만든 토픽을 위한 보조 수단.
+  rememberRoomTitle(room, [chatBucket(base).title, title].filter(Boolean).join(" / "));
   await send(room, t(l, "newTopicHello"));
   await send(chatId, t(l, "newTopicCreated", title));
 }
@@ -2847,7 +2882,10 @@ async function handle(msg) {
   const l = langOf(msg);
   const text = normalizeDashFlags(stripBotMention((msg.text || msg.caption || "").trim()));
   const attachment = msg._mediaGroup ? null : pickAttachment(msg);
-  if (!text && !attachment && !msg._mediaGroup?.length) return;
+  // 주제 생성·이름 변경 서비스 메시지는 본문이 없지만 토픽 이름이 실려 오는 유일한 통로다.
+  // 이름만 적어두려고 여기서 막지 않고 화이트리스트 검사까지 통과시킨다.
+  const topicName = msg.forum_topic_created?.name || msg.forum_topic_edited?.name;
+  if (!text && !attachment && !msg._mediaGroup?.length && !topicName) return;
 
   // 화이트리스트
   if (!allowedIds.length) {
@@ -2860,6 +2898,15 @@ async function handle(msg) {
     await greetUnknownRoom(chatId, rawChatId, msg.from, l);
     return;
   }
+  // 서비스 메시지는 이 방의 이름만 챙기고 끝난다. 생성 서비스 메시지에 is_topic_message 가
+  // 붙는지는 보장이 없어서, 이 경로에서만 message_thread_id 로 방 키를 직접 만든다.
+  const room = roomTitleOf(msg, topicName);
+  rememberRoomTitle(
+    topicName ? roomKey(rawChatId, msg.message_thread_id) : chatId,
+    room.title,
+    room.weak,
+  );
+  if (topicName) return;
   // 혼잣말 — `//` 로 시작하는 메시지는 봇이 무시한다. 작업 중 떠오른 딴 주제 메모를
   // 세션에 넣지 않고 채팅에 남겨두는 용도. 👀 리액션으로 "봤고, 무시했다"만 알린다.
   // `/*` 는 그 블록 버전 — `*/` 로 시작하는 메시지가 올 때까지 이 방의 모든 입력을 무시한다.

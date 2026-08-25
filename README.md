@@ -409,6 +409,31 @@ ctb mybot.json --provider codex
 ctb mybot.json --chat -1001234567890   # resume a specific room's session
 ```
 
+Room ids are not memorable, and forum topics add one per `/newchat`, so plain `ctb` asks which room
+to continue — arrow keys or `1`-`9`, enter to start, `q` to cancel:
+
+```
+Pick a room  (↑↓ or 1-9, enter to start, q to cancel)
+❯  1  Ada Lovelace       688344084          claude  4ef8162d  *
+   2  Bot dev            -1002233445566     claude  5e6637a7
+   3  Bot dev / release  -1002233445566:11  codex   019f49c4
+   4  (unnamed)          -5360343684        claude  ff09b344  (not in allowedChatId)
+```
+
+`*` marks the default room, and the room id in the middle column is what `--chat` takes. A room
+whose chat is no longer whitelisted is flagged rather than hidden — that is what an old chat id
+left behind by a group-to-supergroup upgrade looks like.
+
+The prompt is skipped whenever the answer is already settled — only one room exists, `--chat` named
+one, arguments like `-p "…"` were passed, or stdin is not a terminal (background jobs, pipes). So
+scripted use is unchanged.
+
+The name comes from what the room is called in Telegram; the bot records it the first time it
+answers there, so rooms last used before this feature show as `(unnamed)` until they see a message.
+Topic names only reach the bot when the topic is created or renamed, so a topic that already existed
+is listed as `Bot dev / #11` (the thread id) — enough to tell it apart from General — and picks up
+its real name if one turns up later.
+
 Sessions are stored per room at `state.sessions[chatId]` — Claude under `sessionId`, Codex under
 `codexSessionId` (resumed with `codex resume <session-id>`). `ctb` resumes the first entry of
 `allowedChatId` (usually your DM) unless `--chat <id>` names another room. The sessions remain

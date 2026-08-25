@@ -2,8 +2,9 @@
 // ctb — short-form CLI for claude-telegram-bot
 //
 // ctb [config.json] [--provider claude|codex] [--chat <id>] [...provider args]
-//                                      Resume the provider's Telegram session
-//                                      (--chat picks the room; default is allowedChatId[0])
+//                                      Resume the provider's Telegram session. With no arguments
+//                                      it asks which room to continue (skipped when there is only
+//                                      one, or when stdin is not a TTY); --chat picks it outright.
 // ctb bot [config.json]                Start the Telegram bot daemon (delegates to bot.mjs)
 // ctb init [dir]                       Create a config.json template
 // ctb --help | --version
@@ -63,6 +64,109 @@ function resolveConfig(arg) {
   return existsSync(join(process.cwd(), arg)) ? join(process.cwd(), arg) : join(HERE, arg);
 }
 
+// config.json → .claude-bot/state.json, planner.json → .claude-bot/planner.state.json.
+// 고르기 화면과 세션 이어받기가 같은 파일을 보게 한 곳에 둔다 — 갈리면 목록에 없는 방을 이어받는다.
+function statePathFor(configPath) {
+  const base = basename(configPath, ".json");
+  return join(dirname(configPath), ".claude-bot", base === "config" ? "state.json" : `${base}.state.json`);
+}
+
+// 한글·CJK 는 터미널에서 두 칸을 먹는다 — padEnd 는 글자 수만 세서 표가 어긋난다.
+const cellWidth = (s) =>
+  [...s].reduce((w, ch) => w + (/[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹯＀-｠￠-￦]/.test(ch) ? 2 : 1), 0);
+const pad = (s, w) => s + " ".repeat(Math.max(0, w - cellWidth(s)));
+
+// 고르기 화면에 뿌릴 방 목록. 기본으로 이어받는 방이 맨 위, 화이트리스트에서 빠진 방(그룹 승격으로
+// 죽은 옛 ID 등)이 맨 아래다.
+function roomRows(st, cfg) {
+  const allowed = [].concat(cfg.allowedChatId).filter(Boolean).map(String);
+  const primary = allowed[0];
+  const base = (room) => (room.indexOf(":") < 0 ? room : room.slice(0, room.indexOf(":")));
+  return Object.entries(st.sessions || {})
+    .map(([room, r]) => {
+      const provider = r.provider || st.provider || cfg.provider || "claude";
+      const sid = r[provider === "codex" ? "codexSessionId" : "sessionId"];
+      return {
+        room,
+        // 이름은 봇이 메시지를 받아야 채워진다 — 0.4.13 이하 state 에는 아예 없다.
+        name: r.title || "(unnamed)",
+        provider,
+        session: sid ? sid.slice(0, 8) : "-",
+        primary: room === primary,
+        live: allowed.includes(base(room)),
+      };
+    })
+    .sort((a, b) =>
+      Number(b.primary) - Number(a.primary) ||
+      Number(b.live) - Number(a.live) ||
+      a.room.localeCompare(b.room));
+}
+
+// 시작할 때 뜨는 방 고르기. 화살표로 옮기고 엔터로 고른다 — 숫자 키도 받는다.
+// 화면은 stderr 로 그린다. stdout 은 `-p` 로 받은 답이 나가는 통로라 섞이면 안 된다.
+//
+// 안 뜨는 경우가 뜨는 경우보다 중요하다:
+//   · TTY 가 아니면(백그라운드 작업·파이프) 물어볼 상대가 없다 — 프롬프트를 띄우면 그대로 멈춘다
+//   · 방이 하나뿐이면 물어봐야 답이 정해져 있다
+//   · `--chat`·`-p` 처럼 이미 뜻이 분명한 인자가 있으면 부르지도 않는다 (호출부 참고)
+async function pickRoom(rows) {
+  if (rows.length < 2 || !process.stdin.isTTY || !process.stderr.isTTY) return undefined;
+
+  const w = (key) => Math.max(...rows.map((r) => cellWidth(String(r[key]))));
+  const [wn, wr] = [w("name"), w("room")];
+  // 방 키까지 보여준다 — `--chat` 에 넣을 값이 여기 말고는 볼 데가 없고, 화이트리스트에서 빠진 방을
+  // 알아보는 것도 여기가 유일하다(그룹이 승격되면 옛 ID 의 세션이 닿을 수 없는 채로 남는다).
+  const line = (r, i, on) =>
+    `${on ? "\x1b[36m❯ " : "  "}${String(i + 1).padStart(2)}  ${pad(r.name, wn)}  ` +
+    `${pad(r.room, wr)}  ${r.provider}  ${r.session}` +
+    `${r.primary ? "  *" : ""}${r.live ? "" : "  (not in allowedChatId)"}${on ? "\x1b[0m" : ""}`;
+
+  let cur = 0;
+  const draw = (redraw) => {
+    // 다시 그릴 때는 커서를 목록 첫 줄로 올리고 아래를 통째로 지운다 — 줄마다 지우면 길이가
+    // 바뀔 때 찌꺼기가 남는다.
+    if (redraw) process.stderr.write(`\x1b[${rows.length}A\x1b[0J`);
+    process.stderr.write(rows.map((r, i) => line(r, i, i === cur)).join("\n") + "\n");
+  };
+
+  process.stderr.write("Pick a room  (↑↓ or 1-9, enter to start, q to cancel)\n");
+  process.stderr.write("\x1b[?25l"); // 커서 숨김 — 목록 위를 오르내리는 게 보이면 지저분하다
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  draw(false);
+
+  // raw 모드로 둔 채 죽으면 터미널이 먹통이 된다. 어떤 경로로 끝나든 되돌린다.
+  const restore = () => {
+    try { process.stdin.setRawMode(false); } catch {}
+    process.stdin.pause();
+    process.stderr.write("\x1b[?25h");
+  };
+  process.on("exit", restore);
+
+  return new Promise((resolve) => {
+    const onKey = (buf) => {
+      const k = buf.toString();
+      const done = (room) => {
+        process.stdin.off("data", onKey);
+        restore();
+        resolve(room);
+      };
+      if (k === "\r" || k === "\n") return done(rows[cur].room);
+      if (k === "\x03" || k === "q" || k === "\x1b") { // ctrl-c · q · esc
+        done(null);
+        process.stderr.write("cancelled\n");
+        return process.exit(130);
+      }
+      if (k === "\x1b[A" || k === "k") cur = (cur - 1 + rows.length) % rows.length;
+      else if (k === "\x1b[B" || k === "j") cur = (cur + 1) % rows.length;
+      else if (/^[1-9]$/.test(k) && Number(k) <= rows.length) return done(rows[Number(k) - 1].room);
+      else return;
+      draw(true);
+    };
+    process.stdin.on("data", onKey);
+  });
+}
+
 async function main() {
   if (a === "-h" || a === "--help") {
     console.log(
@@ -70,6 +174,7 @@ async function main() {
       `Usage:\n` +
       `  ctb [config.json] [--provider claude|codex] [--chat <id>] [...args]\n` +
       `                                Resume the provider's Telegram session\n` +
+      `                                (bare \`ctb\` asks which room, unless there is only one)\n` +
       `  ctb bot [config.json]         Start the Telegram bot daemon\n` +
       `  ctb init [dir]                Create a config.json template\n` +
       `  ctb --help | --version\n\n` +
@@ -77,12 +182,12 @@ async function main() {
       `A bare name like "planner.json" resolves relative to the package directory.\n\n` +
       `Provider precedence: --provider flag → /provider override in state → config.provider → claude.\n\n` +
       `Examples:\n` +
-      `  ctb                           Interactive configured provider, continuing its session\n` +
+      `  ctb                           Pick a room, then continue its session interactively\n` +
       `  ctb -p "what did we do?"      Headless configured provider with session context\n` +
       `  ctb planner.json              Resume planner persona session interactively\n` +
       `  ctb planner.json -p "..."     Headless with planner session\n` +
       `  ctb planner.json --provider codex  Interactive Codex with its Telegram session\n` +
-      `  ctb --chat -5360343684        Resume that group chat's session instead of the DM\n` +
+      `  ctb --chat -1002233445566:11  Resume that forum topic's session instead of the DM\n` +
       `  ctb bot                       Start the bot with default config\n` +
       `  ctb bot planner.json          Start the bot with planner config`,
     );
@@ -128,18 +233,24 @@ async function main() {
       forwardedArgs.push(arg);
     }
   }
-  const dataDir = dirname(configPath);
-  const botDir = join(dataDir, ".claude-bot");
-  const stateBase = basename(configPath, ".json");
-  const stateFile = stateBase === "config" ? "state.json" : `${stateBase}.state.json`;
-  const statePath = join(botDir, stateFile);
+  const botDir = join(dirname(configPath), ".claude-bot");
+  const statePath = statePathFor(configPath);
   const lockPath = join(botDir, "local.lock");
+
+  let st = {};
+  try { st = JSON.parse(readFileSync(statePath, "utf8")); } catch {}
+
+  // 인자 없이 그냥 `ctb` 를 쳤으면 어느 방을 이어받을지 묻는다. 방 키를 외워 `--chat` 에 넣는 건
+  // 사실상 불가능하고, 주제를 쓰기 시작하면 방이 계속 늘어난다. 인자가 하나라도 있으면 뜻이 이미
+  // 분명하니(`-p "..."` 는 헤드리스, `--chat` 은 방 지정) 묻지 않는다 — pickRoom 이 방 개수와
+  // TTY 여부도 다시 확인해서, 방이 하나뿐이거나 물어볼 상대가 없으면 그냥 지나간다.
+  if (!chatOverride && !forwardedArgs.length) {
+    chatOverride = await pickRoom(roomRows(st, cfg));
+  }
 
   const primaryChatId = chatOverride
     ? String(chatOverride)
     : [].concat(cfg.allowedChatId).filter(Boolean).map(String)[0];
-  let st = {};
-  try { st = JSON.parse(readFileSync(statePath, "utf8")); } catch {}
   const room = primaryChatId ? st.sessions?.[primaryChatId] : undefined;
   // Telegram 의 /provider·/model override 는 방별이다. --chat 이 고른 방의 설정을 그대로 따른다.
   // 최상위 키는 0.4.13 이하 state 파일을 bot이 아직 마이그레이션하지 않은 경우의 호환 폴백이다.
