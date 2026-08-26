@@ -140,6 +140,9 @@ const JOBS = cfg.backgroundJobs !== false;
 const JOBS_DIR = join(cfg.projectDir || DATA_DIR, ".ctb-jobs");
 const JOB_TICK_MS = 30_000;
 const JOB_LOG_TAIL = 1200; // 완료 알림에 붙일 로그 꼬리 길이
+// 방 사이 전달(/tell): 이 봇이 맡은 다른 방으로 메시지 하나를 넘긴다. 방마다 세션이 독립이라
+// 옆방이 알아낸 걸 가져올 통로가 없던 자리다. → docs/design/room-relay.md
+const ROOM_RELAY = cfg.roomRelay !== false;
 // 사람은 한 생각을 여러 메시지로 쪼개 보낸다 — "아까 그 버그 말인데" / "테스트부터 돌려봐" / "아 로그도".
 // 첫 줄에 즉시 반응하면 나머지는 이미 시작된 작업 뒤에 줄을 서고(`⏳ 대기열에 추가됐습니다`), 반쪽짜리
 // 맥락으로 돌린 그 실행은 답까지 따로 와서 통째로 버려진다. 그래서 잠깐 기다렸다 합쳐 한 번만 돈다.
@@ -178,6 +181,7 @@ const STR = {
       "• /sessions — list past sessions in this project and pick one to carry on from\n" +
       "• /name — name the current session so it stands out in /sessions\n" +
       "• /jobs — background jobs that outlive replies · you get a message when one ends\n" +
+      "• /tell <room> <message> — hand a message to another room this bot runs · /tell alone lists them\n" +
       "• /compact — compress context to free up space (keeps the session)\n" +
       "• /plan <request> — plan only (no edits), then approve/cancel to run for real\n" +
       "• /plan on|off — pin plan mode to this room until you turn it off\n" +
@@ -247,6 +251,31 @@ const STR = {
       "📐 The plan that was waiting for approval expired — compacting starts a new session. " +
       "Send it again if you still want it.",
     planProviderUnsupported: "/plan approval flow currently requires provider=claude.",
+    tellOff: "Room relay is off (`roomRelay: false` in config).",
+    tellNoRooms:
+      "📨 No other room to hand anything to yet. This bot only knows rooms it has already talked in — "
+      + "say something there once and it shows up here.",
+    tellList: (rooms) =>
+      `📨 Rooms this bot knows:\n\n${rooms}\n\n`
+      + "`/tell <room> <message>` — room can be the number above or any distinctive part of the name.\n"
+      + "It runs in that room with that room's session, and the answer stays there.",
+    tellUsage: "Usage: `/tell <room> <message>` — send `/tell` on its own to list the rooms.",
+    tellUnknownRoom: (rooms) => `📨 No room matches that. Rooms this bot knows:\n\n${rooms}`,
+    tellAmbiguous: (rooms) =>
+      `📨 That matches more than one room:\n\n${rooms}\n\nUse the number, or a longer part of the name.`,
+    tellSelf: "📨 That's this room. Just say it here.",
+    tellMuted: (room) => `📨 ${room} is muted (\`/*\`). Nothing was sent — unmute it there with \`*/\` first.`,
+    tellSent: (room) => `📨 Handed to ${room}. The answer stays in that room.`,
+    tellIncoming: (room) => `📨 From ${room} — running it here:`,
+    tellAsk: (room, body) => `📨 ${room} wants to hand this over:\n\n${body}\n\nRun it here?`,
+    tellAskSent: (room) => `📨 Asked ${room} to take this. It runs there once someone approves.`,
+    tellApprove: "✅ Run it",
+    tellReject: "❌ Ignore",
+    tellRejected: "❌ Ignored. Nothing ran.",
+    tellExpired: "That hand-off is no longer pending (the bot may have restarted since).",
+    tellNoHop: (room) =>
+      `📨 Did not pass this on to ${room} — a message that arrived from another room can't be relayed onward. `
+      + "That one-hop rule is what keeps two rooms from talking to each other forever.",
     testFallbackDisabled: "⚠️ No fallback is enabled. Set `\"codexFallback\": true` (recommended) or `\"ollamaFallback\": true` in config.json.",
     testFallbackFail: (m) => `⚠️ Fallback test failed: ${m}`,
     ollamaDisabled: "⚠️ Ollama mode is not enabled. Set `\"ollamaFallback\": true` in config.json.",
@@ -411,6 +440,7 @@ const STR = {
       "• /sessions — 이 프로젝트의 지난 세션 목록 · 골라서 이어가기\n" +
       "• /name — 지금 세션에 이름 붙이기 · /sessions 에서 바로 찾기\n" +
       "• /jobs — 답장 후에도 살아 있는 백그라운드 작업 · 끝나면 먼저 알려줌\n" +
+      "• /tell <방> <메시지> — 이 봇이 맡은 다른 방으로 메시지 넘기기 · /tell 만 보내면 방 목록\n" +
       "• /compact — 컨텍스트 압축 (세션 유지, 공간 확보)\n" +
       "• /plan <요청> — 계획만 세우기 (편집 없음) → 승인/취소로 실제 실행\n" +
       "• /plan on|off — 끌 때까지 이 방을 plan 모드로 고정\n" +
@@ -624,6 +654,31 @@ const STR = {
       "📐 승인 대기 중이던 계획은 만료됐습니다 — 압축하면 세션이 새로 시작됩니다. " +
       "필요하면 다시 보내세요.",
     planProviderUnsupported: "/plan 승인 흐름은 현재 provider=claude에서만 사용할 수 있습니다.",
+    tellOff: "방 사이 전달이 꺼져 있습니다 (config 의 `roomRelay: false`).",
+    tellNoRooms:
+      "📨 넘길 만한 다른 방이 아직 없습니다. 이 봇은 한 번이라도 대화한 방만 압니다 — "
+      + "그 방에서 아무 메시지나 한 번 보내면 목록에 뜹니다.",
+    tellList: (rooms) =>
+      `📨 이 봇이 아는 방:\n\n${rooms}\n\n`
+      + "`/tell <방> <메시지>` — 방은 위 번호나 이름의 일부만 적어도 됩니다.\n"
+      + "그 방의 세션으로 실행되고, 답도 그 방에 남습니다.",
+    tellUsage: "사용법: `/tell <방> <메시지>` — `/tell` 만 보내면 방 목록이 나옵니다.",
+    tellUnknownRoom: (rooms) => `📨 해당하는 방이 없습니다. 이 봇이 아는 방:\n\n${rooms}`,
+    tellAmbiguous: (rooms) =>
+      `📨 여러 방이 걸립니다:\n\n${rooms}\n\n번호를 쓰거나 이름을 더 길게 적어주세요.`,
+    tellSelf: "📨 지금 이 방입니다. 여기서 그냥 말하면 됩니다.",
+    tellMuted: (room) => `📨 ${room} 은(는) 뮤트 상태입니다 (\`/*\`). 보내지 않았습니다 — 그 방에서 \`*/\` 로 먼저 푸세요.`,
+    tellSent: (room) => `📨 ${room} 에 넘겼습니다. 답은 그 방에 남습니다.`,
+    tellIncoming: (room) => `📨 ${room} 에서 온 메시지 — 여기서 실행합니다:`,
+    tellAsk: (room, body) => `📨 ${room} 에서 이걸 넘기려고 합니다:\n\n${body}\n\n여기서 실행할까요?`,
+    tellAskSent: (room) => `📨 ${room} 에 전달을 요청했습니다. 그 방에서 승인하면 실행됩니다.`,
+    tellApprove: "✅ 실행",
+    tellReject: "❌ 무시",
+    tellRejected: "❌ 무시했습니다. 아무것도 실행하지 않았습니다.",
+    tellExpired: "그 전달 요청은 더 이상 대기 중이 아닙니다 (그 사이 봇이 재시작됐을 수 있습니다).",
+    tellNoHop: (room) =>
+      `📨 ${room} 으로는 넘기지 않았습니다 — 다른 방에서 전달받은 메시지는 다시 전달할 수 없습니다. `
+      + "이 한 홉 규칙이 두 방이 서로 영원히 대화하는 걸 막습니다.",
     contextTooLong: "⚠️ 프롬프트가 너무 깁니다. `/compact` 로 컨텍스트를 압축하거나 `/new` 로 새 세션을 시작하세요.",
     testFallbackDisabled: "⚠️ 폴백이 비활성화 상태입니다. config.json에 `\"codexFallback\": true`(권장) 또는 `\"ollamaFallback\": true` 를 추가하세요.",
     testFallbackFail: (m) => `⚠️ 폴백 테스트 실패: ${m}`,
@@ -895,6 +950,7 @@ const COMMANDS = {
     { command: "sessions", description: "List past sessions · pick one to carry on from" },
     { command: "name", description: "Name the current session" },
     { command: "jobs", description: "Background jobs still running (survive replies)" },
+    { command: "tell", description: "Hand a message to another room this bot runs · lists rooms if used alone" },
     { command: "compact", description: "Compress context to free up space (keeps session)" },
     { command: "plan", description: "Plan only (no edits) · on|off to pin plan mode to this room" },
     { command: "ollama", description: "Toggle Ollama chat mode (bypass Claude, use local LLM)" },
@@ -919,6 +975,7 @@ const COMMANDS = {
     { command: "sessions", description: "지난 세션 목록 · 골라서 이어가기" },
     { command: "name", description: "지금 세션에 이름 붙이기" },
     { command: "jobs", description: "백그라운드 작업 목록 (답장 후에도 살아 있는 것)" },
+    { command: "tell", description: "이 봇이 맡은 다른 방으로 메시지 넘기기 · 인자 없으면 방 목록" },
     { command: "compact", description: "컨텍스트 압축 (세션 유지, 공간 확보)" },
     { command: "plan", description: "계획만 세우기 (편집 없음) · on|off 로 이 방에 고정" },
     { command: "ollama", description: "Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM)" },
@@ -1500,7 +1557,9 @@ function extractOutboxImages(text) {
 // 에이전트 답변을 사용자에게 전달한다. 이미지 마커가 있으면 텍스트(마커 제거)를 먼저,
 // 이어서 사진을 보낸다. 마커가 없으면 기존 send() 와 완전히 동일하게 동작한다.
 async function deliver(chatId, text, opts = {}) {
-  const { text: clean, images } = extractOutboxImages(text);
+  // 옆방 전달 마커를 먼저 떼고 이미지 마커를 뗀다 — 둘 다 사용자에게 보이면 안 되는 지시문이다.
+  const { text: relayClean, tells } = extractRelayTells(text);
+  const { text: clean, images } = extractOutboxImages(relayClean);
   let lastId = null;
   // 텍스트가 남아 있거나(정상) 보낼 이미지가 없으면 텍스트를 보낸다.
   // 이미지만 있고 본문이 빈 경우엔 "(empty response)" 버블을 만들지 않도록 텍스트 전송을 건너뛴다.
@@ -1511,6 +1570,15 @@ async function deliver(chatId, text, opts = {}) {
       if (!r?.ok) console.error(`sendPhoto failed (${img.name}):`, r?.description);
     } catch (e) {
       console.error(`sendPhoto error (${img.name}):`, e.message);
+    }
+  }
+  // 전달은 답을 다 보낸 뒤에 건다 — 대상 방에 물음이 먼저 뜨고 정작 이 방의 답이 나중에 오면
+  // 무슨 말에 딸린 전달인지 알 수 없다. opts.relayed 면 여기서 끊긴다(홉 1).
+  for (const tell of tells) {
+    try {
+      await offerRelay(chatId, tell, opts.relayed);
+    } catch (e) {
+      console.error(`Relay error (${tell.token}):`, e.message);
     }
   }
   return lastId;
@@ -1550,6 +1618,138 @@ function jobInstruction() {
     + `Use a short bare <name> (letters, digits, dash) — same name for both files, no subfolders. `
     + `The bot watches these records and messages this chat when the job exits, so tell the user the job name `
     + `and that they will be notified. They can also check with /jobs.`;
+}
+
+// ── 방 사이 전달 (/tell) ──────────────────────────────────────────────────
+// 방마다 세션이 독립이라(0.4.3) 옆방이 알아낸 걸 가져올 통로가 없었다. 여기서 메시지 하나를 넘긴다.
+// 사람이 친 `/tell` 은 바로 실행하고, 에이전트가 마커로 부른 건 받는 방에서 승인을 받는다 —
+// 모델이 스스로 다른 방의 토큰을 쓰기 시작하는 자리라서다. → docs/design/room-relay.md
+//
+// 이 봇이 아는 방 = state 에 이름이 적혔고(= 한 번은 대화했고) 화이트리스트 안에 있는 방.
+// 이름은 목록·지목에 쓰는 유일한 표식이라, 이름이 없는 방은 아예 후보에 넣지 않는다.
+function knownRooms() {
+  return Object.entries(state.sessions || {})
+    .filter(([room, b]) => b?.title && allowedIds.includes(String(baseChatId(room))))
+    .map(([room, b]) => ({ room, title: b.title }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+}
+const roomLabel = (room) => state.sessions?.[String(room)]?.title || String(room);
+// 목록은 번호로 지목할 수 있어야 한다 — 폰에서 `큐브기획방 / 마케팅` 을 치게 할 수는 없다.
+// 돌고 있는 방에는 ⏳ 를 붙인다(넘겨도 그 방 대기열에 쌓일 뿐이라 막지는 않는다).
+const roomLines = (rooms) =>
+  rooms
+    .map((r, i) => `${i + 1}. ${r.title}${chatRuntime.get(String(r.room))?.busy ? " ⏳" : ""}`)
+    .join("\n");
+
+// 지목 문자열 → 방. 방 키 그대로 · 목록 번호 · 이름의 일부 순으로 본다.
+// 방 키는 6자리 이상이거나 음수(그룹)라 3자리 이하 번호와 겹치지 않는다.
+function resolveRoom(token, rooms) {
+  const exact = rooms.find((r) => r.room === token);
+  if (exact) return { room: exact };
+  if (/^\d{1,3}$/.test(token)) {
+    const n = Number(token);
+    if (n >= 1 && n <= rooms.length) return { room: rooms[n - 1] };
+  }
+  const needle = token.toLowerCase();
+  const hits = rooms.filter((r) => r.title.toLowerCase().includes(needle));
+  if (hits.length === 1) return { room: hits[0] };
+  if (hits.length > 1) return { ambiguous: hits };
+  return {};
+}
+
+// 전달된 프롬프트의 머리말. 이게 없으면 받는 세션은 사용자가 한 말로 착각한다.
+// 맨 앞이 `[` 라 본문이 `/` 로 시작해도 handle() 이 명령으로 해석하지 않는다.
+const relayPrompt = (from, text) =>
+  `[Relayed from: ${roomLabel(from)} — another room of this bot, passed on by the person using it]\n`
+  + `Answer here, in this room. This is not the user typing to you directly, and you cannot pass it on again.\n\n`
+  + text;
+
+// 대상 방에서 실행한다. 합성 메시지를 handle() 에 넣을 뿐이라 큐·busy 락·provider·plan 고정은
+// 전부 그 방 것을 그대로 따른다. `_drained` 는 병합 창에 다시 붙잡히지 않게 하는 표시.
+async function runRelay(from, to, text) {
+  const target = tgTarget(to);
+  const msg = {
+    chat: { id: target.chat_id },
+    text: relayPrompt(from, text),
+    _drained: true,
+    _relay: String(from),
+  };
+  if (target.message_thread_id !== undefined) {
+    msg.is_topic_message = true;
+    msg.message_thread_id = target.message_thread_id;
+  }
+  await send(to, t(BOT_LANG, "tellIncoming", roomLabel(from)) + `\n\n${text}`);
+  await handle(msg);
+}
+
+// 에이전트가 부른 전달은 받는 방에서 승인을 받는다. 계획 승인과 같은 성질이라 메모리에만 둔다 —
+// 재시작하면 사라지고, 그 뒤에 눌러도 만료 안내가 나간다.
+const pendingTells = new Map(); // id → { from, to, text }
+const PENDING_TELL_MAX = 20;
+let tellSeq = 0;
+async function askRelay(from, to, text, l) {
+  const id = String(++tellSeq);
+  pendingTells.set(id, { from, to, text });
+  if (pendingTells.size > PENDING_TELL_MAX) pendingTells.delete(pendingTells.keys().next().value);
+  await send(to, t(BOT_LANG, "tellAsk", roomLabel(from), text), {
+    replyMarkup: {
+      inline_keyboard: [[
+        { text: t(BOT_LANG, "tellApprove"), callback_data: `tl:y:${id}` },
+        { text: t(BOT_LANG, "tellReject"), callback_data: `tl:n:${id}` },
+      ]],
+    },
+  });
+  await send(from, t(l, "tellAskSent", roomLabel(to)));
+}
+
+// 답변 텍스트에서 [[ctb-tell: 방 | 메시지]] 마커를 뽑아내고, 마커는 텍스트에서 제거한다.
+const TELL_MARKER = /\[\[ctb-tell:\s*([^\]|]+?)\s*\|\s*([^\]]+?)\s*\]\]/g;
+function extractRelayTells(text) {
+  const tells = [];
+  if (!ROOM_RELAY || !text || !text.includes("[[ctb-tell:")) return { text: text || "", tells };
+  const clean = String(text)
+    .replace(TELL_MARKER, (_m, room, body) => {
+      const token = String(room).trim();
+      const msg = String(body).trim().slice(0, 3000);
+      if (token && msg) tells.push({ token, text: msg });
+      return ""; // 유효하든 아니든 마커 자체는 사용자에게 노출하지 않는다
+    })
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { text: clean, tells };
+}
+
+// 마커 하나를 처리한다. 전달받아 돈 턴(relayed)이면 여기서 끊는다 — 홉은 1 이다.
+async function offerRelay(from, tell, relayed) {
+  const rooms = knownRooms().filter((r) => r.room !== String(from));
+  const hit = rooms.length ? resolveRoom(tell.token, rooms) : {};
+  if (!hit.room) {
+    await send(from, rooms.length ? t(BOT_LANG, "tellUnknownRoom", roomLines(rooms)) : t(BOT_LANG, "tellNoRooms"));
+    return;
+  }
+  if (relayed) {
+    await send(from, t(BOT_LANG, "tellNoHop", hit.room.title));
+    return;
+  }
+  if (state.sessions?.[hit.room.room]?.muted) {
+    await send(from, t(BOT_LANG, "tellMuted", hit.room.title));
+    return;
+  }
+  await askRelay(from, hit.room.room, tell.text, BOT_LANG);
+}
+
+// 에이전트에게 옆방에 메시지 넘기는 법을 알려주는 시스템 프롬프트 조각.
+// 넘길 방이 실제로 있을 때만 붙인다 — 방이 하나뿐인 봇은 이 토큰을 내지 않는다.
+function tellInstruction(chatId) {
+  const rooms = knownRooms().filter((r) => r.room !== String(chatId));
+  if (!rooms.length) return null;
+  return `Other rooms this same bot runs, which you can hand a message to: ${rooms.map((r) => `"${r.title}"`).join(", ")}.\n`
+    + `To hand one over, add a line at the very END of your reply in this exact form:\n`
+    + `[[ctb-tell: ROOM | MESSAGE]]\n`
+    + `ROOM is any distinctive part of the room name. The marker line is stripped from your visible reply, `
+    + `someone in that room has to approve before it runs, it runs there with that room's own session, and the `
+    + `answer stays there — you will not get a reply back. Only do this when the user asks you to pass something `
+    + `to another room.`;
 }
 
 // ── Claude 에러 분류 ──────────────────────────────────────────────────────
@@ -1660,7 +1860,9 @@ function runClaude(prompt, sessionId, opts = {}) {
       : null;
     const imageHint = IMAGE_SEND ? imageSendInstruction() : null;
     const jobHint = JOBS ? jobInstruction() : null;
-    const appendSys = [memoryBlock, handoffBlock, cfg.persona, brevity, modelHint, imageHint, jobHint].filter(Boolean).join("\n\n");
+    // 넘길 방이 없으면 null 이라 방 하나짜리 봇은 이 토큰을 내지 않는다.
+    const tellHint = ROOM_RELAY ? tellInstruction(opts.chatId) : null;
+    const appendSys = [memoryBlock, handoffBlock, cfg.persona, brevity, modelHint, imageHint, jobHint, tellHint].filter(Boolean).join("\n\n");
     if (appendSys) args.push("--append-system-prompt", appendSys);
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
@@ -1761,7 +1963,8 @@ function runCodex(prompt, lang = "en", opts = {}) {
       const mem = loadMemory();
       const context = resumeSessionId
         ? (mem ? `## RULES (must follow before anything else)\n${mem}` : "")
-        : [mem, cfg.persona, cfg.appendSystemPrompt, IMAGE_SEND ? imageSendInstruction() : null, JOBS ? jobInstruction() : null].filter(Boolean).join("\n\n");
+        : [mem, cfg.persona, cfg.appendSystemPrompt, IMAGE_SEND ? imageSendInstruction() : null, JOBS ? jobInstruction() : null,
+           ROOM_RELAY ? tellInstruction(opts.chatId) : null].filter(Boolean).join("\n\n");
       if (context) codexPrompt = `Project instructions and persistent context:\n${context}\n\nUser request:\n${prompt}`;
     }
 
@@ -2557,6 +2760,51 @@ async function handleName(chatId, arg, l) {
   await send(chatId, t(l, "nameSet", names[id]));
 }
 
+// /tell <방> <메시지> — 이 봇이 맡은 다른 방으로 메시지 하나를 넘긴다. 사람이 직접 친 것이므로
+// 대상 방에 물어보지 않고 바로 실행한다(에이전트가 마커로 부르는 길만 승인을 받는다).
+// 인자 없이 부르면 방 목록. → docs/design/room-relay.md
+async function handleTell(chatId, arg, l) {
+  if (!ROOM_RELAY) {
+    await send(chatId, t(l, "tellOff"));
+    return;
+  }
+  const all = knownRooms();
+  const rooms = all.filter((r) => r.room !== String(chatId));
+  if (!rooms.length) {
+    await send(chatId, t(l, "tellNoRooms"));
+    return;
+  }
+  const sp = arg.search(/\s/);
+  const token = sp < 0 ? arg : arg.slice(0, sp);
+  const body = sp < 0 ? "" : arg.slice(sp + 1).trim();
+  if (!token) {
+    await send(chatId, t(l, "tellList", roomLines(rooms)));
+    return;
+  }
+  const hit = resolveRoom(token, rooms);
+  if (hit.ambiguous) {
+    await send(chatId, t(l, "tellAmbiguous", roomLines(hit.ambiguous)));
+    return;
+  }
+  if (!hit.room) {
+    // 자기 방 이름을 친 경우만은 "그런 방 없다"가 아니라 왜 없는지 알려준다 — 목록에서 뺀 쪽이다.
+    const self = resolveRoom(token, all);
+    await send(chatId, self.room?.room === String(chatId) ? t(l, "tellSelf") : t(l, "tellUnknownRoom", roomLines(rooms)));
+    return;
+  }
+  if (!body) {
+    await send(chatId, t(l, "tellUsage"));
+    return;
+  }
+  if (state.sessions?.[hit.room.room]?.muted) {
+    await send(chatId, t(l, "tellMuted", hit.room.title));
+    return;
+  }
+  await send(chatId, t(l, "tellSent", hit.room.title));
+  // 대상 방의 실행은 그 방 큐에서 알아서 돈다 — 여기서 기다리면 보낸 방이 그동안 묶인다.
+  runRelay(chatId, hit.room.room, body).catch((e) => console.error("Relay run error:", e.message));
+}
+
 // /newchat (= /newtopic) — 새 포럼 토픽을 만들고 거기서 새 세션으로 시작한다. 봇 API 로는 그룹 자체를
 // 만들 수 없어서(그룹 생성은 유저 계정 전용), "새 방"에 가장 가까운 게 주제(토픽)다. 슈퍼그룹에
 // 주제가 켜져 있고 봇에 '주제 관리' 권한이 있어야 한다 — 실패 사유는 텔레그램 설명을 그대로 보여준다.
@@ -2843,7 +3091,7 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started, planP
         const cRes = await runCodex(prompt, l, { trackChild: r, sessionId: getSid(chatId, "codex"), chatId });
         if (cRes.ok) {
           if (cRes.sessionId) { setSid(chatId, cRes.sessionId, "codex"); saveState(state); }
-          await deliver(chatId, cRes.text); return;
+          await deliver(chatId, cRes.text, { relayed: Boolean(msg?._relay) }); return;
         }
         console.error(cRes.text);
       } catch (e) {
@@ -2882,7 +3130,8 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started, planP
     if (!r.stopping) await send(chatId, errMsg);
   } else {
     const footer = `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`;
-    if (!r.stopping) await deliver(chatId, res.text + footer);
+    // 전달받아 돈 턴이면 그 답에 또 전달 마커가 있어도 넘기지 않는다 — 홉은 1 이다(deliver 가 끊는다).
+    if (!r.stopping) await deliver(chatId, res.text + footer, { relayed: Boolean(msg?._relay) });
     // 자동 컴팩션: 컨텍스트가 임계값을 넘으면 압축할지 물어본다. 예고 없이 압축이 돌면 대화
     // 맥락이 갑자기 요약본으로 바뀌어 흐름이 끊기므로, 기본은 확인을 받는 쪽이다.
     // config 의 autoCompactConfirm:false 로 예전처럼 묻지 않고 바로 압축하게 할 수 있다.
@@ -3017,6 +3266,12 @@ async function handleCallback(cq) {
   } else if (cq.data?.startsWith("ss:")) {
     const sep = cq.data.indexOf(":", 3);
     await handleSessions(chatId, cq.data.slice(sep + 1), l, cq.data.slice(3, sep), cq.message.message_id);
+  } else if (cq.data?.startsWith("tl:")) {
+    const pending = pendingTells.get(cq.data.slice(5));
+    pendingTells.delete(cq.data.slice(5));
+    if (!pending) await send(chatId, t(l, "tellExpired"));
+    else if (cq.data.startsWith("tl:n:")) await send(chatId, t(l, "tellRejected"));
+    else runRelay(pending.from, pending.to, pending.text).catch((e) => console.error("Relay run error:", e.message));
   } else if (cq.data === "local:kill") {
     await handleLocal(chatId, "kill", l);
   }
@@ -3175,6 +3430,10 @@ async function handle(msg) {
   }
   if (text === "/jobs") {
     await handleJobs(chatId, l);
+    return;
+  }
+  if (text === "/tell" || text.startsWith("/tell ")) {
+    await handleTell(chatId, text.slice(5).trim(), l);
     return;
   }
   if (text === "/autocompact" || text.startsWith("/autocompact ")) {
@@ -3547,6 +3806,8 @@ function drainQueue(chatId) {
     // 전부 승인 실행이어야 plan 고정을 건너뛴다. 사용자 입력이 섞였으면 그건 아직 승인 안 된
     // 요청이라 계획부터 세우는 게 맞다 — 승인 버튼을 다시 누르면 그때는 곧장 실행된다.
     _approvedPlan: group.every((item) => item.msg._approvedPlan) || undefined,
+    // 하나라도 옆방에서 전달된 거면 합쳐진 턴 전체를 전달로 본다 — 되전달을 막는 쪽이 안전하다.
+    _relay: group.find((item) => item.msg._relay)?.msg._relay,
     _drained: true,
   };
 }

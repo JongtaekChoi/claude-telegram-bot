@@ -274,6 +274,7 @@ Core commands:
 | `/sessions` | List this project's past sessions for the active provider and pick one to carry on from (🔒 held by another room, 💻 open in a terminal — both are blocked) |
 | `/name <name>` | Name the current session so it stands out in `/sessions` (`/name -` removes it) |
 | `/jobs` | Background jobs that outlive replies — ▶ running, ✅ finished |
+| `/tell [room] [message]` | Hand a message to another room this bot runs — it executes there, with that room's session. Sent bare, it lists the rooms |
 | `/plan <request>` | Produce a plan and wait for approval (Claude only) |
 | `/plan on` · `/plan off` | Pin plan mode to this room — every message plans first (Claude only) |
 | `/compact` | Compact the current context (Claude only) |
@@ -402,6 +403,7 @@ The only keys you need to start are `token`, `allowedChatId`, `projectDir`, `cla
 | `commands` | (optional) Custom `/commands` that run shell scripts — see [Custom commands](#custom-commands) |
 | `sendImages` | (optional) Let the agent send images back to the chat via `.ctb-outbox/` (default: `true`). Set to `false` to turn the whole feature off. |
 | `backgroundJobs` | (optional) Watch detached jobs registered in `.ctb-jobs/` and report them via `/jobs` (default: `true`). Set to `false` to turn the whole feature off. |
+| `roomRelay` | (optional) Let `/tell` and the agent hand a message to another room this bot runs (default: `true`). Set to `false` to turn the whole feature off. |
 | `codexFallback` | (optional) `true` to enable Codex as the preferred fallback when Claude is rate-limited or out of credits |
 | `codexBin` | (optional) Path to the `codex` binary. Defaults to `"codex"` on `PATH`; use an absolute path for launchd |
 | `codexModel` | (optional) Codex model passed with `--model`; `/model` shows the models available to the installed Codex CLI as buttons. Empty/default lets the CLI choose and is safest. |
@@ -511,6 +513,18 @@ your launchd plist points them.
   Because the bot doesn't own them, `/restart` doesn't kill them, and the watcher picks them back up on
   boot. `/jobs` lists them; the same records are produced whether the job was started from Telegram or
   from a local `ctb` session. Disable with `"backgroundJobs": false`.
+- **Handing a message to another room**: rooms hold separate sessions, so what one room worked out is
+  invisible to the next. `/tell <room> <message>` pushes one message across — `/tell` on its own lists the
+  rooms this bot knows (any room it has already talked in), and the room can be given as its number in that
+  list or any distinctive part of its name (topic names like `Cube / Marketing` contain spaces, so a
+  fragment is usually what you want). It runs in the target room under *that* room's session, provider,
+  model, and pinned plan mode, queues if the room is busy, and the answer stays there — nothing is echoed
+  back. The agent can hand one over too, by ending its reply with `[[ctb-tell: room | message]]`; that path
+  asks in the target room and waits for ✅ before running, because it is the point where the model starts
+  spending another room's tokens. A message that arrived from another room can never be relayed onward
+  (one hop), which together with that approval means no relay chain runs without a person in it. Muted
+  rooms (`/*`) are never targeted. Disable with `"roomRelay": false`.
+  Design: [Room-to-room relay](docs/design/room-relay.md).
 - **Sessions**: Claude and Codex keep separate session IDs, so switching providers preserves both
   conversations. `/new` resets only the active provider's session.
 - **Per-room sessions and settings**: your DM, each group, and each forum topic hold independent Claude/Codex sessions plus provider and model overrides (`state.sessions[roomKey]`). Switching `/provider` or `/model` in one room does not change another room. `/provider default` and `/model default` clear only that room's override and return it to the config default.

@@ -12,8 +12,9 @@
 
 ## 다음
 
-- [ ] **페르소나 봇 간 인박스 전달** — 봇마다 `projectDir` 가 달라 서로의 대기열·진행 상황을
-      못 본다. 한 봇에서 다른 봇 앞으로 메시지를 남기는 통로가 필요하다. 스펙 미확정.
+- [ ] **봇 사이 인박스 전달** — 같은 봇 안 방 사이는 `/tell` 로 끝났다. 다른 봇 프로세스는
+      `projectDir` 가 달라 서로를 못 보고, 텔레그램으로는 봇끼리 메시지가 닿지 않아 파일 인박스가
+      유일한 길이다. → [design/room-relay.md](design/room-relay.md) 의 "다음 단계"(결정 4가지)
 - [ ] **Claude ↔ Codex 방별 인수인계** — 설계 완료, 구현 전.
       → [design/provider-session-handoff.md](design/provider-session-handoff.md)
       (문서 끝의 "구현 전 확정할 결정" 5가지부터 정하고 시작한다)
@@ -23,6 +24,7 @@
 구현·커밋됐지만 실봇으로 확인하지 않은 것.
 
 - [ ] `/plan on` 고정 중 `/status` 표시와 `/plan off` 복귀 (0.4.13, `87406b3`)
+- [ ] `/tell` 방 사이 전달 — 목록·지목·전달 실행·에이전트 마커 승인·되전달 차단 (0.4.13)
 
 ## 나중
 
@@ -33,7 +35,7 @@
 - [ ] **Claude 가 만든 파일 전송 — 이미지 아닌 것** — 이미지는 `.ctb-outbox` + `[[ctb-image: …]]`
       마커로 이미 나간다. 로그·CSV·zip 같은 걸 `sendDocument` 로 보내는 통로가 없다.
 - [ ] **봇 간 공유 문서 (블랙보드)** — `.claude-bot/shared.md` 를 여러 페르소나 봇이 읽고 쓴다.
-      코드 없이 persona 프롬프트 컨벤션만으로 가능. 위 인박스 전달과 겹치는지 먼저 판단할 것.
+      코드 없이 persona 프롬프트 컨벤션만으로 가능. 위 봇 사이 인박스와 겹치는지 먼저 판단할 것.
 - [ ] **웹훅 모드** — `cfg.webhookUrl`, `node:http` 로 zero-dep 유지. 로컬 개발엔 폴링이 편하므로 설정으로 고른다.
 - [ ] **데모 GIF** — `ctb` → 텔레그램 세션 연속성. → [images/SHOTLIST.md](images/SHOTLIST.md)
 

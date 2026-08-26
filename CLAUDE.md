@@ -19,6 +19,7 @@
 
 - 그룹·방별 세션과 동시 실행: `docs/design/group-chat-multi-user.md`
 - Claude ↔ Codex 인수인계: `docs/design/provider-session-handoff.md`
+- 방 사이 메시지 전달(`/tell`): `docs/design/room-relay.md`
 
 ## 명령어를 바꿨으면 안내 문구도 같이 바꾼다
 문법(인자·옵션)을 손댔으면 그 명령을 설명하는 자리를 **전부** 찾아 고친다. 한 군데만 고치면
