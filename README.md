@@ -275,6 +275,7 @@ Core commands:
 | `/name <name>` | Name the current session so it stands out in `/sessions` (`/name -` removes it) |
 | `/jobs` | Background jobs that outlive replies — ▶ running, ✅ finished |
 | `/plan <request>` | Produce a plan and wait for approval (Claude only) |
+| `/plan on` · `/plan off` | Pin plan mode to this room — every message plans first (Claude only) |
 | `/compact` | Compact the current context (Claude only) |
 | `/stop [--reset]` | Stop the task; optionally restore its previous session ID |
 | `/local [kill]` | Show which room a local `ctb` session is holding, and end it from Telegram |
@@ -305,6 +306,15 @@ Core commands:
 > tells Claude to implement the approved plan; **Cancel** leaves the session untouched. This gives
 > you a review step before a `bypassPermissions` bot touches anything. The pending approval expires
 > if you start a new session with `/new` first.
+
+> **`/plan on`** pins that to the room: until you send `/plan off`, every message plans first and
+> comes back with the same approval buttons, so you stop having to remember the prefix. It is a
+> per-room setting stored alongside `provider`/`model`, so it survives a restart and one topic can
+> be pinned while another is not. Approving runs with the bot's normal `permissionMode` — approval
+> ignores the pin, otherwise an approved plan would just be planned again. Two things to know:
+> plan mode is Claude-only, so the pin does nothing while a room is on Codex (`/status` says so),
+> and while pinned the bot will **not** fall back to Codex on a Claude rate limit, since that would
+> quietly turn a planning request into one that edits files.
 
 > **`/stop`** kills the provider process running **in that room** and clears that room's queued
 > messages. Other rooms keep running untouched. Add `--reset` to also restore the session to the

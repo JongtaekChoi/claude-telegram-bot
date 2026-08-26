@@ -180,6 +180,7 @@ const STR = {
       "• /jobs — background jobs that outlive replies · you get a message when one ends\n" +
       "• /compact — compress context to free up space (keeps the session)\n" +
       "• /plan <request> — plan only (no edits), then approve/cancel to run for real\n" +
+      "• /plan on|off — pin plan mode to this room until you turn it off\n" +
       "• Codex fallback can run automatically when Claude hits a limit (if enabled)\n" +
       "• /ollama — toggle Ollama chat mode (bypass Claude, use local LLM)\n" +
       "• /stop — stop the current task · /stop --reset to also roll back the session\n" +
@@ -220,7 +221,24 @@ const STR = {
     autoCompactNowBtn: "🗜️ Compact now",
     autoCompactLaterBtn: "Later",
     autoCompactLater: (n) => `OK — I won't ask again until context passes ${fmtTokens(n)}.`,
-    planUsage: "Usage: `/plan <request>` — e.g. `/plan add input validation to the signup form`",
+    planUsage:
+      "Usage: `/plan <request>` — e.g. `/plan add input validation to the signup form`\n" +
+      "`/plan on` · `/plan off` — keep this room in plan mode until you turn it off.",
+    planLockStatus: (on) =>
+      on
+        ? "📐 Plan mode is *pinned* in this room — every message plans first, and nothing is edited until you approve."
+        : "📐 Plan mode is off in this room. Messages run normally.",
+    planLockOn:
+      "📐 Plan mode pinned. Every message in this room now plans first, and I'll ask before touching anything.\n" +
+      "`/plan off` to unpin.",
+    planLockOff: "📐 Plan mode unpinned. Messages run normally again.",
+    planLockOnBtn: "📐 Pin plan mode",
+    planLockOffBtn: "Unpin",
+    planLockAsk: "Proceed with this plan?",
+    planLockCodexWarn:
+      "\n\n⚠️ Plan mode stays pinned but does *not* apply to Codex — this room will edit files normally until you switch back to claude.",
+    planLockNoFallback:
+      "⚠️ Skipped the Codex fallback because plan mode is pinned here — Codex would edit files instead of planning. `/plan off` to allow it.",
     planApprove: "✅ Proceed",
     planCancel: "❌ Cancel",
     planCancelled: "❌ Plan cancelled. No changes were made.",
@@ -392,6 +410,7 @@ const STR = {
       "• /jobs — 답장 후에도 살아 있는 백그라운드 작업 · 끝나면 먼저 알려줌\n" +
       "• /compact — 컨텍스트 압축 (세션 유지, 공간 확보)\n" +
       "• /plan <요청> — 계획만 세우기 (편집 없음) → 승인/취소로 실제 실행\n" +
+      "• /plan on|off — 끌 때까지 이 방을 plan 모드로 고정\n" +
       "• Codex 폴백 활성화 시 Claude 한도 도달 때 자동으로 대신 실행\n" +
       "• /ollama — Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM 사용)\n" +
       "• /stop — 진행 중인 작업 중단 · /stop --reset 으로 세션도 되돌리기\n" +
@@ -576,7 +595,24 @@ const STR = {
     autoCompactNowBtn: "🗜️ 지금 압축",
     autoCompactLaterBtn: "나중에",
     autoCompactLater: (n) => `알겠습니다 — 컨텍스트가 ${fmtTokens(n, "ko")}을 넘기 전까지 다시 묻지 않습니다.`,
-    planUsage: "사용법: `/plan <요청>` — 예: `/plan 회원가입 폼에 입력값 검증 추가해줘`",
+    planUsage:
+      "사용법: `/plan <요청>` — 예: `/plan 회원가입 폼에 입력값 검증 추가해줘`\n" +
+      "`/plan on` · `/plan off` — 끌 때까지 이 방을 plan 모드로 고정합니다.",
+    planLockStatus: (on) =>
+      on
+        ? "📐 이 방은 plan 모드로 *고정*되어 있습니다 — 모든 메시지가 계획부터 세우고, 승인 전에는 아무것도 건드리지 않습니다."
+        : "📐 이 방의 plan 고정은 꺼져 있습니다. 메시지가 평소대로 실행됩니다.",
+    planLockOn:
+      "📐 plan 모드를 고정했습니다. 이제 이 방의 모든 메시지가 계획부터 세우고, 실행 전에 물어봅니다.\n" +
+      "해제는 `/plan off`.",
+    planLockOff: "📐 plan 고정을 해제했습니다. 메시지가 평소대로 실행됩니다.",
+    planLockOnBtn: "📐 plan 고정",
+    planLockOffBtn: "해제",
+    planLockAsk: "이 계획대로 진행할까요?",
+    planLockCodexWarn:
+      "\n\n⚠️ plan 고정은 유지되지만 Codex 에는 *적용되지 않습니다* — claude 로 돌아오기 전까지 이 방은 평소대로 파일을 수정합니다.",
+    planLockNoFallback:
+      "⚠️ plan 고정 중이라 Codex 폴백을 건너뛰었습니다 — Codex 는 계획 대신 파일을 수정합니다. 허용하려면 `/plan off`.",
     planApprove: "✅ 진행",
     planCancel: "❌ 취소",
     planCancelled: "❌ 계획을 취소했습니다. 아무 변경도 없습니다.",
@@ -854,7 +890,7 @@ const COMMANDS = {
     { command: "name", description: "Name the current session" },
     { command: "jobs", description: "Background jobs still running (survive replies)" },
     { command: "compact", description: "Compress context to free up space (keeps session)" },
-    { command: "plan", description: "Plan only (no edits), then approve/cancel to run for real" },
+    { command: "plan", description: "Plan only (no edits) · on|off to pin plan mode to this room" },
     { command: "ollama", description: "Toggle Ollama chat mode (bypass Claude, use local LLM)" },
     { command: "stop", description: "Stop the current task (--reset to roll back session)" },
     { command: "local", description: "Which room a local ctb session holds · end it" },
@@ -878,7 +914,7 @@ const COMMANDS = {
     { command: "name", description: "지금 세션에 이름 붙이기" },
     { command: "jobs", description: "백그라운드 작업 목록 (답장 후에도 살아 있는 것)" },
     { command: "compact", description: "컨텍스트 압축 (세션 유지, 공간 확보)" },
-    { command: "plan", description: "계획만 세우기 (편집 없음) → 승인/취소로 실제 실행" },
+    { command: "plan", description: "계획만 세우기 (편집 없음) · on|off 로 이 방에 고정" },
     { command: "ollama", description: "Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM)" },
     { command: "stop", description: "작업 중단 (--reset 으로 세션 되돌리기)" },
     { command: "local", description: "로컬 ctb 세션이 잡은 방 확인·종료" },
@@ -1207,6 +1243,10 @@ function currentModel(chatId, provider = currentProvider(chatId)) {
   const key = provider === "codex" ? "codexModel" : "model";
   return chatId !== undefined ? chatBucket(chatId)[key] : undefined;
 }
+
+// plan 모드 고정 — 켜 두면 이 방의 모든 메시지가 `--permission-mode plan` 으로 돈다.
+// provider·model 과 같은 자리에 두는 방 설정이라 재시작 후에도 유지된다.
+const planLocked = (chatId) => Boolean(chatId !== undefined && chatBucket(chatId).planLock);
 
 // ── 텔레그램 헬퍼 ─────────────────────────────────────────────────────────
 let botUsername = ""; // 시작 시 getMe 로 채움
@@ -2307,8 +2347,33 @@ async function handleProvider(chatId, arg, l) {
   bucket.provider = arg;
   state.ollamaMode = false;
   saveState(state);
-  await send(chatId, t(l, "providerSet", arg));
+  // 고정은 지우지 않는다 — provider 와 같은 방 설정이라 조용히 사라지면 그게 더 놀랍다. 다만
+  // Codex 에는 걸리지 않으므로, 파일이 다시 수정된다는 걸 전환하는 자리에서 크게 알린다.
+  const codexWarn = arg === "codex" && planLocked(chatId) ? t(l, "planLockCodexWarn") : "";
+  await send(chatId, t(l, "providerSet", arg) + codexWarn);
   resumeQueueAfterProviderSwitch(chatId, previousProvider);
+}
+
+// plan 고정 확인·전환 — /plan on|off 와 버튼(`pl:*`)이 모두 여기로 온다.
+// 인자 없는 `/plan` 은 현재 상태 + 전환 버튼. 켜 두면 이 방의 모든 메시지가 계획부터 세운다.
+async function handlePlanLock(chatId, arg, l) {
+  if (!arg) {
+    const on = planLocked(chatId);
+    await sendMenu(chatId, t(l, "planLockStatus", on), {
+      inline_keyboard: [[
+        on
+          ? { text: t(l, "planLockOffBtn"), callback_data: "pl:off" }
+          : { text: t(l, "planLockOnBtn"), callback_data: "pl:on" },
+      ]],
+    });
+    return;
+  }
+  const on = arg === "on";
+  chatBucket(chatId).planLock = on || undefined;
+  saveState(state);
+  // Codex 방에서 켜면 아무 일도 일어나지 않는다 — 켜졌다고만 알리면 보호받는 줄 착각한다.
+  const codexWarn = on && currentProvider(chatId) === "codex" ? t(l, "planLockCodexWarn") : "";
+  await send(chatId, t(l, on ? "planLockOn" : "planLockOff") + codexWarn);
 }
 
 // 모델 확인·전환 — /model 과 버튼(`md:*`)이 모두 여기로 온다.
@@ -2736,8 +2801,13 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
   const r = rt(chatId);
   const secs = Math.round((Date.now() - started) / 1000);
   if (!res.ok) {
+    // plan 고정 중에는 폴백하지 않는다. Codex 에는 plan 모드가 없어서, 계획만 받으려던 요청이
+    // 한도에 걸렸다는 이유로 파일을 고치는 실행으로 바뀐다 — 권한이 조용히 넓어지는 유일한 자리다.
+    if (planLocked(chatId) && currentProvider(chatId) === "claude" && cfg.codexFallback && res.canFallback && !r.stopping) {
+      await send(chatId, t(l, "planLockNoFallback"));
+    }
     // Codex 폴백: 레이트리밋·크레딧 에러이고 codexFallback 켜져 있으면 reserve 전에 Codex로 재시도
-    if (currentProvider(chatId) === "claude" && cfg.codexFallback && res.canFallback && !r.stopping) {
+    else if (currentProvider(chatId) === "claude" && cfg.codexFallback && res.canFallback && !r.stopping) {
       try {
         const cRes = await runCodex(prompt, l, { trackChild: r, sessionId: getSid(chatId, "codex"), chatId });
         if (cRes.ok) {
@@ -2804,7 +2874,9 @@ async function runApprovedPlan(chatId, l) {
   }
   const r = rt(chatId);
   if (r.busy) {
-    r.queue.push({ msg: { chat: { id: chatId }, text: PLAN_PROCEED_PROMPT }, receivedAt: Date.now() });
+    // `_approvedPlan` 이 없으면 이 메시지가 나중에 handle() 로 드레인될 때 plan 고정에 다시 걸려
+    // 승인 → 또 계획 → 승인 … 으로 영영 실행되지 않는다.
+    r.queue.push({ msg: { chat: { id: chatId }, text: PLAN_PROCEED_PROMPT, _approvedPlan: true }, receivedAt: Date.now() });
     await send(chatId, t(l, "queued", r.queue.length));
     return;
   }
@@ -2822,6 +2894,8 @@ async function runApprovedPlan(chatId, l) {
   try {
     await tg("sendChatAction", { ...typingTarget(chatId), action: "typing" });
     r.prevSession = { chatId: String(chatId), provider: "claude", sessionId: getSid(chatId, "claude") };
+    // permissionMode 를 넘기지 않아 cfg.permissionMode 로 돈다 — 승인 실행은 plan 고정을 무시해야
+    // 한다. 여기서 고정을 따르면 승인한 계획을 또 계획하고 앉아 있게 된다.
     const res = await runClaude(PLAN_PROCEED_PROMPT, pending.sessionId, { modelHint: true, trackChild: r, injectMemory: true, chatId });
     if (res.sessionId) {
       setSid(chatId, res.sessionId, "claude");
@@ -2895,6 +2969,8 @@ async function handleCallback(cq) {
     await send(chatId, t(l, "autoCompactLater", state.autoCompactSnooze));
   } else if (cq.data?.startsWith("pv:")) {
     await handleProvider(chatId, cq.data.slice(3), l);
+  } else if (cq.data?.startsWith("pl:")) {
+    await handlePlanLock(chatId, cq.data.slice(3), l);
   } else if (cq.data?.startsWith("md:")) {
     const sep = cq.data.indexOf(":", 3);
     await handleModel(chatId, cq.data.slice(sep + 1), l, cq.data.slice(3, sep));
@@ -3023,13 +3099,26 @@ async function handle(msg) {
         hasSession: Boolean(getSid(chatId)),
         jobs: schedule.length,
         projectDir: cfg.projectDir,
-        permissionMode: cfg.permissionMode || "acceptEdits",
+        // plan 고정 중이면 지금 실제로 쓰이는 값이 plan 이다 — 설정값만 보여주면 왜 파일이
+        // 안 바뀌는지 알 길이 없다. Codex 방에서는 고정이 놀고 있다는 것도 여기서 드러나야 한다.
+        permissionMode: !planLocked(chatId)
+          ? cfg.permissionMode || "acceptEdits"
+          : currentProvider(chatId) === "claude"
+            ? `plan 🔒 → ${cfg.permissionMode || "acceptEdits"}`
+            : `${cfg.permissionMode || "acceptEdits"} (plan 🔒 ${l === "ko" ? "Codex 미적용" : "not applied to Codex"})`,
       }),
     );
     return;
   }
   if (text === "/provider" || text.startsWith("/provider ")) {
     await handleProvider(chatId, text.slice(9).trim().toLowerCase(), l);
+    return;
+  }
+  // `/plan on|off` 와 인자 없는 `/plan` 은 방 설정이라 여기서 즉시 답한다. 실제 요청이 붙은
+  // `/plan <요청>` 만 아래 실행 경로로 내려간다 — 그쪽은 세션을 돌려야 해서 busy 락이 필요하다.
+  const planArg = text === "/plan" ? "" : text.startsWith("/plan ") ? text.slice(5).trim().toLowerCase() : null;
+  if (planArg === "" || planArg === "on" || planArg === "off") {
+    await handlePlanLock(chatId, planArg, l);
     return;
   }
   if (text === "/model" || text.startsWith("/model ")) {
@@ -3270,10 +3359,11 @@ async function handle(msg) {
     await tg("sendChatAction", { ...typingTarget(chatId), action: "typing" });
     // /plan <요청> — permission-mode를 강제로 plan으로 실행해 편집 없이 계획만 받고,
     // 승인 버튼을 눌러야 실제 permissionMode로 이어서 실행 (runApprovedPlan).
-    if (text === "/plan" || text.startsWith("/plan ")) {
+    // 여기 오는 건 요청이 붙은 `/plan <요청>` 뿐이다 — 인자 없는 `/plan` 과 `on`/`off` 는
+    // 위 명령어 구간에서 handlePlanLock 이 이미 가져갔다.
+    if (text.startsWith("/plan ")) {
       if (currentProvider(chatId) !== "claude") { await send(chatId, t(l, "planProviderUnsupported")); return; }
       const planReq = text.slice(5).trim();
-      if (!planReq) { await send(chatId, t(l, "planUsage")); return; }
       r.prevSession = { chatId: String(chatId), provider: "claude", sessionId: getSid(chatId, "claude") };
       const res = await runClaude(planReq, getSid(chatId, "claude"), { permissionMode: "plan", modelHint: true, trackChild: r, injectMemory: true, chatId });
       if (res.sessionId) {
@@ -3341,6 +3431,9 @@ async function handle(msg) {
       return;
     }
     r.prevSession = { chatId: String(chatId), provider: currentProvider(chatId), sessionId: getSid(chatId) }; // /stop --reset 복원 대상 저장
+    // plan 고정 중이면 `/plan <요청>` 을 매번 붙인 것과 같게 돈다. Codex 에는 plan 이 없으므로
+    // provider 가 claude 일 때만 걸린다 — /provider 로 바꿔도 고정 자체는 남아 돌아오면 다시 적용된다.
+    const planMode = planLocked(chatId) && currentProvider(chatId) === "claude" && !msg._approvedPlan;
     const res = await runPrimary(prompt, {
       sessionId: getSid(chatId),
       lang: l,
@@ -3348,12 +3441,26 @@ async function handle(msg) {
       trackChild: r,
       injectMemory: true,
       chatId,
+      ...(planMode ? { permissionMode: "plan" } : {}),
     });
     if (res.sessionId) {
       setSid(chatId, res.sessionId);
       saveState(state);
     }
     await replyWithClaudeResult(chatId, l, prompt, msg, res, started);
+    // 계획 본문은 위에서 이미 나갔다 — 승인 버튼만 따로 한 줄 붙인다. 실패했거나 폴백된 답에는
+    // 승인할 계획이 없으므로 res.ok 일 때만이다. 버튼은 `/plan <요청>` 과 같은 콜백을 재사용한다.
+    if (planMode && res.ok) {
+      const messageId = await send(chatId, t(l, "planLockAsk"), {
+        replyMarkup: {
+          inline_keyboard: [[
+            { text: t(l, "planApprove"), callback_data: "plan:yes" },
+            { text: t(l, "planCancel"), callback_data: "plan:no" },
+          ]],
+        },
+      });
+      pendingPlans.set(chatId, { sessionId: getSid(chatId, "claude"), messageId });
+    }
   } catch (e) {
     if (!r.stopping) await send(chatId, t(l, "botError", e.message));
   } finally {
@@ -3396,6 +3503,9 @@ function drainQueue(chatId) {
     // 줄마다 발신자를 이미 표기했으니 buildMsgMeta의 단일 [From: ] 태그(마지막 발신자 기준)는 중복이라 생략
     _merged: groupChat || undefined,
     _mediaGroup: fileIds.length ? fileIds : undefined,
+    // 전부 승인 실행이어야 plan 고정을 건너뛴다. 사용자 입력이 섞였으면 그건 아직 승인 안 된
+    // 요청이라 계획부터 세우는 게 맞다 — 승인 버튼을 다시 누르면 그때는 곧장 실행된다.
+    _approvedPlan: group.every((item) => item.msg._approvedPlan) || undefined,
     _drained: true,
   };
 }
