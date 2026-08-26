@@ -243,6 +243,9 @@ const STR = {
     planCancel: "❌ Cancel",
     planCancelled: "❌ Plan cancelled. No changes were made.",
     planNoPending: "No pending plan to approve (it may have expired after /new). Send /plan again.",
+    planExpiredByCompact:
+      "📐 The plan that was waiting for approval expired — compacting starts a new session. " +
+      "Send it again if you still want it.",
     planProviderUnsupported: "/plan approval flow currently requires provider=claude.",
     testFallbackDisabled: "⚠️ No fallback is enabled. Set `\"codexFallback\": true` (recommended) or `\"ollamaFallback\": true` in config.json.",
     testFallbackFail: (m) => `⚠️ Fallback test failed: ${m}`,
@@ -617,6 +620,9 @@ const STR = {
     planCancel: "❌ 취소",
     planCancelled: "❌ 계획을 취소했습니다. 아무 변경도 없습니다.",
     planNoPending: "승인할 계획이 없습니다 (/new 이후 만료됐을 수 있음). /plan 을 다시 보내세요.",
+    planExpiredByCompact:
+      "📐 승인 대기 중이던 계획은 만료됐습니다 — 압축하면 세션이 새로 시작됩니다. " +
+      "필요하면 다시 보내세요.",
     planProviderUnsupported: "/plan 승인 흐름은 현재 provider=claude에서만 사용할 수 있습니다.",
     contextTooLong: "⚠️ 프롬프트가 너무 깁니다. `/compact` 로 컨텍스트를 압축하거나 `/new` 로 새 세션을 시작하세요.",
     testFallbackDisabled: "⚠️ 폴백이 비활성화 상태입니다. config.json에 `\"codexFallback\": true`(권장) 또는 `\"ollamaFallback\": true` 를 추가하세요.",
@@ -2263,9 +2269,24 @@ const AUTOCOMPACT_SNOOZE_RATIO = 1.25;
 // 어중간한 값이라 그대로 보여주면 정밀해 보이지만 어차피 추정치다 — k 단위로 반올림해서 보여준다.
 const roundTokens = (n) => Math.max(Math.round(n / 1000), 1) * 1000;
 
+// 승인 대기 때문에 미뤄둔 압축 물음을 꺼낸다 — 계획이 취소·만료돼 더는 무효화할 승인이 없을 때다.
+// 승인해서 실행된 경우는 그 실행이 끝나며 스스로 다시 판단하므로 여기서 부르지 않는다.
+async function flushCompactAsk(chatId, l) {
+  const r = rt(chatId);
+  const n = r.compactAsk;
+  if (!n) return;
+  r.compactAsk = 0;
+  if (currentProvider(chatId) !== "claude" || !getSid(chatId, "claude")) return;
+  // 미루기 전 자리는 handle() 안(busy=true)이라 doCompact 를 직접 불렀지만 여기는 락 밖이다.
+  if (cfg.autoCompactConfirm === false) await runCompact(chatId, l, "autoCompact");
+  else if (n > (state.autoCompactSnooze || 0)) await askAutoCompact(chatId, n, l);
+}
+
 // 실제 압축 — 락은 호출자가 잡는다. 자동 압축 트리거는 이미 handle() 안(busy=true)이라
 // 여기를 직접 부르고, 버튼·명령은 아래 runCompact() 를 거친다.
 async function doCompact(chatId, l, okKey) {
+  // 압축이 세션을 갈아치우고 나면 살아 있었는지 물을 수 없다 — 먼저 봐 둔다.
+  const hadPlan = planAwaitingApproval(chatId);
   try {
     const cr = await runClaude("/compact", getSid(chatId, "claude"), { chatId });
     if (cr.sessionId) setSid(chatId, cr.sessionId, "claude");
@@ -2273,8 +2294,14 @@ async function doCompact(chatId, l, okKey) {
     // 무한 반복이 되므로, 압축 직후 컨텍스트를 기준으로 다시 걸어둔다.
     state.autoCompactSnooze = cr.ctxTokens ? roundTokens(cr.ctxTokens * AUTOCOMPACT_SNOOZE_RATIO) : undefined;
     saveState(state);
-    if (cr.ok !== false) await send(chatId, t(l, okKey));
-    else await send(chatId, t(l, "compactFail", cr.text));
+    if (cr.ok !== false) {
+      await send(chatId, t(l, okKey));
+      // 압축은 세션을 갈아치워 떠 있던 승인 버튼을 무효로 만든다 — 조용히 사라지면 나중에 눌러 보고서야 안다.
+      if (hadPlan) {
+        pendingPlans.delete(chatId);
+        await send(chatId, t(l, "planExpiredByCompact"));
+      }
+    } else await send(chatId, t(l, "compactFail", cr.text));
   } catch (e) {
     await send(chatId, t(l, "compactFail", e.message));
   }
@@ -2746,12 +2773,12 @@ function buildMsgMeta(msg) {
 // 방(chat)별 실행 상태 — 방마다 세션이 독립이라 서로 다른 방은 동시에 실행한다.
 // busy·child·typing·prevSession·stopping·queue 를 방 단위로 들고, 한 방 안에서는 여전히 직렬화된다
 // (단일 머신이라도 CLI 프로세스는 방마다 하나씩 병렬 실행). 레이트리밋만 계정 단위라 전역.
-const chatRuntime = new Map(); // chatId → { busy, child, typing, prevSession, stopping, queue }
+const chatRuntime = new Map(); // chatId → { busy, child, typing, prevSession, stopping, queue, compactAsk }
 function rt(chatId) {
   const id = String(chatId);
   let r = chatRuntime.get(id);
   if (!r) {
-    r = { busy: false, child: null, typing: null, prevSession: null, stopping: false, queue: [] };
+    r = { busy: false, child: null, typing: null, prevSession: null, stopping: false, queue: [], compactAsk: 0 };
     chatRuntime.set(id, r);
   }
   return r;
@@ -2759,6 +2786,10 @@ function rt(chatId) {
 const CRON_KEY = "__cron__"; // 예약 작업 전용 실행 슬롯 (실제 chatId 와 겹치지 않음)
 const mediaGroups = new Map(); // media_group_id → { msgs, timer } — 미디어 그룹 수집 대기
 const pendingPlans = new Map(); // chatId → { sessionId, messageId } — /plan 승인 대기
+// 실행할 때마다 세션 ID 가 바뀌므로 그 뒤에 남은 승인은 눌러도 만료다(runApprovedPlan 이 같은 걸 본다).
+// 맵에 있는지가 아니라 아직 살아 있는지를 물어야 한다 — 죽은 승인 때문에 압축 물음을 미루면 영영 안 나온다.
+const planAwaitingApproval = (chatId) =>
+  pendingPlans.get(chatId)?.sessionId === getSid(chatId, "claude");
 const PLAN_PROCEED_PROMPT = "Proceed with the plan you just approved above. Implement it now.";
 let rateLimitUntil = null;  // 레이트 리밋 활성 시 리셋 Date — 이 시간까지 메시지를 큐에 쌓음
 let rateLimitTimer = null;  // 리셋 시간에 큐를 드레인하는 타이머
@@ -2797,7 +2828,7 @@ function resumeQueueAfterProviderSwitch(chatId, previousProvider) {
 }
 
 // runClaude 결과를 답장으로 변환 — 폴백/큐잉/자동 컴팩션 처리. handle()과 /plan 승인 실행이 공유.
-async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
+async function replyWithClaudeResult(chatId, l, prompt, msg, res, started, planPending) {
   const r = rt(chatId);
   const secs = Math.round((Date.now() - started) / 1000);
   if (!res.ok) {
@@ -2857,7 +2888,12 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started) {
     // config 의 autoCompactConfirm:false 로 예전처럼 묻지 않고 바로 압축하게 할 수 있다.
     const compactThreshold = state.autoCompactThreshold ?? cfg.autoCompactThreshold ?? 100000;
     if (currentProvider(chatId) === "claude" && compactThreshold > 0 && res.ctxTokens > compactThreshold && getSid(chatId, "claude") && !r.stopping) {
-      if (cfg.autoCompactConfirm === false) await doCompact(chatId, l, "autoCompact");
+      // 승인 버튼이 이미 떠 있거나 이 답 바로 뒤에 붙을 참이면 물음을 미룬다. 압축은 세션을
+      // 갈아치우므로 먼저 누르면 그 계획의 승인이 그 자리에서 만료된다(`planNoPending`) — 계획을
+      // 읽는 동안이 사람이 가장 오래 머무는 자리라 겹치기 쉽고, plan 을 고정해 두면 매 턴 그렇게 된다.
+      // 승인 대기가 등록되는 건 이 함수가 끝난 뒤라 맵만 봐서는 늦는다 — 부르는 쪽이 알려준다.
+      if (planPending || planAwaitingApproval(chatId)) r.compactAsk = res.ctxTokens;
+      else if (cfg.autoCompactConfirm === false) await doCompact(chatId, l, "autoCompact");
       else if (res.ctxTokens > (state.autoCompactSnooze || 0)) await askAutoCompact(chatId, res.ctxTokens, l);
     }
   }
@@ -2870,9 +2906,12 @@ async function runApprovedPlan(chatId, l) {
   // /new 등으로 세션이 바뀌었으면 이 계획은 더 이상 유효하지 않음
   if (!pending || pending.sessionId !== getSid(chatId, "claude")) {
     await send(chatId, t(l, "planNoPending"));
+    await flushCompactAsk(chatId, l);
     return;
   }
   const r = rt(chatId);
+  // 여기부터는 실행이 확정이다 — 끝나면서 replyWithClaudeResult 가 다시 판단하므로 미뤄둔 건 놓아준다.
+  r.compactAsk = 0;
   if (r.busy) {
     // `_approvedPlan` 이 없으면 이 메시지가 나중에 handle() 로 드레인될 때 plan 고정에 다시 걸려
     // 승인 → 또 계획 → 승인 … 으로 영영 실행되지 않는다.
@@ -2956,6 +2995,7 @@ async function handleCallback(cq) {
   } else if (cq.data === "plan:no") {
     pendingPlans.delete(chatId);
     await send(chatId, t(l, "planCancelled"));
+    await flushCompactAsk(chatId, l);
   } else if (cq.data?.startsWith("ac:")) {
     await handleAutoCompact(chatId, cq.data.slice(3), l);
   } else if (cq.data?.startsWith("mw:")) {
@@ -3209,6 +3249,7 @@ async function handle(msg) {
   if (text === "/new") {
     setSid(chatId, undefined); // 이 방의 현재 provider 세션만 초기화 (다른 방·다른 provider는 유지)
     state.autoCompactSnooze = undefined; // 컨텍스트가 비었으니 미뤄둔 것도 의미 없음
+    r.compactAsk = 0; // 승인 대기 때문에 미뤄둔 물음도 같이 — 물어볼 컨텍스트 자체가 사라졌다
     saveState(state);
     await send(chatId, t(l, "newSession"));
     return;
@@ -3447,7 +3488,7 @@ async function handle(msg) {
       setSid(chatId, res.sessionId);
       saveState(state);
     }
-    await replyWithClaudeResult(chatId, l, prompt, msg, res, started);
+    await replyWithClaudeResult(chatId, l, prompt, msg, res, started, planMode && res.ok);
     // 계획 본문은 위에서 이미 나갔다 — 승인 버튼만 따로 한 줄 붙인다. 실패했거나 폴백된 답에는
     // 승인할 계획이 없으므로 res.ok 일 때만이다. 버튼은 `/plan <요청>` 과 같은 콜백을 재사용한다.
     if (planMode && res.ok) {
