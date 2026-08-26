@@ -14,8 +14,8 @@
   📱 텔레그램                        🖥  내 머신 — 백그라운드 데몬
   ─────────────────                  ──────────────────────────────────────
   "테스트 돌려줘"  ────────────────▶  bot.mjs  (롱폴링, 의존성 0)
-                                       ├─ Claude  →  state.sessionId
-                                       ├─ Codex   →  state.codexSessionId
+                                       ├─ Claude  →  sessions[방].sessionId
+                                       ├─ Codex   →  sessions[방].codexSessionId
                                        └─ Ollama     (모드 · 폴백)
                                               │
   "12개 통과, 1개 실패 …"  ◀──────────────────┘
@@ -169,35 +169,36 @@ claude-telegram-bot ~/botconfigs/myproj/mybot.json
 전역 설치하면 짧은 이름 `ctb`도 같이 깔립니다. `ctb init …`은 위와 같고, 데몬은 `ctb bot …`으로 띄웁니다
 (`ctb`만 쓰면 데몬이 아니라 [로컬 세션](#설정)이 뜹니다).
 
-> **설정 파일은 git에 올리지 마세요.** config 파일에는 봇 토큰이 들어 있습니다. git 레포 안에 둔다면 `config.json`, `state*.json`, `attachments/`를 그 프로젝트의 `.gitignore`에 추가하세요. 이 레포는 해당 패턴을 이미 무시하므로 `claudebot.config.json` 같은 이름도 안전하지만, 다른 프로젝트는 직접 지정해야 합니다.
+> **설정 파일은 git에 올리지 마세요.** config 파일에는 봇 토큰이 들어 있습니다. git 레포 안에 둔다면 `config.json`과 `.claude-bot/`을 그 프로젝트의 `.gitignore`에 추가하세요. 이 레포는 해당 패턴과 `.claude-bot/` 이전 배치(`state*.json`, `attachments/`)까지 이미 무시하므로 `claudebot.config.json` 같은 이름도 안전하지만, 다른 프로젝트는 직접 지정해야 합니다.
 
-## 설정
-
-`mybot.json`(또는 사용 중인 config 파일)의 키는 다음과 같습니다.
-
-### 호환성
+## 호환성
 
 <details>
-<summary><b>이 릴리스가 검증된 CLI 버전</b> — Claude Code 2.1.206 · Codex 0.144.1 · Ollama 0.31.1</summary>
+<summary><b>이 릴리스가 검증된 CLI 버전</b> — Claude Code 2.1.246 · Codex 0.149.1 · Ollama 0.32.14</summary>
 
 이 봇은 CLI 옵션과 기계 판독용 출력 형식에 의존하므로 각 도구의 업데이트에 영향을 받을 수 있습니다.
-아래는 2026-07-10에 호환성 기준으로 기록한 개발 환경 버전이며 강제 고정 버전이나 모든 경로의 통과를
+아래는 2026-08-26에 호환성 기준으로 기록한 개발 환경 버전이며 강제 고정 버전이나 모든 경로의 통과를
 보장하는 표는 아닙니다. 봇 호스트에 실제 설치된 버전은 `/status`에서 확인할 수 있습니다.
 
-| CLI | 기록 버전 | 관련 연동 경로 |
-|---|---:|---|
-| Claude Code | `2.1.206` | JSON 출력, 세션 resume, 권한 모드 |
-| Codex CLI | `0.144.1` | `exec`, `exec resume`, JSONL 이벤트, workspace sandbox |
-| Ollama | `0.31.1` | `ollama launch claude`, 모델 선택, 세션 handoff |
+| CLI | 기록 버전 | 검증 | 관련 연동 경로 |
+|---|---:|:---:|---|
+| Claude Code | `2.1.246` | ✅ | JSON 출력, 세션 resume, 권한 모드 |
+| Codex CLI | `0.149.1` | ✅ | `exec`, `exec resume`, JSONL 이벤트, workspace sandbox |
+| Ollama | `0.32.14` | — | `ollama launch claude`, 모델 선택, 세션 handoff |
+
+"검증"은 버전을 기록할 때 해당 경로를 실제로 한 번 태웠다는 뜻입니다 — Claude Code는 일반 메시지,
+Codex는 `/testfallback`. Ollama는 버전만 기록했습니다. 기준 환경이 `codexFallback`을 쓰고 있어
+이번에는 Ollama 경로를 태우지 않았습니다.
 
 CLI를 업데이트한 뒤에는 무인 실행에 맡기기 전에 `/testfallback`과 일반 Claude 메시지를 각각 확인하세요.
 새 환경의 버전을 기록하고 두 경로를 확인한 뒤 이 표를 갱신하는 것을 권장합니다.
 
 </details>
 
-### 설정 키
+## 설정
 
-시작에 꼭 필요한 건 `token`, `allowedChatId`, `projectDir`, `claudeBin`, `permissionMode` 다섯 개뿐이고
+`mybot.json`(또는 사용 중인 config 파일)의 키는 다음과 같습니다. 시작에 꼭 필요한 건
+`token`, `allowedChatId`, `projectDir`, `claudeBin`, `permissionMode` 다섯 개뿐이고
 나머지는 전부 선택 사항입니다.
 
 <details>
@@ -220,6 +221,8 @@ CLI를 업데이트한 뒤에는 무인 실행에 맡기기 전에 `/testfallbac
 | `mergeWindowMs` | (선택) 다음 메시지를 이만큼 기다렸다 합쳐서 한 번에 대답 (기본값 `1000`, `0` 이면 메시지마다 즉시 실행). 런타임에 `/mergewindow` 로 변경 가능(state에 저장) |
 | `schedule` | (선택) 정해진 시각에 프롬프트를 실행하는 cron 작업 — [예약 작업](#예약-작업-cron) 참고 |
 | `commands` | (선택) 쉘 스크립트를 실행하는 커스텀 `/명령어` — [커스텀 명령어](#커스텀-명령어) 참고 |
+| `sendImages` | (선택) 에이전트가 `.ctb-outbox/`를 통해 채팅으로 이미지를 보내는 기능 (기본값: `true`). `false`면 기능 전체를 끔 |
+| `backgroundJobs` | (선택) `.ctb-jobs/`에 등록된 백그라운드 작업을 감시하고 `/jobs`로 보여주는 기능 (기본값: `true`). `false`면 기능 전체를 끔 |
 | `codexFallback` | (선택) `true`로 설정하면 Claude 레이트 리밋·크레딧 부족 시 Codex를 우선 폴백으로 사용 |
 | `codexBin` | (선택) `codex` 실행 파일 경로. 기본값은 `PATH`의 `"codex"`이며 launchd에서는 절대경로 권장 |
 | `codexModel` | (선택) Codex에 `--model`로 넘길 모델. Codex 활성 상태에서 `/model`을 실행하면 설치된 CLI에서 선택 가능한 모델이 버튼으로 표시됩니다. 비우거나 기본값을 쓰는 것이 가장 안전합니다. |
@@ -296,7 +299,7 @@ General과 구별할 정도는 되고, 나중에 진짜 이름을 알게 되면 
 
 ## 첫 실행
 
-1. **봇 토큰 발급** — 텔레그램에서 [@BotFather](https://t.me/BotFather)에게 `/newbot`을 보내고, 이름과 username(`_bot`으로 끝나야 함)을 정하면 토큰을 줍니다. `config.json`의 `token`에 넣고 `allowedChatId`는 비워둡니다.
+1. **봇 토큰 발급** — 텔레그램에서 [@BotFather](https://t.me/BotFather)에게 `/newbot`을 보내고, 이름과 username(`_bot`으로 끝나야 함)을 정하면 토큰을 줍니다. `mybot.json`의 `token`에 넣고 `allowedChatId`는 비워둡니다.
 2. **chatId 확인 후 잠그기** — 봇을 실행하고 텔레그램에서 아무 메시지나 보내면, 봇이 이 채팅의 `chatId`를 답장합니다. 그 숫자를 `allowedChatId`에 넣고 재시작하면 나만 쓸 수 있습니다. ([보안](#보안) 참고 — 이게 유일한 인증 수단입니다.)
 3. **사용** — 그냥 메시지를 보냅니다.
    - `테스트 돌려보고 통과하면 커밋하고 push 해줘`
@@ -368,14 +371,14 @@ General과 구별할 정도는 되고, 나중에 진짜 이름을 알게 되면 
 - **모델 설정** — `/model`은 그 방의 활성 provider를 따르며 Claude와 Codex override를 방별로 따로 저장합니다. Claude에서는 `fable`·`opus`·`sonnet`·`haiku` 별칭을 버튼으로 보여주고(현재 모델은 ✅) 기본값 버튼이 함께 나옵니다. Codex에서는 설치된 CLI가 그 계정에 제공하는 모델을 버튼으로 보여줍니다. `/model <ID>` 타이핑도 그대로 동작하며, `/model default`는 그 방의 활성 provider override만 해제합니다.
 - **설정 메뉴 버튼은 다음 입력에서 사라집니다** — `/model`·`/provider`·`/autocompact`·`/mergewindow`·`/sessions`와 자동 컴팩션 물음의 버튼은 보낸 시점의 상태를 그린 스냅샷입니다. 그 방에 새 메시지가 오면 이전 메뉴의 버튼을 걷어내므로, 스크롤을 올려 옛 메뉴를 눌렀다가 그 사이 바꿔둔 값이 조용히 되돌아가는 일이 없습니다. 방마다 따로 관리되고, 아직 답하지 않은 **`/plan` 승인 버튼과 `/local` 종료 버튼은 그대로 남습니다** — 그 둘은 눌러야 끝나는 요청이라서입니다.
 - **한도 초과 큐** — Claude Max / API 레이트 리밋 에러에 리셋 시간이 포함되면, 먼저 활성화된 폴백을 시도합니다. 폴백이 없거나 모두 실패할 때만 해당 메시지를 큐에 넣고 리셋 시각에 재시도합니다 — 작업 중 큐와 같은 방식입니다. 한도가 걸린 동안 추가로 보내는 메시지도 자동으로 큐에 쌓입니다. `/reserve`로 대기 현황과 리셋 시각 확인, `/reserve rm`으로 큐 전체 취소.
-- **Codex 폴백** — `"codexFallback": true`로 설정하면 Claude 레이트 리밋·크레딧 부족 시 `codex exec`가 대신 실행됩니다. Codex는 `state.codexSessionId`에 별도 세션을 저장하고 `codex exec resume <id>`로 이어가지만, Claude 세션과 Codex 세션은 서로 호환되지 않습니다. 대신 성공한 Codex 폴백마다 `.claude-bot/codex-handoff.md`에 요약을 남기고, 이후 Claude 호출 때 최근 handoff 내용을 맥락으로 주입합니다.
+- **Codex 폴백** — `"codexFallback": true`로 설정하면 Claude 레이트 리밋·크레딧 부족 시 `codex exec`가 대신 실행됩니다. Codex는 그 방의 `state.sessions[방키].codexSessionId`에 별도 세션을 저장하고 `codex exec resume <id>`로 이어가지만, Claude 세션과 Codex 세션은 서로 호환되지 않습니다. 대신 성공한 Codex 폴백마다 `.claude-bot/codex-handoff.md`에 요약을 남기고, 이후 Claude 호출 때 최근 handoff 내용을 맥락으로 주입합니다.
 - **방별 provider 전환** — `/provider`는 현재 방의 provider(✅ 표시)와 함께 전환 버튼을 보냅니다. `/provider claude`, `/provider codex`는 현재 DM·그룹·포럼 토픽에만 적용되고, `/provider default`(또는 config 기본값 버튼)는 그 방만 config 값으로 되돌립니다.
 - **Ollama 폴백** — `"ollamaFallback": true`로 설정하고 `"ollamaModel"`에 로컬 [Ollama](https://ollama.ai) 모델을 지정하면(기본값: `"qwen3.5:4b"`), Codex가 꺼져 있거나 실패했을 때 보조 폴백으로 사용됩니다. `/ollama`로 Claude와 관계없이 로컬 모델을 기본 채팅 상대로 수동 전환할 수도 있습니다. 내부적으로 `ollama launch claude … --resume <세션>`을 사용하지만 로컬 모델 컨텍스트가 작으므로 최선 노력(best-effort)입니다.
 - **자동 컴팩션** — 세션 컨텍스트 추정 크기가 `autoCompactThreshold`(기본값 100,000)를 넘으면 압축할지 물어보고 **🗜️ 지금 압축 / 나중에 / 끄기** 버튼을 함께 보냅니다. **나중에**를 누르면 컨텍스트가 25% 더 커지기 전까지 다시 묻지 않아서 매 턴 성가시게 굴지 않습니다. `autoCompactConfirm: false`로 두면 묻지 않고 바로 압축합니다. 크기 추정은 그 턴의 **마지막 API 호출** 값으로 합니다 — 턴 전체 토큰 합계는 도구 호출마다 컨텍스트를 다시 읽은 것까지 더해지므로, 파일 5개를 읽은 30k 대화가 160k로 잡혀 그것만으로 임계값을 넘습니다. config에서 임계값을 조정하거나, 런타임에 `/autocompact`로 설정합니다. 인자 없이 보내면 현재값과 함께 프리셋 버튼(50k / 100k / 150k / 200k / 끄기 / 기본값)이 나와서 휴대폰으로 숫자를 칠 필요가 없습니다. 값을 직접 줄 수도 있고 축약 표기를 받습니다 — `/autocompact 120k`, `/autocompact 120000`, `/autocompact 80,000` (`off`로 비활성화, `default`로 초기화). 10k~1m 범위를 벗어난 값은 거절하므로, `100m` 같은 오타로 자동 압축이 조용히 꺼지는 일은 없습니다. 설정값은 `state.json`에 저장돼 재시작 후에도 유지됩니다. 수동으로 `/compact`를 써도 됩니다. 압축은 1~2분 걸리며 다른 프롬프트와 동일한 락을 잡습니다 — 그동안 보낸 메시지는 대기열에 쌓였다가 끝난 뒤 처리됩니다.
 - **간결한 답변** — 텔레그램에 맞게 짧게 답하도록 시스템 프롬프트가 기본으로 붙습니다. 바꾸려면 `appendSystemPrompt`에 직접 넣으세요 (빈 문자열이면 끔).
 - **언어** — 봇 자체 문구(`/help`, 명령 메뉴, 상태 메시지)는 **기본 영어**, 텔레그램이 한국어인 사용자에겐 한국어로 나옵니다. `lang`(`"en"`/`"ko"`)으로 고정할 수 있습니다. Claude의 실제 답변은 **사용자가 쓴 언어**를 따라갑니다. `/` 명령 메뉴는 `setMyCommands`로 언어별 등록됩니다.
 - **서식 변환** — 답변의 마크다운(굵게·코드·표 등)을 텔레그램 HTML로 바꿔 보냅니다. 변환이 깨지는 경우엔 평문으로 다시 보냅니다.
-- **첨부 파일** — 사진·문서·음성·영상을 보내면 `attachments/`에 내려받고, 그 경로와 캡션을 활성 provider에 전달합니다.
+- **첨부 파일** — 사진·문서·음성·영상을 보내면 `.claude-bot/attachments/`에 내려받고, 그 경로와 캡션을 활성 provider에 전달합니다.
 - **이미지 전송(내보내기)** — 에이전트가 채팅으로 이미지를 *되돌려* 보낼 수 있습니다. 파일을 `.ctb-outbox/`(`projectDir` 아래)에 저장하고, 답변 끝에 `[[ctb-image: 파일명.png | 캡션(선택)]]` 형식의 줄을 붙이면, 봇이 그 마커를 텍스트에서 떼고 파일을 텔레그램 사진으로 보냅니다(여러 장이면 줄을 반복). 그 폴더 안의 순수 파일명만 허용하며 — `png/jpg/jpeg/gif/webp`, 10MB 이하 — 경로 탈출·폴더 밖을 가리키는 심볼릭 링크·다른 확장자는 거부합니다. 이 규칙은 시스템 프롬프트로 provider에 자동 안내됩니다. `"sendImages": false`로 기능 전체를 끌 수 있습니다.
 - **백그라운드 작업** — 에이전트는 메시지마다 새 프로세스로 떴다가 답장을 보내면 종료됩니다. 그때 에이전트가 띄운 백그라운드도 같이 죽습니다. 그래서 답장보다 오래 살아야 하는 일(개발 서버, 긴 빌드, 감시 프로세스)은 `nohup … & disown` 으로 떼어 내 띄우고 `.ctb-jobs/` 에 `<이름>.json` 기록과 `<이름>.log` 를 남깁니다. 봇은 이 작업을 **지켜보되 소유하지 않습니다** — 30초마다 `kill(pid, 0)` 으로 생사만 확인하고, 끝나면 로그 꼬리와 함께 채팅으로 알립니다. 소유하지 않으니 `/restart` 로도 작업이 죽지 않고, 봇이 다시 뜨면 폴더를 읽어 감시를 이어갑니다. 목록은 `/jobs` 로 봅니다. 텔레그램에서 띄웠든 로컬 `ctb` 세션에서 띄웠든 같은 기록이 남습니다. `"backgroundJobs": false` 로 끌 수 있습니다.
 
@@ -458,7 +461,7 @@ claude-telegram-bot ~/projects/B/claudebot.config.json   # 프로젝트 B
 ```
 
 - 텔레그램은 토큰 하나당 폴링 하나만 허용합니다. 그래서 봇마다 BotFather 토큰을 따로 발급해야 합니다.
-- `state`와 `attachments`는 config 옆에 저장되므로 봇끼리 섞이지 않습니다.
+- `state`와 첨부 파일은 config 파일 폴더 아래 **`.claude-bot/`** 에 저장되므로 봇끼리 섞이지 않습니다.
 
 역할별로 나눌 때는 코드는 그대로 두고 config만 역할별로 둡니다.
 

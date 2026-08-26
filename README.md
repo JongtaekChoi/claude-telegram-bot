@@ -18,8 +18,8 @@ dependencies to install.
   📱 Telegram                        🖥  your machine — background daemon
   ─────────────────                  ──────────────────────────────────────
   "run the tests"  ───────────────▶  bot.mjs  (long-polling, zero deps)
-                                       ├─ Claude  →  state.sessionId
-                                       ├─ Codex   →  state.codexSessionId
+                                       ├─ Claude  →  sessions[room].sessionId
+                                       ├─ Codex   →  sessions[room].codexSessionId
                                        └─ Ollama     (mode / fallback)
                                               │
   "12 passed, 1 failed …"  ◀──────────────────┘
@@ -238,19 +238,19 @@ claude-telegram-bot ~/botconfigs/myproj/mybot.json
 A global install also puts the shorter `ctb` on your PATH. `ctb init …` is the same command; the
 daemon is `ctb bot …` (plain `ctb` starts a [local session](#configuration), not the daemon).
 
-Run several projects/personas by making one config file each and passing its path —
-`state.json` and `attachments/` live next to that config, so they don't mix.
+Run several projects/personas by making one config file each and passing its path — state and
+attachments live in a `.claude-bot/` folder next to that config, so they don't mix.
 
 > **Keep your config out of git.** The config file holds your bot token. If you drop one inside a git
-> repo, add it (plus `state*.json` and `attachments/`) to *that* project's `.gitignore`. This repo
-> already ignores `config.json`, `config.*.json`, `*.config.json`, `state*.json`, and `attachments/`,
-> so any name like `claudebot.config.json` is covered here — but your own project won't ignore them
-> until you say so.
+> repo, add it (plus `.claude-bot/`) to *that* project's `.gitignore`. This repo already ignores
+> `config.json`, `config.*.json`, `*.config.json`, `.claude-bot/`, and the pre-`.claude-bot/` layout
+> (`state*.json`, `attachments/`), so any name like `claudebot.config.json` is covered here — but
+> your own project won't ignore them until you say so.
 
 ### First-run steps
 
 **1) Create a bot token** — In Telegram, open `@BotFather` → `/newbot` → pick a name and a
-`username` ending in `_bot` → copy the token (looks like `123456789:AA...`). Put it in `config.json`,
+`username` ending in `_bot` → copy the token (looks like `123456789:AA...`). Put it in `mybot.json`,
 leave `allowedChatId` empty for now.
 
 **2) Find your chatId and lock the bot to it** — Start the bot (`claude-telegram-bot …`), send it any
@@ -349,18 +349,22 @@ Core commands:
 ## Compatibility
 
 <details>
-<summary><b>CLI versions this release was tested against</b> — Claude Code 2.1.206 · Codex 0.144.1 · Ollama 0.31.1</summary>
+<summary><b>CLI versions this release was tested against</b> — Claude Code 2.1.246 · Codex 0.149.1 · Ollama 0.32.14</summary>
 
 The bot depends on CLI flags and machine-readable output that may change between releases. These are
-the development-environment versions recorded as the compatibility baseline on 2026-07-10; they are
+the development-environment versions recorded as the compatibility baseline on 2026-08-26; they are
 reference versions, not strict pins or a claim that every path passes. Use `/status` to see the
 versions actually installed on the bot host.
 
-| CLI | Recorded version | Relevant integration |
-|---|---:|---|
-| Claude Code | `2.1.206` | JSON output, session resume, permission mode |
-| Codex CLI | `0.144.1` | `exec`, `exec resume`, JSONL events, workspace sandbox |
-| Ollama | `0.31.1` | `ollama launch claude`, model selection, session handoff |
+| CLI | Recorded version | Checked | Relevant integration |
+|---|---:|:---:|---|
+| Claude Code | `2.1.246` | ✅ | JSON output, session resume, permission mode |
+| Codex CLI | `0.149.1` | ✅ | `exec`, `exec resume`, JSONL events, workspace sandbox |
+| Ollama | `0.32.14` | — | `ollama launch claude`, model selection, session handoff |
+
+"Checked" means the path was actually exercised when the version was recorded — a normal Claude
+message for Claude Code, `/testfallback` for Codex. Ollama is version-recorded only: the baseline
+environment runs `codexFallback`, so the Ollama path was not exercised this round.
 
 When upgrading one of these CLIs, run `/testfallback` and a normal Claude message before relying on
 the bot unattended. Update this table after recording the new environment and checking those paths.
@@ -382,7 +386,7 @@ The only keys you need to start are `token`, `allowedChatId`, `projectDir`, `cla
 | Key | Description |
 |---|---|
 | `token` | Bot token from BotFather |
-| `allowedChatId` | **Leave empty at first** → the bot tells you (step 3). Required before it runs anything. |
+| `allowedChatId` | **Leave empty at first** → the bot tells you (step 2). Required before it runs anything. |
 | `projectDir` | Absolute path to the working folder the selected provider runs in |
 | `provider` | (optional) Main provider for Telegram messages and scheduled jobs: `"claude"` (default) or `"codex"` |
 | `claudeBin` | Output of `which claude` (absolute path recommended) |
@@ -396,6 +400,8 @@ The only keys you need to start are `token`, `allowedChatId`, `projectDir`, `cla
 | `mergeWindowMs` | (optional) Wait this long for a follow-up message and answer both at once (default: `1000`; `0` runs each message immediately). Override at runtime with `/mergewindow` (persists in state). |
 | `schedule` | (optional) Cron jobs that run a prompt on a timer — see [Scheduled tasks](#scheduled-tasks-cron) |
 | `commands` | (optional) Custom `/commands` that run shell scripts — see [Custom commands](#custom-commands) |
+| `sendImages` | (optional) Let the agent send images back to the chat via `.ctb-outbox/` (default: `true`). Set to `false` to turn the whole feature off. |
+| `backgroundJobs` | (optional) Watch detached jobs registered in `.ctb-jobs/` and report them via `/jobs` (default: `true`). Set to `false` to turn the whole feature off. |
 | `codexFallback` | (optional) `true` to enable Codex as the preferred fallback when Claude is rate-limited or out of credits |
 | `codexBin` | (optional) Path to the `codex` binary. Defaults to `"codex"` on `PATH`; use an absolute path for launchd |
 | `codexModel` | (optional) Codex model passed with `--model`; `/model` shows the models available to the installed Codex CLI as buttons. Empty/default lets the CLI choose and is safest. |
@@ -488,7 +494,7 @@ your launchd plist points them.
   command menu is registered per-language via `setMyCommands`.
 - **Formatting**: the reply's Markdown (bold/code/headings/tables) is converted to Telegram-safe
   HTML. If conversion ever produces invalid HTML, the message is automatically resent as plain text.
-- **Attachments**: send a photo/document/voice/video and it's downloaded into `attachments/`; the
+- **Attachments**: send a photo/document/voice/video and it's downloaded into `.claude-bot/attachments/`; the
   absolute path is handed to the active provider (caption included as the message).
 - **Sending images (outgoing)**: the agent can send an image *back* to the chat. It saves the file
   into `.ctb-outbox/` (under `projectDir`) and adds a line at the end of its reply in the form
@@ -516,7 +522,7 @@ your launchd plist points them.
 - **Models**: `/model` follows the room's active provider and stores separate Claude/Codex overrides for that room. On Claude it shows the `fable`, `opus`, `sonnet`, and `haiku` aliases as buttons (current one marked ✅) plus a Default button; on Codex it shows the models the installed CLI offers your account as buttons. Typing `/model <id>` still works, and `/model default` clears only that room's active-provider override.
 - **Setting menus expire on your next message**: the buttons from `/model`, `/provider`, `/autocompact`, `/mergewindow`, `/sessions` and the auto-compact prompt are a snapshot of the state at the moment they were sent. When a new message arrives in that room the bot strips the buttons off the previous menu, so scrolling back and tapping an old one can't silently revert a setting you changed since. It's tracked per room, and the **`/plan` approval and `/local` kill buttons are left alone** — those are requests still waiting on an answer.
 - **Usage-limit queue**: when a Claude Max / API rate-limit error includes a reset time, the bot first tries enabled fallbacks. If no fallback is enabled or every fallback fails, the triggering message is queued and retried at that time — just like messages queued while Claude is busy. Any additional messages you send during the limit window are also added to the queue. Use `/reserve` to check queue status and reset time, `/reserve rm` to cancel and clear the queue.
-- **Codex fallback**: set `"codexFallback": true` to run `codex exec` when Claude is rate-limited or out of credits. Codex keeps its own session in `state.codexSessionId` using `codex exec resume <id>`, but Claude and Codex sessions are not interoperable. Each successful Codex fallback appends a summary to `.claude-bot/codex-handoff.md`, and future Claude calls receive the recent handoff notes as context.
+- **Codex fallback**: set `"codexFallback": true` to run `codex exec` when Claude is rate-limited or out of credits. Codex keeps its own session in that room's `state.sessions[roomKey].codexSessionId` using `codex exec resume <id>`, but Claude and Codex sessions are not interoperable. Each successful Codex fallback appends a summary to `.claude-bot/codex-handoff.md`, and future Claude calls receive the recent handoff notes as context.
 - **Per-room provider switching**: `/provider` shows that room's active provider (marked ✅) with buttons to switch — no typing needed. `/provider claude` / `/provider codex` affect only the current DM, group, or forum topic; `/provider default` returns only that room to the config value. Each provider's session is preserved separately.
 - **Ollama fallback**: set `"ollamaFallback": true` and point `"ollamaModel"` at a locally-installed [Ollama](https://ollama.ai) model (default: `"qwen3.5:4b"`). Ollama is now a secondary automatic fallback when Codex is disabled or fails, and `/ollama` still toggles local chat mode manually. It runs Claude Code through the local model via `ollama launch claude … --resume <session>`, but this remains best-effort because local model context windows are much smaller than Claude's.
 - **Auto-compact**: the bot estimates how large the session context has grown. When it exceeds `autoCompactThreshold` (default 100 000), the bot asks whether to compact, with **🗜️ Compact now / Later / Off** buttons. **Later** snoozes the prompt until the context grows another 25%, so it doesn't nag you every turn. Set `autoCompactConfirm: false` to skip the question and compact immediately. The estimate is taken from the *last* API call of the turn, not the turn's total token usage — the total is summed across every tool call, so a 30k conversation that read five files reports 160k and would trip the threshold on its own. Tune the threshold in config, or at runtime with `/autocompact` — sending it with no argument shows the current value with preset buttons (50k / 100k / 150k / 200k / Off / Default) so you don't have to type digits on a phone. You can still pass a value directly, in shorthand or in full: `/autocompact 120k`, `/autocompact 120000`, `/autocompact 80,000` (`off` to disable, `default` to reset). Values outside 10k–1m are rejected, so a typo like `100m` can't silently switch auto-compact off. The override persists in `state.json` across restarts. You can also run `/compact` manually at any time. Compaction takes a minute or two and holds the same lock as any other prompt — messages you send while it runs are queued and handled once it finishes.
@@ -605,7 +611,7 @@ The code is project-agnostic: make **one config file per project** and run sever
 <summary><b>Multi-project setup</b> — one config per project, one BotFather token each</summary>
 
 - Run: `node bot.mjs /absolute/path/to/project.config.json` (no arg → `./mybot.json`, fallback `./config.json`)
-- `state.json` and `attachments/` live in the **config file's folder**, so projects don't mix.
+- State and attachments live in **`.claude-bot/` inside the config file's folder**, so projects don't mix.
 - **Note**: Telegram allows only one poller per token → each project needs its **own BotFather
   token**.
 - For always-on, copy the launchd template per project (see below).
@@ -727,7 +733,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.pl
 ### Troubleshooting
 
 - **`launchctl list` shows an error code with no PID** → check `bot.error.log`. Usually a node/claude
-  path issue (`command not found`) or a missing `config.json`.
+  path issue (`command not found`) or a missing config file (`mybot.json`).
 - **Bot doesn't respond** → Claude auth may have expired. Run `node bot.mjs` directly and confirm
   `claude` is logged in.
 - **Mac is asleep → polling stops** → disable sleep in System Settings > Battery/Power.
