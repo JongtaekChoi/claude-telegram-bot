@@ -155,6 +155,19 @@ const TYPING_TICK_MS = 4000;
 const MERGE_WINDOW_DEFAULT = cfg.mergeWindowMs ?? 1000; // 0 이면 끔 — 예전처럼 즉시 실행
 const MERGE_HOLD_RATIO = 5; // 말이 계속 이어져도 첫 메시지 기준 이 배수에서는 끊고 시작한다
 const mergeWindowMs = () => state.mergeWindowMs ?? MERGE_WINDOW_DEFAULT;
+// 텔레그램 상한(4096자)을 넘는 텍스트를 붙여넣으면 클라이언트가 알아서 조각내 보낸다. 조각에는
+// "이어짐" 표시가 없지만 길이로 알아볼 수 있다 — 상한에 바짝 붙어 있고, 관측한 조각은 숫자 중간에서
+// 끊겨 있었다(`"yaw":-66.2,"lockLocal":[-0.027,-0.`). 사람이 이 길이에 딱 맞춰 말을 끝내는 일은 없다.
+const SPLIT_HINT_LEN = 3900;
+// 조각이 보이면 창을 이만큼으로 늘린다. 첫 조각은 클라이언트가 ack 를 받고서야 나머지를 몰아 보내는
+// 탓에 유독 멀리 떨어져 도착한다 — 실제로 8조각짜리 로그에서 2번 이후는 서로 +0s 였는데 1번만 1초
+// 밖이었다. 기본 1초로는 그 1번만 혼자 반쪽짜리 맥락으로 실행되고 나머지는 대기열로 밀린다.
+// 넉넉히 잡은 건 양쪽 대가가 다르기 때문이다 — 오탐(정말 4000자짜리 한 통이었던 경우)은 8초를
+// 더 기다리는 게 전부지만, 놓치면 실행 한 번을 통째로 버린다.
+const SPLIT_WINDOW_MS = 8000;
+// 마지막 조각은 상한에 못 미치므로 여기서 false 가 된다 — 붙여넣기가 끝나면 창은 곧바로 기본값으로
+// 돌아와 닫힌다. 늘어난 창이 끝까지 발목을 잡지 않는다.
+const looksSplit = (msg) => (msg?.text?.length ?? 0) >= SPLIT_HINT_LEN;
 // allowedChatId 는 문자열 또는 배열 모두 허용 (하위 호환)
 const allowedIds = []
   .concat(cfg.allowedChatId)
@@ -3860,7 +3873,8 @@ function holdForMore(chatId, msg) {
   else tg("sendChatAction", { ...typingTarget(chatId), action: "typing" }).catch(() => {});
   const firstAt = held?.firstAt ?? Date.now();
   // 말이 계속 이어지면 창이 무한정 밀린다 — 여럿이 떠드는 그룹에서 특히. 첫 메시지 기준 상한을 둔다.
-  const win = mergeWindowMs();
+  // 상한도 창에 비례하므로, 잘린 조각을 기다리는 동안에는 상한도 같이 늘어난다.
+  const win = looksSplit(msg) ? Math.max(mergeWindowMs(), SPLIT_WINDOW_MS) : mergeWindowMs();
   const wait = Math.max(0, Math.min(win, firstAt + win * MERGE_HOLD_RATIO - Date.now()));
   const timer = setTimeout(() => {
     holdTimers.delete(chatId);
