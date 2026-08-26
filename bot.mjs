@@ -1105,6 +1105,17 @@ function tgTarget(room) {
 }
 // 화이트리스트 검사·리액션·버튼 수정처럼 토픽과 무관한 곳에 쓸 실제 채팅 ID.
 const baseChatId = (room) => tgTarget(room).chat_id;
+// 입력중 표시 전용 대상. 포럼 그룹의 General 토픽은 is_topic_message 가 붙지 않아 방 키에 접미사가
+// 없는데, sendChatAction 만은 스레드를 안 적으면 "모두" 뷰에만 뜨고 정작 General 안에서는 보이지
+// 않는다 (메시지 전송은 안 적어도 General 로 잘 들어간다 — 그래서 이 표시만 티가 안 났다).
+// General 의 스레드 ID 는 1 이다. 포럼이 아닌 방에 1 을 붙이면 오히려 실패하므로, 포럼이라고
+// 확인된 방에만 붙인다.
+function typingTarget(room) {
+  const target = tgTarget(room);
+  if (target.message_thread_id === undefined && state.sessions?.[target.chat_id]?.forum)
+    target.message_thread_id = 1;
+  return target;
+}
 
 function chatBucket(chatId) {
   if (!state.sessions) state.sessions = {};
@@ -1150,6 +1161,14 @@ function rememberRoomTitle(room, title, weak) {
   if (bucket.title === title) return;
   if (weak && bucket.title) return;
   bucket.title = title;
+  saveState(state);
+}
+// 포럼 여부는 방마다가 아니라 채팅 단위 성질이라 그룹 ID 쪽 버킷에 적어 둔다 — General 의 방 키가
+// 곧 그 그룹 ID 라, typingTarget() 이 접미사 없는 키로 그대로 찾아 쓴다.
+function rememberForum(chatId) {
+  const bucket = chatBucket(chatId);
+  if (bucket.forum) return;
+  bucket.forum = true;
   saveState(state);
 }
 
@@ -2238,7 +2257,7 @@ async function runCompact(chatId, l, okKey) {
   }
   r.busy = true;
   r.typing = setInterval(
-    () => tg("sendChatAction", { ...tgTarget(chatId), action: "typing" }).catch(() => {}),
+    () => tg("sendChatAction", { ...typingTarget(chatId), action: "typing" }).catch(() => {}),
     TYPING_TICK_MS,
   );
   try {
@@ -2541,7 +2560,7 @@ async function handleCron(chatId, rest, l) {
     }
     rtc.busy = true;
     try {
-      await tg("sendChatAction", { ...tgTarget(chatId), action: "typing" });
+      await tg("sendChatAction", { ...typingTarget(chatId), action: "typing" });
       const r = await extractCron(input, l);
       if (r.error) {
         await send(chatId, `⚠️ ${r.error}`);
@@ -2796,12 +2815,12 @@ async function runApprovedPlan(chatId, l) {
   r.busy = true;
   const started = Date.now();
   r.typing = setInterval(
-    () => tg("sendChatAction", { ...tgTarget(chatId), action: "typing" }).catch(() => {}),
+    () => tg("sendChatAction", { ...typingTarget(chatId), action: "typing" }).catch(() => {}),
     TYPING_TICK_MS,
   );
   const syntheticMsg = { chat: { id: chatId }, text: PLAN_PROCEED_PROMPT };
   try {
-    await tg("sendChatAction", { ...tgTarget(chatId), action: "typing" });
+    await tg("sendChatAction", { ...typingTarget(chatId), action: "typing" });
     r.prevSession = { chatId: String(chatId), provider: "claude", sessionId: getSid(chatId, "claude") };
     const res = await runClaude(PLAN_PROCEED_PROMPT, pending.sessionId, { modelHint: true, trackChild: r, injectMemory: true, chatId });
     if (res.sessionId) {
@@ -2910,6 +2929,8 @@ async function handle(msg) {
     await greetUnknownRoom(chatId, rawChatId, msg.from, l);
     return;
   }
+  // 입력중 표시를 General 토픽에 제대로 띄우려면 이 방이 포럼인지 알아야 한다 — typingTarget() 참고.
+  if (msg.chat?.is_forum) rememberForum(rawChatId);
   // 서비스 메시지는 이 방의 이름만 챙기고 끝난다. 생성 서비스 메시지에 is_topic_message 가
   // 붙는지는 보장이 없어서, 이 경로에서만 message_thread_id 로 방 키를 직접 만든다.
   const room = roomTitleOf(msg, topicName);
@@ -3239,14 +3260,14 @@ async function handle(msg) {
   // 긴 작업 동안 타이핑 표시 유지
   r.typing = setInterval(
     () =>
-      tg("sendChatAction", { ...tgTarget(chatId), action: "typing" }).catch(
+      tg("sendChatAction", { ...typingTarget(chatId), action: "typing" }).catch(
         () => {},
       ),
     TYPING_TICK_MS,
   );
 
   try {
-    await tg("sendChatAction", { ...tgTarget(chatId), action: "typing" });
+    await tg("sendChatAction", { ...typingTarget(chatId), action: "typing" });
     // /plan <요청> — permission-mode를 강제로 plan으로 실행해 편집 없이 계획만 받고,
     // 승인 버튼을 눌러야 실제 permissionMode로 이어서 실행 (runApprovedPlan).
     if (text === "/plan" || text.startsWith("/plan ")) {
@@ -3424,7 +3445,7 @@ function holdForMore(chatId, msg) {
   const held = holdTimers.get(chatId);
   if (held) clearTimeout(held.timer);
   // 첫 메시지에만 타이핑 표시를 한 번 띄운다 — 창이 열린 동안의 침묵이 "봇이 죽었나"로 보이면 안 된다.
-  else tg("sendChatAction", { ...tgTarget(chatId), action: "typing" }).catch(() => {});
+  else tg("sendChatAction", { ...typingTarget(chatId), action: "typing" }).catch(() => {});
   const firstAt = held?.firstAt ?? Date.now();
   // 말이 계속 이어지면 창이 무한정 밀린다 — 여럿이 떠드는 그룹에서 특히. 첫 메시지 기준 상한을 둔다.
   const win = mergeWindowMs();
