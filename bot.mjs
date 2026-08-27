@@ -334,6 +334,10 @@ const STR = {
       `🎭 This room is mid-conversation as **${cur}**, so it can't become **${next}** now — everything said `
       + "so far belongs to the current role.\n\nSend `/new` to drop that context, then pick again.",
     personaGone: "🎭 That role is no longer in the config.",
+    sessionsPersonaNote: (role) =>
+      `🎭 Only **${role}** sessions are listed. ❓ = started before roles existed — picking one files it under ${role}.`,
+    sessionPersonaUnknown: (role) =>
+      `🎭 That session predates roles, so it's now filed under **${role}** — it will only show up in ${role} rooms from here on.`,
     tellNoRooms:
       "📨 No other room to hand anything to yet. This bot only knows rooms it has already talked in — "
       + "say something there once and it shows up here.",
@@ -756,6 +760,10 @@ const STR = {
       `🎭 이 방은 **${cur}** 로 대화가 진행 중이라 지금 **${next}** 로 바꿀 수 없습니다 — 지금까지 오간 `
       + "말이 전부 현재 역할의 것입니다.\n\n`/new` 로 그 맥락을 버린 뒤에 다시 고르세요.",
     personaGone: "🎭 그 역할은 이제 config 에 없습니다.",
+    sessionsPersonaNote: (role) =>
+      `🎭 **${role}** 세션만 보입니다. ❓ 는 역할이 생기기 전 세션이고, 고르면 ${role} 것으로 기록됩니다.`,
+    sessionPersonaUnknown: (role) =>
+      `🎭 역할이 생기기 전 세션이라 이제 **${role}** 것으로 기록했습니다 — 앞으로는 ${role} 방에서만 보입니다.`,
     tellNoRooms:
       "📨 넘길 만한 다른 방이 아직 없습니다. 이 봇은 한 번이라도 대화한 방만 압니다 — "
       + "그 방에서 아무 메시지나 한 번 보내면 목록에 뜹니다.",
@@ -1346,7 +1354,29 @@ function getSid(chatId, provider = currentProvider(chatId)) {
 }
 function setSid(chatId, id, provider = currentProvider(chatId)) {
   chatBucket(chatId)[sidKey(provider)] = id;
+  recordSessionPersona(chatId, id);
 }
+// jsonl 은 페르소나를 모르므로 봇이 따로 적는다(`sessionNames` 와 같은 자리). 새 세션 ID 를 만드는
+// 경로가 전부 setSid 를 지나므로 여기 한 곳이면 compact 로 ID 가 갈리는 경우까지 덮인다.
+//
+// **이미 찍힌 세션은 다시 찍지 않는다.** 그래서 `/sessions` 로 페르소나 미상인 옛 세션을 채택하면
+// 그 방의 역할로 낙인이 찍히고, 이후 그 역할 목록에만 뜬다 — 의도한 동작이다. 다른 역할이 찍힌
+// 세션은 애초에 목록에 안 뜨므로 이 자리는 미상에만 해당한다.
+const SESSION_PERSONA_MAX = SESSION_LIST_MAX * 8;
+function recordSessionPersona(chatId, id) {
+  if (!PERSONAS.length || !id) return;
+  const map = (state.sessionPersona = state.sessionPersona || {});
+  if (map[id]) return;
+  map[id] = roomPersona(chatId)?.id;
+  // Claude 는 실행마다 새 세션 ID 를 만들어서, 안 지우면 이 표가 대화량에 비례해 영구히 자란다.
+  // 오래된 쪽부터 버린다(객체는 삽입 순서를 지킨다). 목록은 provider 당 최근 10개만 보므로
+  // 넉넉히 남겨도 유한하다 — 직전 것만 남기면 목록에 뜨는 세션이 전부 미상이 되어 거를 수가 없다.
+  const keys = Object.keys(map);
+  // slice 의 끝 인자가 음수면 "뒤에서 N번째"가 되어, 상한에 닿기 전부터 앞쪽을 잘라낸다.
+  if (keys.length > SESSION_PERSONA_MAX)
+    for (const k of keys.slice(0, keys.length - SESSION_PERSONA_MAX)) delete map[k];
+}
+const sessionPersonaOf = (id) => (id && state.sessionPersona?.[id]) || "";
 
 // 방 이름 — state 에는 방 키(숫자)만 남아서 터미널에서 어느 방인지 알아볼 방법이 없었다.
 // 메시지가 올 때 화면에 보이는 이름을 같이 적어둔다. 토픽 이름만은 일반 메시지에 실려 오지 않고
@@ -2794,9 +2824,12 @@ async function handleSessions(chatId, arg, l, provider = currentProvider(chatId)
       await send(chatId, t(l, "sessionInTerminal"));
       return;
     }
+    // 찍기 전에 봐야 한다 — setSid 가 미상 세션에 이 방의 역할을 박는다.
+    const wasUnknown = PERSONAS.length && !sessionPersonaOf(arg);
     setSid(chatId, arg, provider);
     saveState(state);
-    await send(chatId, t(l, "sessionSwitched", provider, sessionName(arg) || `${arg.slice(0, 8)}…`));
+    await send(chatId, t(l, "sessionSwitched", provider, sessionName(arg) || `${arg.slice(0, 8)}…`)
+      + (wasUnknown ? `\n\n${t(l, "sessionPersonaUnknown", roomPersona(chatId).name)}` : ""));
     // 목록 메시지는 그대로 두고 ✅ 만 옮겨 그린다 — 되돌아가서 다시 고를 수 있어야 하니까.
     if (msgId)
       tg("editMessageReplyMarkup", {
@@ -2811,7 +2844,9 @@ async function handleSessions(chatId, arg, l, provider = currentProvider(chatId)
     await send(chatId, t(l, "sessionsEmpty", provider));
     return;
   }
-  await sendMenu(chatId, t(l, "sessionsHeader", provider, kb.inline_keyboard.length), kb);
+  const header = t(l, "sessionsHeader", provider, kb.inline_keyboard.length)
+    + (PERSONAS.length ? `\n${t(l, "sessionsPersonaNote", roomPersona(chatId).name)}` : "");
+  await sendMenu(chatId, header, kb);
 }
 
 // 다른 방이 붙잡고 있는 세션 — 한 기록 파일에 두 프로세스가 붙으면 서로의 맥락을 덮어쓴다.
@@ -2842,17 +2877,25 @@ function sessionsRunningInTerminal() {
   return ids;
 }
 
+// 목록은 디스크의 jsonl 을 프로젝트 폴더 기준으로 훑어 만든다 — 그래서 **이 프로젝트의 모든 방
+// 세션이 한 목록에 섞여 나온다.** 페르소나가 붙으면 이게 "역할은 세션 경계에서만" 규칙의 뒷문이
+// 된다: 기획 맥락이 쌓인 세션을 개발 역할로 이어받으면 정면 충돌이다. 그래서 다른 역할이 찍힌
+// 세션은 목록에서 뺀다. 역할이 안 찍힌 옛 세션(미상)은 ❓ 를 달아 남긴다 — 빼 버리면 페르소나를
+// 도입하는 순간 이력이 통째로 사라진다. → docs/design/room-personas.md
 function sessionKeyboard(chatId, provider, l) {
   const cur = getSid(chatId, provider);
   const held = sessionsHeldElsewhere(chatId, provider);
   const running = sessionsRunningInTerminal();
-  const list = provider === "codex" ? codexSessions() : claudeSessions();
+  const mine = roomPersona(chatId)?.id;
+  const list = (provider === "codex" ? codexSessions() : claudeSessions())
+    .filter((s) => !mine || !sessionPersonaOf(s.id) || sessionPersonaOf(s.id) === mine);
   return {
     inline_keyboard: list.map((s) => {
       const mark = s.id === cur ? "✅ " : held.has(s.id) ? "🔒 " : running.has(s.id) ? "💻 " : "";
+      const unknown = mine && !sessionPersonaOf(s.id) ? "❓ " : "";
       // 이름을 붙여둔 세션은 이름이 미리보기를 밀어낸다 — 일부러 달아둔 쪽이 더 확실한 표시다.
       const name = sessionName(s.id);
-      const label = `${mark}${sessionAge(s.at, l)} · ${name ? `🏷 ${name}` : s.preview || s.id.slice(0, 8)}`;
+      const label = `${mark}${unknown}${sessionAge(s.at, l)} · ${name ? `🏷 ${name}` : s.preview || s.id.slice(0, 8)}`;
       return [{ text: label, callback_data: `ss:${provider}:${s.id}` }];
     }),
   };

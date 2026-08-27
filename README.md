@@ -271,7 +271,7 @@ Core commands:
 | `/model [name\|default]` | View or switch this room's active-provider model |
 | `/new` | Reset the conversation session — both Claude and Codex, so a fallback can't resume the old context |
 | `/newchat [name]` *(or `/newtopic`)* | Open a **new forum topic** in this group and start a fresh session there (needs Topics on + the bot's *Manage topics* permission) |
-| `/sessions` | List this project's past sessions for the active provider and pick one to carry on from (🔒 held by another room, 💻 open in a terminal — both are blocked) |
+| `/sessions` | List this project's past sessions for the active provider and pick one to carry on from (🔒 held by another room, 💻 open in a terminal — both are blocked; with `personas`, only this room's role is listed, ❓ = predates roles) |
 | `/name <name>` | Name the current session so it stands out in `/sessions` (`/name -` removes it) |
 | `/jobs` | Background jobs that outlive replies — ▶ running, ✅ finished |
 | `/persona` | The role this room runs as, and the prompt behind it (view only — you change it from the buttons at `/new`) |
@@ -674,6 +674,12 @@ Picking applies that role's prompt **and its own `/remember` memory** (`memory.d
 
 `/status` shows the room's role in one line; `/persona` shows the prompt behind it. Neither changes
 it. With no `personas` key nothing changes at all — `persona` keeps working exactly as before.
+
+`/sessions` respects roles too. Its list comes from session files on disk, scanned per project, so
+without this it would offer **every room's** sessions — carrying a planning session into a dev room
+would quietly bypass the session-boundary rule. Sessions started before you added `personas` have no
+role recorded; they stay in the list marked **❓**, and picking one files it under the current room's
+role from then on.
 
 **A separate bot per role** still makes sense when you need two identities in one group at the same
 time, when you're migrating gradually, or when `allowedChatId` must differ. That layout is below.
