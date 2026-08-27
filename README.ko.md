@@ -498,6 +498,11 @@ plist에서 맞춰야 할 항목:
 - `StandardOutPath` / `StandardErrorPath` — 로그 파일 경로
 - `Label` — 봇마다 고유하게 (예: `com.claudebot.myproj`)
 
+> **이 경로들은 등록 시점에 그대로 굳습니다.** nvm·fnm·asdf 같은 버전 매니저를 쓰면 node 경로에
+> 버전 번호가 들어가는데, 나중에 node를 올려도 plist는 옛 버전을 계속 가리킵니다. 봇은 **아무 에러
+> 없이** 구버전 node로 계속 돕니다. `claude`를 찾는 데 쓰는 `PATH`도 마찬가지입니다. node를 올린
+> 뒤에는 `which node`로 다시 맞춰 보거나, 도는 봇을 `ps -eo args | grep bot.mjs`로 확인하세요.
+
 등록과 관리:
 
 ```sh

@@ -724,6 +724,12 @@ Items to verify in the plist:
 - `EnvironmentVariables > PATH` — includes your node/claude directories
 - `StandardOutPath` / `StandardErrorPath` — log file paths
 
+> **These paths are frozen at setup time.** If you use a version manager (nvm, fnm, asdf), the node
+> path contains a version number — upgrading node later leaves the plist pointing at the old one, and
+> the bot keeps running on it **silently**, no error anywhere. Same for `PATH`, which is how the bot
+> finds `claude`. After a node upgrade, re-run `which node` and compare, or check a running bot with
+> `ps -eo args | grep bot.mjs`.
+
 ### 2. Register & start
 
 ```sh

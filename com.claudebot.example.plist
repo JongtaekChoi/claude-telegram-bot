@@ -13,6 +13,8 @@
     <key>Label</key>
     <string>com.claudebot.PROJECT</string>
 
+    <!-- node 절대경로. 버전 매니저(nvm 등)를 쓰면 여기에 버전이 박히므로, 나중에 node 를
+         올려도 봇은 조용히 옛 버전으로 계속 돈다. `which node` 로 주기적으로 맞춰 볼 것. -->
     <key>ProgramArguments</key>
     <array>
         <string>/Users/jtchoi/.nvm/versions/node/v23.1.0/bin/node</string>
