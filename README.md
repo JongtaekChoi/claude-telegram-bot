@@ -269,7 +269,7 @@ Core commands:
 |---|---|
 | `/provider [claude\|codex\|default]` | View or switch this room's provider override |
 | `/model [name\|default]` | View or switch this room's active-provider model |
-| `/new` | Reset the active provider's conversation session |
+| `/new` | Reset the conversation session — both Claude and Codex, so a fallback can't resume the old context |
 | `/newchat [name]` *(or `/newtopic`)* | Open a **new forum topic** in this group and start a fresh session there (needs Topics on + the bot's *Manage topics* permission) |
 | `/sessions` | List this project's past sessions for the active provider and pick one to carry on from (🔒 held by another room, 💻 open in a terminal — both are blocked) |
 | `/name <name>` | Name the current session so it stands out in `/sessions` (`/name -` removes it) |

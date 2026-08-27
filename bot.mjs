@@ -2503,9 +2503,12 @@ async function flushCompactAsk(chatId, l) {
 async function doCompact(chatId, l, okKey) {
   // 압축이 세션을 갈아치우고 나면 살아 있었는지 물을 수 없다 — 먼저 봐 둔다.
   const hadPlan = planAwaitingApproval(chatId);
+  const r = rt(chatId);
+  const gen = r.gen;
   try {
     const cr = await runClaude("/compact", getSid(chatId, "claude"), { chatId });
-    if (cr.sessionId) setSid(chatId, cr.sessionId, "claude");
+    // 압축 도중 `/new` 가 들어왔으면 압축 결과 세션도 버린다 — 그것도 옛 맥락의 후속이다.
+    if (cr.sessionId) commitSid(r, gen, chatId, cr.sessionId, "claude");
     // 압축해도 임계값 아래로 안 내려갈 수 있다. 그때 snooze 를 지워버리면 바로 다음 턴에 또 물어서
     // 무한 반복이 되므로, 압축 직후 컨텍스트를 기준으로 다시 걸어둔다.
     state.autoCompactSnooze = cr.ctxTokens ? roundTokens(cr.ctxTokens * AUTOCOMPACT_SNOOZE_RATIO) : undefined;
@@ -3034,15 +3037,29 @@ function buildMsgMeta(msg) {
 // 방(chat)별 실행 상태 — 방마다 세션이 독립이라 서로 다른 방은 동시에 실행한다.
 // busy·child·typing·prevSession·stopping·queue 를 방 단위로 들고, 한 방 안에서는 여전히 직렬화된다
 // (단일 머신이라도 CLI 프로세스는 방마다 하나씩 병렬 실행). 레이트리밋만 계정 단위라 전역.
-const chatRuntime = new Map(); // chatId → { busy, child, typing, prevSession, stopping, queue, compactAsk }
+const chatRuntime = new Map(); // chatId → { busy, child, typing, prevSession, stopping, queue, compactAsk, gen }
 function rt(chatId) {
   const id = String(chatId);
   let r = chatRuntime.get(id);
   if (!r) {
-    r = { busy: false, child: null, typing: null, prevSession: null, stopping: false, queue: [], compactAsk: 0 };
+    r = { busy: false, child: null, typing: null, prevSession: null, stopping: false, queue: [], compactAsk: 0, gen: 0 };
     chatRuntime.set(id, r);
   }
   return r;
+}
+
+// 실행이 끝나 세션 ID 를 등록하려는데, 그 사이 `/new` 가 맥락을 버렸으면 등록하지 않는다.
+// `/new` 는 돌고 있어도 먹혀야 해서 명령 구간(busy 검사보다 앞)에서 처리되는데, 그때 돌던 실행이
+// 끝나면서 후속 세션 ID 를 등록하면 **방금 버린 맥락이 그대로 되살아난다.** 사용자는 새 대화라고
+// 안내받은 채 옛 맥락 위에서 계속 말하게 된다.
+//
+// 답장 자체는 그대로 보낸다 — 실행을 취소하는 건 `/stop` 의 일이고, `/new` 는 "다음 메시지부터
+// 새로" 라는 뜻이다. 이미 돌던 답을 버리면 사용자가 시킨 적 없는 취소가 된다.
+function commitSid(r, gen, chatId, id, provider) {
+  if (gen !== undefined && r.gen !== gen) return false;
+  setSid(chatId, id, provider);
+  saveState(state);
+  return true;
 }
 const CRON_KEY = "__cron__"; // 예약 작업 전용 실행 슬롯 (실제 chatId 와 겹치지 않음)
 const mediaGroups = new Map(); // media_group_id → { msgs, timer } — 미디어 그룹 수집 대기
@@ -3089,7 +3106,7 @@ function resumeQueueAfterProviderSwitch(chatId, previousProvider) {
 }
 
 // runClaude 결과를 답장으로 변환 — 폴백/큐잉/자동 컴팩션 처리. handle()과 /plan 승인 실행이 공유.
-async function replyWithClaudeResult(chatId, l, prompt, msg, res, started, planPending) {
+async function replyWithClaudeResult(chatId, l, prompt, msg, res, started, planPending, gen) {
   const r = rt(chatId);
   const secs = Math.round((Date.now() - started) / 1000);
   if (!res.ok) {
@@ -3103,7 +3120,7 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started, planP
       try {
         const cRes = await runCodex(prompt, l, { trackChild: r, sessionId: getSid(chatId, "codex"), chatId });
         if (cRes.ok) {
-          if (cRes.sessionId) { setSid(chatId, cRes.sessionId, "codex"); saveState(state); }
+          if (cRes.sessionId) commitSid(r, gen, chatId, cRes.sessionId, "codex");
           await deliver(chatId, cRes.text, { relayed: Boolean(msg?._relay) }); return;
         }
         console.error(cRes.text);
@@ -3120,7 +3137,7 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started, planP
           chatId,
         });
         if (oRes.ok) {
-          if (oRes.sessionId) { setSid(chatId, oRes.sessionId, "claude"); saveState(state); }
+          if (oRes.sessionId) commitSid(r, gen, chatId, oRes.sessionId, "claude");
           await send(chatId, oRes.text); return;
         }
       } catch {}
@@ -3195,14 +3212,12 @@ async function runApprovedPlan(chatId, l) {
   try {
     await tg("sendChatAction", { ...typingTarget(chatId), action: "typing" });
     r.prevSession = { chatId: String(chatId), provider: "claude", sessionId: getSid(chatId, "claude") };
+    const gen = r.gen; // 실행 중 /new 가 들어오면 결과 세션을 버린다 (commitSid 참고)
     // permissionMode 를 넘기지 않아 cfg.permissionMode 로 돈다 — 승인 실행은 plan 고정을 무시해야
     // 한다. 여기서 고정을 따르면 승인한 계획을 또 계획하고 앉아 있게 된다.
     const res = await runClaude(PLAN_PROCEED_PROMPT, pending.sessionId, { modelHint: true, trackChild: r, injectMemory: true, chatId });
-    if (res.sessionId) {
-      setSid(chatId, res.sessionId, "claude");
-      saveState(state);
-    }
-    await replyWithClaudeResult(chatId, l, PLAN_PROCEED_PROMPT, syntheticMsg, res, started);
+    if (res.sessionId) commitSid(r, gen, chatId, res.sessionId, "claude");
+    await replyWithClaudeResult(chatId, l, PLAN_PROCEED_PROMPT, syntheticMsg, res, started, false, gen);
   } catch (e) {
     if (!r.stopping) await send(chatId, t(l, "botError", e.message));
   } finally {
@@ -3499,11 +3514,12 @@ async function handle(msg) {
       const prompt = cfg.codexFallback
         ? "Reply with exactly one sentence: Codex fallback is working."
         : "Reply with exactly one sentence: Ollama fallback is working.";
+      const testGen = r.gen;
       const res = cfg.codexFallback
         ? await runCodex(prompt, l, { trackChild: r, recordHandoff: false, sessionId: getSid(chatId, "codex"), chatId })
         : await runOllama(prompt, l, { chatId });
       if (res.ok) {
-        if (cfg.codexFallback && res.sessionId) { setSid(chatId, res.sessionId, "codex"); saveState(state); }
+        if (cfg.codexFallback && res.sessionId) commitSid(r, testGen, chatId, res.sessionId, "codex");
         await send(chatId, res.text);
       }
       else await send(chatId, t(l, "testFallbackFail", res.text));
@@ -3519,7 +3535,13 @@ async function handle(msg) {
     return;
   }
   if (text === "/new") {
-    setSid(chatId, undefined); // 이 방의 현재 provider 세션만 초기화 (다른 방·다른 provider는 유지)
+    // 돌고 있는 실행이 끝나며 후속 세션을 등록하지 못하게 막는다(commitSid 참고).
+    r.gen++;
+    // 양쪽 provider 를 다 지운다. 현재 것만 지우면 살아남은 Codex 세션을 다음 폴백이 그대로
+    // 이어받아(replyWithClaudeResult 의 `getSid(chatId, "codex")`), 맥락을 비웠다고 안내해 놓고
+    // 폴백만 옛 대화를 기억하는 상태가 된다. 다른 방 세션은 그대로다.
+    setSid(chatId, undefined, "claude");
+    setSid(chatId, undefined, "codex");
     state.autoCompactSnooze = undefined; // 컨텍스트가 비었으니 미뤄둔 것도 의미 없음
     r.compactAsk = 0; // 승인 대기 때문에 미뤄둔 물음도 같이 — 물어볼 컨텍스트 자체가 사라졌다
     saveState(state);
@@ -3678,11 +3700,9 @@ async function handle(msg) {
       if (currentProvider(chatId) !== "claude") { await send(chatId, t(l, "planProviderUnsupported")); return; }
       const planReq = text.slice(5).trim();
       r.prevSession = { chatId: String(chatId), provider: "claude", sessionId: getSid(chatId, "claude") };
+      const planGen = r.gen;
       const res = await runClaude(planReq, getSid(chatId, "claude"), { permissionMode: "plan", modelHint: true, trackChild: r, injectMemory: true, chatId });
-      if (res.sessionId) {
-        setSid(chatId, res.sessionId, "claude");
-        saveState(state);
-      }
+      if (res.sessionId) commitSid(r, planGen, chatId, res.sessionId, "claude");
       if (!res.ok) {
         await send(chatId, `⚠️ ${res.text}`);
         return;
@@ -3732,9 +3752,10 @@ async function handle(msg) {
     if (meta) prompt = prompt ? `${meta}\n\n${prompt}` : meta;
     if (state.ollamaMode) {
       try {
+        const ollamaGen = r.gen;
         const oRes = await runOllama(prompt, l, { noHeader: true, sessionId: getSid(chatId, "claude"), chatId });
         if (oRes.ok) {
-          if (oRes.sessionId) { setSid(chatId, oRes.sessionId, "claude"); saveState(state); }
+          if (oRes.sessionId) commitSid(r, ollamaGen, chatId, oRes.sessionId, "claude");
           await send(chatId, oRes.text);
         }
         else await send(chatId, t(l, "testFallbackFail", oRes.text));
@@ -3747,6 +3768,7 @@ async function handle(msg) {
     // plan 고정 중이면 `/plan <요청>` 을 매번 붙인 것과 같게 돈다. Codex 에는 plan 이 없으므로
     // provider 가 claude 일 때만 걸린다 — /provider 로 바꿔도 고정 자체는 남아 돌아오면 다시 적용된다.
     const planMode = planLocked(chatId) && currentProvider(chatId) === "claude" && !msg._approvedPlan;
+    const gen = r.gen; // 실행 중 /new 가 들어오면 결과 세션을 버린다 (commitSid 참고)
     const res = await runPrimary(prompt, {
       sessionId: getSid(chatId),
       lang: l,
@@ -3756,11 +3778,8 @@ async function handle(msg) {
       chatId,
       ...(planMode ? { permissionMode: "plan" } : {}),
     });
-    if (res.sessionId) {
-      setSid(chatId, res.sessionId);
-      saveState(state);
-    }
-    await replyWithClaudeResult(chatId, l, prompt, msg, res, started, planMode && res.ok);
+    if (res.sessionId) commitSid(r, gen, chatId, res.sessionId);
+    await replyWithClaudeResult(chatId, l, prompt, msg, res, started, planMode && res.ok, gen);
     // 계획 본문은 위에서 이미 나갔다 — 승인 버튼만 따로 한 줄 붙인다. 실패했거나 폴백된 답에는
     // 승인할 계획이 없으므로 res.ok 일 때만이다. 버튼은 `/plan <요청>` 과 같은 콜백을 재사용한다.
     if (planMode && res.ok) {
