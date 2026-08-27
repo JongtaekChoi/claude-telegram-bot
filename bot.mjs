@@ -15,7 +15,7 @@
 // 자동 판별하고, cfg.lang 을 주면 그 언어로 고정함. 콘솔/CLI 출력은 영어 단일.
 
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
 import dns from "node:dns";
 import { fileURLToPath } from "node:url";
@@ -175,6 +175,14 @@ const JOB_LOG_TAIL = 1200; // 완료 알림에 붙일 로그 꼬리 길이
 // 방 사이 전달(/tell): 이 봇이 맡은 다른 방으로 메시지 하나를 넘긴다. 방마다 세션이 독립이라
 // 옆방이 알아낸 걸 가져올 통로가 없던 자리다. → docs/design/room-relay.md
 const ROOM_RELAY = cfg.roomRelay !== false;
+// CLI 에서 봇에 일 시키기(`ctb send`): 터미널이 프롬프트를 넘기면 봇이 **그 방에서** 처리한다 —
+// typing 이 돌고 답이 그 방에 남는, 사람이 텔레그램으로 보낸 것과 구별 안 되는 상태.
+// 로컬 유닉스 소켓만 연다(0600, 봇 폴더 안). → docs/design/cli-dispatch.md
+const CLI_DISPATCH = cfg.cliDispatch !== false;
+// 소켓 이름도 state 와 같은 규칙으로 config 에서 파생시킨다. 한 폴더에 봇이 여럿이면(개발자·기획자)
+// 이름이 하나일 때 **나중에 뜬 봇이 앞선 봇의 살아 있는 소켓을 지우고 자기가 붙잡는다.** 그러면
+// ctb send 가 엉뚱한 봇에 닿아 다른 페르소나·다른 세션으로 조용히 돈다.
+const SOCK_PATH = join(BOT_DIR, stateBase === "config" ? "ctb.sock" : `${stateBase}.ctb.sock`);
 // 방별 페르소나: config 에 역할 목록을 두고 방마다 하나를 가리킨다. 역할을 프로세스가 아니라
 // 방으로 가르는 것이라, 봇 하나가 개발방·기획방을 동시에 맡을 수 있다. **목록이 없으면 지금과
 // 완전히 같이 동작한다** — 이 레포는 공개 배포물이고 대다수 사용자는 페르소나를 안 쓴다.
@@ -334,6 +342,11 @@ const STR = {
       `🎭 This room is mid-conversation as **${cur}**, so it can't become **${next}** now — everything said `
       + "so far belongs to the current role.\n\nSend `/new` to drop that context, then pick again.",
     personaGone: "🎭 That role is no longer in the config.",
+    dispatchIncoming: "💻 From a terminal on this machine — running it here:",
+    dispatchAsk: (body) => `💻 A terminal on this machine wants this run here:\n\n${body}\n\nGo ahead?`,
+    dispatchRejected: "❌ Ignored. Nothing ran.",
+    dispatchExpired: "💻 That terminal request expired without an answer (10 min).",
+    dispatchGone: "That terminal request is no longer pending (the bot may have restarted since).",
     sessionsPersonaNote: (role) =>
       `🎭 Only **${role}** sessions are listed. ❓ = started before roles existed — picking one files it under ${role}.`,
     sessionPersonaUnknown: (role) =>
@@ -760,6 +773,11 @@ const STR = {
       `🎭 이 방은 **${cur}** 로 대화가 진행 중이라 지금 **${next}** 로 바꿀 수 없습니다 — 지금까지 오간 `
       + "말이 전부 현재 역할의 것입니다.\n\n`/new` 로 그 맥락을 버린 뒤에 다시 고르세요.",
     personaGone: "🎭 그 역할은 이제 config 에 없습니다.",
+    dispatchIncoming: "💻 이 기계의 터미널에서 온 요청 — 여기서 실행합니다:",
+    dispatchAsk: (body) => `💻 터미널에서 이걸 여기서 실행하려고 합니다:\n\n${body}\n\n실행할까요?`,
+    dispatchRejected: "❌ 무시했습니다. 아무것도 실행하지 않았습니다.",
+    dispatchExpired: "💻 터미널 요청이 답 없이 만료됐습니다 (10분).",
+    dispatchGone: "그 터미널 요청은 더 이상 대기 중이 아닙니다 (그 사이 봇이 재시작됐을 수 있습니다).",
     sessionsPersonaNote: (role) =>
       `🎭 **${role}** 세션만 보입니다. ❓ 는 역할이 생기기 전 세션이고, 고르면 ${role} 것으로 기록됩니다.`,
     sessionPersonaUnknown: (role) =>
@@ -2989,6 +3007,162 @@ async function sendPersonaMenu(chatId, l, key) {
   await sendMenu(chatId, t(l, key, cur.name), { inline_keyboard: rows });
   return true;
 }
+// ── CLI 에서 봇에 일 시키기 (ctb send) ───────────────────────────────────
+// 터미널이 소켓으로 프롬프트를 넘기면 **봇이 그 방에서** 처리한다 — /tell 과 같은 합성 메시지
+// 방식이라 typing·큐·busy 락·plan 고정·답 전송이 전부 따라온다. 없던 건 프로세스 경계뿐이었다.
+// → docs/design/cli-dispatch.md
+const PENDING_DISPATCH_TTL = 10 * 60_000; // 승인 대기 상한 — 터미널이 영영 매달리지 않게 한다
+const PENDING_DISPATCH_MAX = 20; // 승인 요청이 방을 도배하지 않게 (pendingTells 와 같은 상한)
+const pendingDispatch = new Map(); // id → { room, text, reply, timer }
+// 버튼 id 에 부팅 난수를 섞는다. 순번만 쓰면 재시작 뒤 같은 번호가 다시 나와서, 방에 남아 있던
+// **옛 요청의 버튼이 새 요청을 실행한다** — 사람은 A 를 읽고 B 를 승인하게 된다.
+const DISPATCH_BOOT = Math.random().toString(36).slice(2, 8);
+let dispatchSeq = 0;
+
+// 터미널이 답을 기다리는 요청은 **반드시 한 번 답을 받는다.** 안 받으면 소켓이 매달린 채 남는다.
+// handle() 의 출구는 여럿이고(폴백 성공, /stop, 뮤트, 예외) 부르는 자리마다 챙기면 반드시 빠뜨리므로,
+// 메시지에는 토큰만 달고 정산은 여기 한 곳에서 한다. 두 번 불러도 무해하다 — 맵에서 지우기 때문이다.
+const dispatchWaiters = new Map(); // token → reply
+let dispatchToken = 0;
+function settleDispatch(tokens, result) {
+  for (const tk of tokens || []) {
+    const reply = dispatchWaiters.get(tk);
+    if (!reply) continue;
+    dispatchWaiters.delete(tk);
+    try { reply(result); } catch {}
+  }
+}
+// 방 대기열을 버리는 자리(/stop·/restart)는 그 안에 든 요청도 같이 정산해야 한다 — 큐에서 사라지면
+// 그 뒤로 아무도 답하지 않는다.
+function dropQueued(r, reason) {
+  for (const item of r.queue) settleDispatch(item.msg?._dispatch, { ok: false, error: reason });
+  r.queue.length = 0;
+}
+
+const dispatchPrompt = (text) =>
+  "[Sent from a terminal on this machine by the person using this bot — not typed in this chat.]\n"
+  + "Answer here, in this room. You cannot pass this on to another room.\n\n"
+  + text;
+
+// 합성 메시지를 만들어 handle() 에 넣는다. runRelay 와 같은 모양이고, 홉 1 표시(_relay)를 달아
+// 여기서 들어온 턴이 다시 다른 방으로 넘어가지 못하게 한다.
+async function runDispatch(room, text, reply) {
+  const target = tgTarget(room);
+  const tk = `d${++dispatchToken}`;
+  dispatchWaiters.set(tk, reply);
+  const msg = {
+    chat: { id: target.chat_id },
+    text: dispatchPrompt(text),
+    _drained: true,
+    _relay: `terminal:${room}`,
+    _dispatch: [tk],
+  };
+  if (target.message_thread_id !== undefined) {
+    msg.is_topic_message = true;
+    msg.message_thread_id = target.message_thread_id;
+  }
+  await handle(msg);
+  // handle() 이 끝났는데 답이 없으면 이 메시지는 답 없이 파이프라인을 떠난 것이다(뮤트·에러·중단).
+  // 다만 **큐에 남아 있으면 아직 차례가 안 온 것**이라 건드리지 않는다 — 그건 drainQueue 가 이어받는다.
+  if (!rt(room).queue.some((item) => item.msg === msg))
+    settleDispatch(msg._dispatch, { ok: false, error: "the bot dropped this without answering" });
+}
+
+// 승인 없이 실행할 때도 방에는 반드시 표시한다. 프로세스는 사람이 친 ctb 와 에이전트가 부른 ctb 를
+// 구분할 수 없으므로 우회를 막을 수는 없다 — 대신 매번 **보이게** 한다.
+async function dispatchNow(room, text, reply) {
+  await send(room, t(BOT_LANG, "dispatchIncoming") + `\n\n${text}`);
+  await runDispatch(room, text, reply);
+}
+
+async function askDispatch(room, text, reply) {
+  const id = `${DISPATCH_BOOT}.${++dispatchSeq}`;
+  const timer = setTimeout(() => {
+    if (!pendingDispatch.delete(id)) return;
+    reply({ ok: false, error: "approval timed out" });
+    send(room, t(BOT_LANG, "dispatchExpired")).catch(() => {});
+  }, PENDING_DISPATCH_TTL);
+  timer.unref?.();
+  pendingDispatch.set(id, { room, text, reply, timer });
+  await send(room, t(BOT_LANG, "dispatchAsk", text), {
+    replyMarkup: {
+      inline_keyboard: [[
+        { text: t(BOT_LANG, "tellApprove"), callback_data: `dp:y:${id}` },
+        { text: t(BOT_LANG, "tellReject"), callback_data: `dp:n:${id}` },
+      ]],
+    },
+  });
+}
+
+// 소켓 한 줄 = 요청 하나. 응답도 줄 단위 JSON 이고, 마지막 줄에만 ok 가 들어간다.
+async function handleDispatch(req, emit) {
+  const room = String(req.room || "").trim();
+  if (!room) return emit({ ok: false, error: "no room given" });
+  if (!allowedIds.includes(String(baseChatId(room))))
+    return emit({ ok: false, error: `room ${room} is not in allowedChatId` });
+  if (!String(req.text || "").trim()) return emit({ ok: false, error: "empty message" });
+  // 터미널이 쥔 방으로는 못 보낸다 — 봇이 그 방을 미루므로 세션이 끝날 때까지 큐에서 안 나온다.
+  // 뮤트는 "지금 이 방은 아무것도 실행하지 마라"는 뜻이라 전달도 예외가 아니다(/tell 과 같은 규칙).
+  // 여기서 안 막으면 handle() 이 조용히 삼켜서 터미널이 답 없이 매달린다.
+  if (state.sessions?.[room]?.muted)
+    return emit({ ok: false, error: `room ${room} is muted (/*) — unmute it there first` });
+  const lock = readLocalLock();
+  if (lock && String(lock.room) === room)
+    return emit({ ok: false, error: "that room is held by a local ctb session — send to another room" });
+  if (pendingDispatch.size >= PENDING_DISPATCH_MAX && !req.now)
+    return emit({ ok: false, error: "too many terminal requests are awaiting approval" });
+  const text = String(req.text).trim();
+  const reply = (final) => emit(final);
+  if (req.now) {
+    emit({ status: "running" });
+    await dispatchNow(room, text, reply);
+  } else {
+    emit({ status: "awaiting-approval" });
+    await askDispatch(room, text, reply);
+  }
+}
+
+function startDispatchServer() {
+  try { if (existsSync(SOCK_PATH)) unlinkSync(SOCK_PATH); } catch {}
+  const server = net.createServer((conn) => {
+    conn.setEncoding("utf8");
+    let buf = "", done = false;
+    const emit = (obj) => {
+      if (done) return;
+      if (obj.ok !== undefined) done = true;
+      try { conn.write(`${JSON.stringify(obj)}\n`); } catch {}
+      if (done) conn.end();
+    };
+    // 연결 하나 = 요청 하나. 첫 줄 뒤에 더 오면 무시한다 — 같은 emit 을 공유하는 두 번째 요청은
+    // 방에서 실행은 되고 답은 삼켜지는 반쪽 상태가 된다.
+    let taken = false;
+    conn.on("data", (d) => {
+      if (taken) return;
+      buf += d;
+      const nl = buf.indexOf("\n");
+      if (nl < 0) return;
+      taken = true;
+      const line = buf.slice(0, nl);
+      buf = "";
+      let req;
+      try { req = JSON.parse(line); } catch { return emit({ ok: false, error: "bad request" }); }
+      handleDispatch(req, emit).catch((e) => emit({ ok: false, error: e.message }));
+    });
+    conn.on("error", () => {});
+  });
+  server.on("error", (e) => console.error("Dispatch socket error:", e.message));
+  server.listen(SOCK_PATH, () => {
+    // 소켓 파일 모드는 플랫폼마다 강제가 들쭉날쭉해서, 폴더 권한까지 같이 좁힌다.
+    // 붙을 수 있으면 `now:true` 로 승인도 건너뛸 수 있으니 접근 가능성 자체가 권한 모델이다.
+    try { chmodSync(BOT_DIR, 0o700); } catch {}
+    try { chmodSync(SOCK_PATH, 0o600); } catch {}
+    console.log(`Dispatch socket: ${SOCK_PATH}`);
+  });
+  const close = () => { try { unlinkSync(SOCK_PATH); } catch {} };
+  process.on("exit", close);
+  return server;
+}
+
 // /tell <방> <메시지> — 이 봇이 맡은 다른 방으로 메시지 하나를 넘긴다. 사람이 직접 친 것이므로
 // 대상 방에 물어보지 않고 바로 실행한다(에이전트가 마커로 부르는 길만 승인을 받는다).
 // 인자 없이 부르면 방 목록. → docs/design/room-relay.md
@@ -3335,7 +3509,9 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started, planP
         const cRes = await runCodex(prompt, l, { trackChild: r, sessionId: getSid(chatId, "codex"), chatId });
         if (cRes.ok) {
           if (cRes.sessionId) commitSid(r, gen, chatId, cRes.sessionId, "codex");
-          await deliver(chatId, cRes.text, { relayed: Boolean(msg?._relay) }); return;
+          await deliver(chatId, cRes.text, { relayed: Boolean(msg?._relay) });
+          settleDispatch(msg?._dispatch, { ok: true, text: cRes.text }); // 폴백으로 답했어도 답은 답이다
+          return;
         }
         console.error(cRes.text);
       } catch (e) {
@@ -3352,7 +3528,9 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started, planP
         });
         if (oRes.ok) {
           if (oRes.sessionId) commitSid(r, gen, chatId, oRes.sessionId, "claude");
-          await send(chatId, oRes.text); return;
+          await send(chatId, oRes.text);
+          settleDispatch(msg?._dispatch, { ok: true, text: oRes.text });
+          return;
         }
       } catch {}
     }
@@ -3372,10 +3550,12 @@ async function replyWithClaudeResult(chatId, l, prompt, msg, res, started, planP
     }
     const errMsg = res.text === "contextTooLong" ? t(l, "contextTooLong") : `⚠️ ${res.text}${autoRetryMsg}`;
     if (!r.stopping) await send(chatId, errMsg);
+    settleDispatch(msg?._dispatch, { ok: false, error: res.text }); // 터미널이 기다리면 실패도 알린다
   } else {
     const footer = `\n\n— ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`;
     // 전달받아 돈 턴이면 그 답에 또 전달 마커가 있어도 넘기지 않는다 — 홉은 1 이다(deliver 가 끊는다).
     if (!r.stopping) await deliver(chatId, res.text + footer, { relayed: Boolean(msg?._relay) });
+    settleDispatch(msg?._dispatch, { ok: true, text: res.text });
     // 자동 컴팩션: 컨텍스트가 임계값을 넘으면 압축할지 물어본다. 예고 없이 압축이 돌면 대화
     // 맥락이 갑자기 요약본으로 바뀌어 흐름이 끊기므로, 기본은 확인을 받는 쪽이다.
     // config 의 autoCompactConfirm:false 로 예전처럼 묻지 않고 바로 압축하게 할 수 있다.
@@ -3514,6 +3694,18 @@ async function handleCallback(cq) {
     if (!pending) await send(chatId, t(l, "tellExpired"));
     else if (cq.data.startsWith("tl:n:")) await send(chatId, t(l, "tellRejected"));
     else runRelay(pending.from, pending.to, pending.text).catch((e) => console.error("Relay run error:", e.message));
+  } else if (cq.data?.startsWith("dp:")) {
+    const id = cq.data.slice(5);
+    const pending = pendingDispatch.get(id);
+    pendingDispatch.delete(id);
+    if (!pending) { await send(chatId, t(l, "dispatchGone")); return; }
+    clearTimeout(pending.timer);
+    if (cq.data.startsWith("dp:n:")) {
+      pending.reply({ ok: false, error: "rejected in the room" });
+      await send(chatId, t(l, "dispatchRejected"));
+    } else {
+      await runDispatch(pending.room, pending.text, pending.reply);
+    }
   } else if (cq.data?.startsWith("pa:")) {
     const persona = PERSONAS.find((p) => p.id === cq.data.slice(3));
     // config 에서 사라진 역할의 버튼이 남아 있을 수 있다 — 재시작 전에 띄운 것.
@@ -3793,7 +3985,7 @@ async function handle(msg) {
     // 아직 시작 안 한 병합 창을 물고 있을 수 있다 — 안 치우면 "작업해줘" → /stop 직후에 그 작업이
     // 그대로 시작된다. 아직 프로세스를 띄운 게 없으니 죽일 자식도, 되돌릴 세션도 없다.
     if (!r.busy && cancelHold(chatId)) {
-      r.queue.length = 0;
+      dropQueued(r, "stopped in the room");
       clearHeld(chatId);
       await send(chatId, t(l, "stopOk"));
       return;
@@ -3810,7 +4002,7 @@ async function handle(msg) {
     }
     const reset = text.includes("--reset");
     r.stopping = true;
-    r.queue.length = 0; // 이 방의 대기 메시지도 취소 (다른 방은 그대로)
+    dropQueued(r, "stopped in the room"); // 이 방의 대기 메시지도 취소 (다른 방은 그대로)
     clearHeld(chatId);
     r.child.kill();
     if (reset && r.prevSession) {
@@ -3875,7 +4067,7 @@ async function handle(msg) {
       if (rateLimitTimer) { clearTimeout(rateLimitTimer); rateLimitTimer = null; }
       rateLimitUntil = null;
       // 모든 방의 예약 대기열 취소 — 열려 있는 병합 창과 그 디스크 사본까지 같이 걷어낸다
-      for (const [id, rr] of chatRuntime) { cancelHold(id); rr.queue.length = 0; clearHeld(id); }
+      for (const [id, rr] of chatRuntime) { cancelHold(id); dropQueued(rr, "the bot restarted"); clearHeld(id); }
       await send(chatId, t(l, "reserveRm"));
       return;
     }
@@ -4046,6 +4238,11 @@ async function handle(msg) {
 // 큐가 방별로 분리돼 있어 이 안의 메시지는 모두 같은 방·같은 세션 → 안전하게 병합 가능.
 // 여기서 나온 메시지는 handle() 로 되돌아가므로 `_drained` 를 찍어 둔다 — 표시가 없으면 병합 창에
 // 또 붙잡혀 영영 실행되지 않는다. 작업이 끝난 뒤 드레인되는 메시지도 이미 충분히 기다렸으니 마찬가지다.
+// 병합된 그룹이 물고 있는 터미널 토큰 전부. 빈 배열은 undefined 로 접어서 메시지에 안 남긴다.
+function dispatchTokensOf(group) {
+  const tokens = group.flatMap((item) => item.msg?._dispatch || []);
+  return tokens.length ? tokens : undefined;
+}
 function drainQueue(chatId) {
   const group = rt(chatId).queue.splice(0);
   clearHeld(chatId); // 큐를 비우는 유일한 자리 — 창이 남긴 디스크 사본도 여기서 같이 지운다
@@ -4078,6 +4275,9 @@ function drainQueue(chatId) {
     _approvedPlan: group.every((item) => item.msg._approvedPlan) || undefined,
     // 하나라도 옆방에서 전달된 거면 합쳐진 턴 전체를 전달로 본다 — 되전달을 막는 쪽이 안전하다.
     _relay: group.find((item) => item.msg._relay)?.msg._relay,
+    // 터미널이 기다리고 있는 요청이 섞였으면 그 갈고리도 넘긴다 — 합쳐진 답 하나를 받게 된다.
+    // **전부** 넘긴다 — 하나만 챙기면 같이 병합된 다른 터미널이 답을 못 받고 매달린다.
+    _dispatch: dispatchTokensOf(group),
     _drained: true,
   };
 }
@@ -4254,6 +4454,7 @@ async function main() {
 
   startScheduler();
   startJobWatcher();
+  if (CLI_DISPATCH) startDispatchServer(); // ctb send 가 붙을 로컬 소켓
   checkForUpdate().catch(() => {});
 
   while (true) {

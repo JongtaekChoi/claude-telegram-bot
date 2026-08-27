@@ -406,6 +406,7 @@ The only keys you need to start are `token`, `allowedChatId`, `projectDir`, `cla
 | `sendImages` | (optional) Let the agent send images back to the chat via `.ctb-outbox/` (default: `true`). Set to `false` to turn the whole feature off. |
 | `backgroundJobs` | (optional) Watch detached jobs registered in `.ctb-jobs/` and report them via `/jobs` (default: `true`). Set to `false` to turn the whole feature off. |
 | `roomRelay` | (optional) Let `/tell` and the agent hand a message to another room this bot runs (default: `true`). Set to `false` to turn the whole feature off. |
+| `cliDispatch` | (optional) Listen on a local unix socket (`.claude-bot/ctb.sock`, mode 0600) so `ctb send` can hand the running bot a message (default: `true`). Set to `false` to not open it. |
 | `codexFallback` | (optional) `true` to enable Codex as the preferred fallback when Claude is rate-limited or out of credits |
 | `codexBin` | (optional) Path to the `codex` binary. Defaults to `"codex"` on `PATH`; use an absolute path for launchd |
 | `codexModel` | (optional) Codex model passed with `--model`; `/model` shows the models available to the installed Codex CLI as buttons. Empty/default lets the CLI choose and is safest. |
@@ -462,6 +463,26 @@ separate. `ctb` also passes your `persona` and the `/remember` rules to Claude o
 terminal session behaves like the bot even right after `/new`, when there is no prior conversation
 to carry the persona. Telegram-only wording (reply brevity, image sending, model-upgrade hints) is
 left out, and Codex has no `--append-system-prompt`, so this applies to `provider: "claude"` only.
+
+**Handing the running bot a job — `ctb send`.** The commands above run Claude *in your terminal*;
+the bot knows nothing about it. `ctb send --chat <room> "<message>"` does the opposite: it hands the
+message to the **already-running bot** over a local unix socket, and the bot runs it in that room —
+typing indicator, that room's session and settings, the answer posted there. From the outside it is
+indistinguishable from a message you typed into Telegram, and the answer also comes back on stdout
+so a script can use it.
+
+```sh
+ctb send --chat planning "draft the release note for 0.5.0"
+```
+
+The room can be its key or any distinctive part of its name. By default the target room is asked to
+approve with ✅/❌ first — the caller may well be an agent, and a process cannot tell a human-typed
+`ctb` from one a model invoked, so the safe default applies to both; `--now` skips it for unattended
+scripts and the room is told either way. It refuses to target the room your own `ctb` session is
+holding (the bot defers that room, so the message would sit in the queue until you quit), and a
+message pushed this way cannot be relayed onward. If no bot is running it fails outright rather than
+quietly falling back to a local run. Turn the socket off with `"cliDispatch": false`. Design notes:
+[CLI dispatch](docs/design/cli-dispatch.md).
 
 When the terminal session ends, `ctb` asks it one last question — not "summarize what you did" but
 "the conversation continues on Telegram; is there anything to hand over?" — and posts the answer to

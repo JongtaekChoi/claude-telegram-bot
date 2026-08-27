@@ -82,6 +82,12 @@ function personaFor(cfg, room) {
 // 메모리도 같은 규칙으로 가른다 — bot.mjs 의 memoryPathFor 와 짝이어야 한다. 여기가 어긋나면
 // 터미널과 봇이 서로 다른 규칙을 읽는다. 방이 페르소나를 가리키면 그 id 까지 붙인다.
 // config.json → .claude-bot/memory.md · memory.dev.md / planner.json → planner.memory.md
+// 소켓 이름도 state·memory 와 같은 규칙으로 config 에서 파생된다 — 한 폴더에 봇이 여럿이면
+// 이름이 하나일 때 서로의 소켓을 지우고 빼앗는다. bot.mjs 의 SOCK_PATH 와 짝이다.
+function sockPathFor(configPath) {
+  const base = basename(configPath, ".json");
+  return join(dirname(configPath), ".claude-bot", base === "config" ? "ctb.sock" : `${base}.ctb.sock`);
+}
 function memoryPathFor(configPath, personaId) {
   const base = basename(configPath, ".json");
   const stem = base === "config" ? "memory" : `${base}.memory`;
@@ -185,6 +191,105 @@ async function pickRoom(rows) {
   });
 }
 
+// `ctb send` — 프롬프트를 **돌고 있는 봇에** 넘긴다. 봇이 그 방에서 처리하므로 typing 이 돌고
+// 답이 그 방에 남는다. 봇이 안 떠 있으면 그냥 실패한다 — 조용히 로컬 실행으로 물러서면 방 안내도
+// typing 도 없이 돌아서, 원한 것과 정반대인데 성공한 것처럼 보인다. → docs/design/cli-dispatch.md
+function resolveRoomToken(token, sessions) {
+  const rooms = Object.entries(sessions || {})
+    .filter(([, b]) => b?.title)
+    .map(([room, b]) => ({ room, title: b.title }));
+  if (sessions?.[token]) return { room: token };
+  const needle = String(token).toLowerCase();
+  const hits = rooms.filter((r) => r.title.toLowerCase().includes(needle));
+  if (hits.length === 1) return { room: hits[0].room };
+  if (hits.length > 1) return { ambiguous: hits };
+  return { rooms };
+}
+
+async function sendToBot(rest) {
+  // `ctb send "bump package.json" --chat dev` 처럼 **본문**이 .json 으로 끝날 수 있다. 공백이
+  // 들어간 건 파일 이름이 아니라 문장으로 본다 — 여기 인자 1은 명령이 아니라 사람 말이다.
+  const looksLikeConfig = rest[0]?.endsWith(".json") && !/\s/.test(rest[0]);
+  const configPath = resolveConfig(looksLikeConfig ? rest[0] : undefined);
+  const rest2 = looksLikeConfig ? rest.slice(1) : rest;
+  let room, now = false;
+  const words = [];
+  for (let i = 0; i < rest2.length; i++) {
+    const arg = rest2[i];
+    if (arg === "--chat") room = rest2[++i];
+    else if (arg.startsWith("--chat=")) room = arg.slice("--chat=".length);
+    else if (arg === "--now") now = true;
+    else words.push(arg);
+  }
+  const text = words.join(" ").trim();
+  if (!text) { process.stderr.write("ctb send: no message given\n"); process.exit(2); }
+
+  let st = {};
+  try { st = JSON.parse(readFileSync(statePathFor(configPath), "utf8")); } catch {}
+  if (!room) {
+    // 방을 안 주면 아는 방이 하나뿐일 때만 그걸 쓴다 — 스크립트에서 엉뚱한 방으로 가면 안 된다.
+    const known = Object.entries(st.sessions || {}).filter(([, b]) => b?.title);
+    if (known.length !== 1) {
+      process.stderr.write("ctb send: --chat is required. Rooms this bot knows:\n");
+      for (const [k, b] of known) process.stderr.write(`  ${k}  ${b.title}\n`);
+      process.exit(2);
+    }
+    room = known[0][0];
+  } else {
+    const hit = resolveRoomToken(room, st.sessions);
+    if (hit.ambiguous) {
+      process.stderr.write("ctb send: that matches more than one room:\n");
+      for (const r of hit.ambiguous) process.stderr.write(`  ${r.room}  ${r.title}\n`);
+      process.exit(2);
+    }
+    if (!hit.room) {
+      process.stderr.write(`ctb send: no room matches "${room}". Rooms this bot knows:\n`);
+      for (const r of hit.rooms) process.stderr.write(`  ${r.room}  ${r.title}\n`);
+      process.exit(2);
+    }
+    room = hit.room;
+  }
+
+  const sock = sockPathFor(configPath);
+  const code = await new Promise((resolve) => {
+    const conn = net.createConnection(sock);
+    conn.setEncoding("utf8");
+    let buf = "";
+    conn.on("connect", () => conn.write(`${JSON.stringify({ room, text, now })}\n`));
+    conn.on("data", (d) => {
+      buf += d;
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+        // 중간 줄은 진행 상황(stderr), 마지막 줄만 결과(stdout)
+        if (msg.ok === undefined) { process.stderr.write(`ctb: ${msg.status}\n`); continue; }
+        // 파이프로 받는 게 이 명령의 쓰임이라 잘리면 안 된다 — 쓰기가 끝난 뒤에 종료한다.
+        if (msg.ok) { process.stdout.write(`${msg.text}\n`, () => resolve(0)); }
+        else { process.stderr.write(`ctb send: ${msg.error}\n`); resolve(1); }
+      }
+    });
+    conn.on("error", (e) => {
+      process.stderr.write(
+        e.code === "ENOENT" || e.code === "ECONNREFUSED"
+          ? `ctb send: no bot listening at ${sock} — start it with \`ctb bot\`\n`
+          : `ctb send: ${e.message}\n`,
+      );
+      resolve(1);
+    });
+    // 봇이 답을 주기 전에 끊기면 그 사실을 말해야 한다 — 종료 코드만 1이고 아무 말이 없으면
+    // 왜 실패했는지 알 방법이 없다.
+    conn.on("close", () => {
+      process.stderr.write("ctb send: the bot closed the connection without answering\n");
+      resolve(1);
+    });
+  });
+  process.exitCode = code;
+}
+
 async function main() {
   if (a === "-h" || a === "--help") {
     console.log(
@@ -193,6 +298,10 @@ async function main() {
       `  ctb [config.json] [--provider claude|codex] [--chat <id>] [...args]\n` +
       `                                Resume the provider's Telegram session\n` +
       `                                (bare \`ctb\` asks which room, unless there is only one)\n` +
+      `  ctb send [config.json] --chat <room> [--now] <message>\n` +
+      `                                Hand a message to the RUNNING bot — it runs in that room,\n` +
+      `                                with typing and the answer posted there. Needs \`ctb bot\` up.\n` +
+      `                                Asks for approval in that room unless --now.\n` +
       `  ctb bot [config.json]         Start the Telegram bot daemon\n` +
       `  ctb init [dir]                Create a config.json template\n` +
       `  ctb --help | --version\n\n` +
@@ -206,6 +315,7 @@ async function main() {
       `  ctb planner.json -p "..."     Headless with planner session\n` +
       `  ctb planner.json --provider codex  Interactive Codex with its Telegram session\n` +
       `  ctb --chat -1002233445566:11  Resume that forum topic's session instead of the DM\n` +
+      `  ctb send --chat 플랜 "테스트 돌려줘"   Ask the bot to run it in the 플랜 room\n` +
       `  ctb bot                       Start the bot with default config\n` +
       `  ctb bot planner.json          Start the bot with planner config`,
     );
@@ -224,6 +334,11 @@ async function main() {
 
   if (a === "bot") {
     runBot(args.slice(1));
+    return;
+  }
+
+  if (a === "send") {
+    await sendToBot(args.slice(1));
     return;
   }
 
