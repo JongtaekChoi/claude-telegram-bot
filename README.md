@@ -610,7 +610,9 @@ checks, reminders. Each entry runs the prompt and sends the result to `allowedCh
 ```json
 "schedule": [
   { "cron": "0 9 * * 1-5", "label": "Morning brief", "prompt": "Summarize today's open issues and TODOs" },
-  { "cron": "*/30 * * * *", "prompt": "Check CI status; only reply if something is red" }
+  { "cron": "*/30 * * * *", "prompt": "Check CI status; only reply if something is red" },
+  { "cron": "0 9 * * 1,4", "chat": "-1001234567890", "label": "Planning report",
+    "prompt": "Write the twice-weekly planning report" }
 ]
 ```
 
@@ -620,6 +622,18 @@ checks, reminders. Each entry runs the prompt and sends the result to `allowedCh
   timezone**. No external dependency — the parser lives in `bot.mjs`.
 - **`prompt`** (required) — the message sent to Claude. **`label`** (optional) — a short name
   shown in the reply footer and in `/cron`.
+- **`chat`** (optional) — a room key, or an array of them. The job then runs **with that room's
+  role** (its `personas` entry and that role's `/remember` rules, its provider and model) and the
+  result goes **only there**. Without it the job runs role-less and the result is broadcast to every
+  `allowedChatId` — fine for a single-role bot, but once you give a bot several roles, an untargeted
+  job runs as the *first* role and posts into every room, so a planning report ends up written by
+  the developer role and pasted into the developer's group. Room keys must be in `allowedChatId`
+  (forum topics like `-100…:11` are checked against their group); a job naming an unknown room is
+  **dropped at startup with an error in the log** rather than posting somewhere unintended. Muted
+  rooms are skipped. Jobs added at runtime with `/cron add` have no `chat`.
+- The job still runs in the cron slot with **no session** even when `chat` is set — it borrows the
+  room's role and address, not its conversation, so it can't be caught by that room's plan lock or
+  queue.
 - **Fresh session**: scheduled jobs run in their **own session** so they never pollute your
   interactive conversation context (`state.json` stays yours). They run in their own slot, so
   they don't wait on your rooms (and your rooms don't wait on them) — but they serialize against

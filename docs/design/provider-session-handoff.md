@@ -305,11 +305,16 @@ Claude 한도 오류로 Codex fallback이 실행될 때도 같은 Claude → Cod
 5. 기존 공용 `codex-handoff.md` 호환 경로를 정리한다.
 6. README 영문·국문, config 예제, CHANGELOG를 구현된 동작에 맞춰 갱신한다.
 
-## 구현 전 확정할 결정
+## 구현 전 확정한 결정
 
-1. provider 전환 시 pending `/plan`을 자동 취소할지 여부 — **자동 취소 권장**
-2. handoff 기본 활성화 여부 — 주 사용 흐름상 **기본 활성화 권장**
-3. `/sessions` 확인 버튼의 정확한 문구와 만료 시점
-4. 기존 `codex-handoff.md`를 한 릴리스 읽기 호환할지 즉시 중단할지
-5. recent turns와 최대 크기를 상수로 시작할지 config에 바로 노출할지
+2026-08-27에 다음과 같이 확정했다.
 
+1. provider 전환 시 pending `/plan`은 자동 취소한다. 과거 provider의 승인 버튼을 현재 provider의 작업
+   승인으로 오해할 여지를 없앤다.
+2. handoff는 기본 활성화한다. 별도 설정 없이 양방향 인수인계가 주 사용 흐름에서 동작해야 한다.
+3. `/sessions` 확인 버튼은 `인수인계 적용`과 `적용 안 함`으로 표시하고, 다음 세션 변경 전까지 유효하게
+   유지한다.
+4. 기존 공용 `codex-handoff.md` 읽기 호환은 새 방별 journal 도입과 동시에 중단한다. 방 구분이 없는
+   기록을 잘못된 방에 주입할 위험을 피한다.
+5. recent turns는 8턴, 최대 크기는 16,000자의 내부 상수로 시작한다. 실제 사용량을 확인한 뒤 필요할 때
+   config 설정으로 승격한다.

@@ -2349,12 +2349,22 @@ function cronMatches(c, d) {
 
 // 예약 작업 = config.schedule(정적) + state.cron(동적, /cron add 로 추가). 잘못된 항목은 버림.
 // 각 항목: { cron, prompt, label?, source: "config"|"dynamic", id?(동적만) }.
+// `chat` 은 문자열 하나 또는 배열. allowedChatId 와 같은 규칙으로 받는다 — 한 작업의 결과를
+// 그룹과 DM 양쪽에 보내고 싶은 경우가 실제로 있다(승인 회신을 DM 에서 하던 흐름).
+const jobRooms = (job) => [].concat(job.chat ?? []).filter(Boolean).map(String);
+
 function buildSchedule() {
   const tag = (arr, source) =>
     (Array.isArray(arr) ? arr : []).map((j) => ({ ...j, parsed: parseCron(j.cron), source }));
   return [...tag(cfg.schedule, "config"), ...tag(state.cron, "dynamic")].filter((j) => {
     if (!j.parsed) return void console.error(`Ignoring invalid cron: ${j.cron}`);
     if (!j.prompt) return void console.error(`Ignoring scheduled job without prompt: ${j.cron}`);
+    // 대상 방은 **부팅 때** 검증한다. send() 에는 화이트리스트 검사가 없어서, 오타 하나면 이 봇이
+    // 들어가 있는 아무 방으로나 결과가 나간다 — 예약 작업은 사람이 안 보는 사이에 돌기 때문에
+    // 그게 오래 안 들킨다. 잘못된 방이 하나라도 있으면 그 작업 전체를 버리고 크게 찍는다.
+    const bad = jobRooms(j).filter((room) => !allowedIds.includes(String(baseChatId(room))));
+    if (bad.length)
+      return void console.error(`Ignoring scheduled job — chat not in allowedChatId: ${bad.join(", ")} (${j.cron})`);
     return true;
   });
 }
@@ -2362,6 +2372,25 @@ let schedule = buildSchedule();
 
 // 예약 작업은 사용자 대화 맥락을 오염시키지 않도록 항상 새 세션으로 독립 실행하고,
 // 결과를 allowedChatId 로 보낸다. 전용 CRON_KEY 슬롯을 써 예약끼리는 직렬화하되 사용자 방과는 병렬로 돈다.
+//
+// `chat` 을 적으면 **그 방의 역할로** 돌고 그 방에만 보낸다. 한 프로세스가 여러 역할을 맡으면
+// (개발자 방 + 기획 방) 이게 없을 때 두 작업이 서로를 오염시킨다 — 방이 없는 실행은 personas[0]
+// 으로 돌아서 기획 리포트를 개발자가 쓰게 되고, 결과는 두 방 모두에 뿌려진다.
+//
+// 방을 지정해도 **메시지를 handle() 에 넣지는 않는다.** 그러면 그 방의 plan 고정(승인 대기에 걸려
+// 영영 실행 안 됨)·뮤트·busy 큐·세션을 전부 물게 된다. 역할과 목적지만 방에서 빌리고, 실행은
+// 지금처럼 세션 없이 CRON 슬롯에서 한다.
+// 보낼 곳: `chat` 이 있으면 그 방들만, 없으면 예전처럼 전부. 뮤트된 방은 건너뛴다 —
+// 뮤트는 "이 방에서 아무것도 하지 마라"는 뜻이고 /tell·ctb send 도 같은 규칙이다.
+function scheduleTargets(job) {
+  const rooms = jobRooms(job);
+  return (rooms.length ? rooms : allowedIds).filter((room) => {
+    if (!state.sessions?.[String(room)]?.muted) return true;
+    console.log(`Scheduled job not sent to muted room: ${room}`);
+    return false;
+  });
+}
+
 async function runScheduled(job) {
   const r = rt(CRON_KEY); // 예약 작업끼리는 직렬화하되 사용자 방과는 병렬로 돈다
   // 예약 작업은 방이 아니라 전용 슬롯에서 돈다 — 어느 방의 로컬 세션이든 있으면 건너뛴다.
@@ -2372,7 +2401,16 @@ async function runScheduled(job) {
   r.busy = true;
   const started = Date.now();
   try {
-    const res = await runPrimary(job.prompt, { sessionId: null, lang: BOT_LANG, recordHandoff: false }); // 새 세션 (state 미저장)
+    // chatId 를 넘기면 그 방의 역할·메모리·provider·model 을 따라간다. 세션만은 여전히 null 이다.
+    const rooms = jobRooms(job);
+    const res = await runPrimary(job.prompt, {
+      sessionId: null,
+      lang: BOT_LANG,
+      recordHandoff: false,
+      // 역할을 방에서 빌렸으면 그 역할의 /remember 규칙도 같이 빌린다 — 역할은 프롬프트만이
+      // 아니라 규칙까지가 한 벌이다. 방을 안 적은 예전 작업은 지금처럼 메모리 없이 돈다.
+      ...(rooms.length ? { chatId: rooms[0], injectMemory: true } : {}),
+    }); // 새 세션 (state 미저장)
     // 조용한 예약 작업: 출력이 비었거나 정확히 "SKIP"이면 전송하지 않는다.
     // (예: "조건 충족 시에만 알리고, 아니면 SKIP만 출력해" 식의 조건부 알림용)
     if (res.ok) {
@@ -2387,9 +2425,9 @@ async function runScheduled(job) {
     const footer = res.ok
       ? `\n\n— ⏰ ${label} · ${secs}s${res.cost ? ` · $${res.cost.toFixed(4)}` : ""}`
       : `\n\n— ⏰ ${label}`;
-    for (const id of allowedIds) await send(id, (res.ok ? res.text : `⚠️ ${res.text}`) + footer);
+    for (const id of scheduleTargets(job)) await send(id, (res.ok ? res.text : `⚠️ ${res.text}`) + footer);
   } catch (e) {
-    for (const id of allowedIds) await send(id, t(BOT_LANG, "scheduledError", e.message));
+    for (const id of scheduleTargets(job)) await send(id, t(BOT_LANG, "scheduledError", e.message));
   } finally {
     r.busy = false;
   }
