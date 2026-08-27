@@ -481,7 +481,10 @@ approve with ✅/❌ first — the caller may well be an agent, and a process ca
 scripts and the room is told either way. It refuses to target the room your own `ctb` session is
 holding (the bot defers that room, so the message would sit in the queue until you quit), and a
 message pushed this way cannot be relayed onward. If no bot is running it fails outright rather than
-quietly falling back to a local run. Turn the socket off with `"cliDispatch": false`. Design notes:
+quietly falling back to a local run. A terminal session started with `ctb` is *told* this channel
+exists — the usage and the list of rooms it may reach are appended to its system prompt, but only
+while the bot is actually running, so a terminal used without the bot pays nothing for it. Turn the
+socket off with `"cliDispatch": false`. Design notes:
 [CLI dispatch](docs/design/cli-dispatch.md).
 
 When the terminal session ends, `ctb` asks it one last question — not "summarize what you did" but

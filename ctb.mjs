@@ -191,6 +191,28 @@ async function pickRoom(rows) {
   });
 }
 
+// 터미널에서 도는 에이전트에게 `ctb send` 가 있다는 걸 알려준다. 이 기능을 만든 이유가 바로 이
+// 자리(에이전트가 옆방에 일을 넘기는 것)인데, 사용법을 안 실으면 README 를 읽은 에이전트만 우연히
+// 알게 된다. **소켓이 실제로 있을 때만** 붙인다 — 봇 없이 터미널만 쓰는 사람은 토큰을 안 낸다.
+// 방에서 도는 에이전트에게는 안 준다: 옆방에 넘기는 건 거기선 `[[ctb-tell:]]` 마커의 몫이고,
+// 길이 둘이면 모델이 갈린다. → docs/design/cli-dispatch.md
+function dispatchInstruction(configPath, st, ownRoom) {
+  if (!existsSync(sockPathFor(configPath))) return null;
+  const rooms = Object.entries(st.sessions || {})
+    .filter(([room, b]) => b?.title && room !== String(ownRoom))
+    .map(([room, b]) => `  ${room}  — ${b.title}`);
+  if (!rooms.length) return null; // 넘길 방이 없으면 아무것도 안 붙인다
+  return "## Handing work to this project's Telegram bot\n"
+    + "The bot is running right now. From this terminal you can give it a message and it will run it\n"
+    + "**in that room** — that room's own session, role and settings — and print the answer back here:\n\n"
+    + '  ctb send --chat <room> "<message>"\n\n'
+    + "Use it to ask another room (often another role) for something you should not do yourself here.\n"
+    + "It is not a way to talk to yourself: this terminal's own room is not in the list below.\n"
+    + "The target room is asked to approve first — add `--now` only when the person told you to skip it.\n"
+    + "It waits for the answer, so that room's queue is your wait. Rooms:\n"
+    + rooms.join("\n");
+}
+
 // `ctb send` — 프롬프트를 **돌고 있는 봇에** 넘긴다. 봇이 그 방에서 처리하므로 typing 이 돌고
 // 답이 그 방에 남는다. 봇이 안 떠 있으면 그냥 실패한다 — 조용히 로컬 실행으로 물러서면 방 안내도
 // typing 도 없이 돌아서, 원한 것과 정반대인데 성공한 것처럼 보인다. → docs/design/cli-dispatch.md
@@ -453,6 +475,9 @@ async function main() {
     const appendSys = [
       memory ? `## RULES (must follow before anything else)\n${memory}` : null,
       persona?.prompt || cfg.persona,
+      // 이것만은 파일에서 오는 값이 아니라 이 자리에서 만든다 — 터미널에서만 쓸 수 있는 통로라
+      // "텔레그램용 문구는 뺀다"는 규칙에 걸리지 않는다. 오히려 터미널 전용이다.
+      dispatchInstruction(configPath, st, primaryChatId),
     ].filter(Boolean).join("\n\n");
     if (appendSys) sysArgs.push("--append-system-prompt", appendSys);
   }
