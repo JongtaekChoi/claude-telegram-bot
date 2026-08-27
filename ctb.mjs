@@ -255,6 +255,9 @@ async function sendToBot(rest) {
     const conn = net.createConnection(sock);
     conn.setEncoding("utf8");
     let buf = "";
+    // error 로 이미 알린 뒤에도 close 가 뒤따라 온다 — 한 번 끝냈으면 두 번 말하지 않는다.
+    let settled = false;
+    const finish = (c) => { if (!settled) { settled = true; resolve(c); } };
     conn.on("connect", () => conn.write(`${JSON.stringify({ room, text, now })}\n`));
     conn.on("data", (d) => {
       buf += d;
@@ -268,8 +271,8 @@ async function sendToBot(rest) {
         // 중간 줄은 진행 상황(stderr), 마지막 줄만 결과(stdout)
         if (msg.ok === undefined) { process.stderr.write(`ctb: ${msg.status}\n`); continue; }
         // 파이프로 받는 게 이 명령의 쓰임이라 잘리면 안 된다 — 쓰기가 끝난 뒤에 종료한다.
-        if (msg.ok) { process.stdout.write(`${msg.text}\n`, () => resolve(0)); }
-        else { process.stderr.write(`ctb send: ${msg.error}\n`); resolve(1); }
+        if (msg.ok) { process.stdout.write(`${msg.text}\n`, () => finish(0)); }
+        else { process.stderr.write(`ctb send: ${msg.error}\n`); finish(1); }
       }
     });
     conn.on("error", (e) => {
@@ -278,13 +281,13 @@ async function sendToBot(rest) {
           ? `ctb send: no bot listening at ${sock} — start it with \`ctb bot\`\n`
           : `ctb send: ${e.message}\n`,
       );
-      resolve(1);
+      finish(1);
     });
     // 봇이 답을 주기 전에 끊기면 그 사실을 말해야 한다 — 종료 코드만 1이고 아무 말이 없으면
     // 왜 실패했는지 알 방법이 없다.
     conn.on("close", () => {
-      process.stderr.write("ctb send: the bot closed the connection without answering\n");
-      resolve(1);
+      if (!settled) process.stderr.write("ctb send: the bot closed the connection without answering\n");
+      finish(1);
     });
   });
   process.exitCode = code;
