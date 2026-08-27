@@ -45,3 +45,18 @@
 텔레그램 왕복이 있는 코드를 건드렸다면 반드시 실동작 확인 후 배포할 것.
 (계기: [docs/incidents/2026-07-03-plan-send-silent-failure.md](docs/incidents/2026-07-03-plan-send-silent-failure.md) —
 제너레이터 함수를 배열처럼 인덱싱해 `send()`가 통째로 무응답이 됐는데, 실사용 테스트 없이 배포되어 발견이 늦어짐.)
+
+**테스트는 publish 전에 해야 하므로 레지스트리에서 받을 수 없다.** 배포될 그대로를 tarball 로
+만들어 전역 설치한 뒤 실봇을 돌린다 — `npm i -g .` (폴더 직접)는 심볼릭 링크라 레포 파일을 다
+보게 돼서 `package.json` 의 `files` 에서 빠뜨린 파일을 못 잡는다. tarball 은 잡는다.
+
+```
+npm pack --pack-destination <tmp>
+npm i -g <tmp>/claude-telegram-bot-<버전>.tgz     # ← --prefix 주의, 아래 참고
+launchctl kickstart -k gui/$(id -u)/<label>       # 실봇으로 확인
+# 통과하면 그때 npm publish
+```
+
+전역 설치 위치와 launchd 봇들의 배치는 환경마다 다르다(이 머신은 node 두 버전에 슬롯이 갈려
+있어 `--prefix` 를 명시해야 한다). 봇을 재시작할 때 `bootout` → `bootstrap` 을 잇달아 하면
+`Input/output error` 로 실패하니 텀을 두거나 `kickstart -k` 를 쓴다.
