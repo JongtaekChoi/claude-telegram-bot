@@ -20,6 +20,7 @@
 - 그룹·방별 세션과 동시 실행: `docs/design/group-chat-multi-user.md`
 - Claude ↔ Codex 인수인계: `docs/design/provider-session-handoff.md`
 - 방 사이 메시지 전달(`/tell`): `docs/design/room-relay.md`
+- CLI 에서 봇에 일 시키기: `docs/design/cli-dispatch.md`
 - 방별 페르소나(한 폴더 한 봇): `docs/design/room-personas.md`
 
 ## 명령어를 바꿨으면 안내 문구도 같이 바꾼다
