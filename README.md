@@ -274,7 +274,7 @@ Core commands:
 | `/sessions` | List this project's past sessions for the active provider and pick one to carry on from (🔒 held by another room, 💻 open in a terminal — both are blocked) |
 | `/name <name>` | Name the current session so it stands out in `/sessions` (`/name -` removes it) |
 | `/jobs` | Background jobs that outlive replies — ▶ running, ✅ finished |
-| `/persona [role]` | Which role this room runs as. Sent bare, it lists the roles. Changing it needs a session boundary — `/new` first |
+| `/persona` | The role this room runs as, and the prompt behind it (view only — you change it from the buttons at `/new`) |
 | `/tell [room] [message]` | Hand a message to another room this bot runs — it executes there, with that room's session. Sent bare, it lists the rooms |
 | `/plan <request>` | Produce a plan and wait for approval (Claude only) |
 | `/plan on` · `/plan off` | Pin plan mode to this room — every message plans first (Claude only) |
@@ -667,11 +667,13 @@ identity, and `/tell` can hand work between roles because they're the same bot �
 ]
 ```
 
-Each room picks one with `/persona <role>`, and that role's prompt **and its own `/remember` memory**
-(`memory.dev.md`) apply there. A role is fixed for the life of a session — everything said so far
-belongs to it — so `/persona` only takes effect at a session boundary; send `/new` first. Rooms that
-never pick run as the first entry in the list. With no `personas` key, nothing changes: `persona`
-keeps working exactly as before.
+A role is **fixed for the life of a session** — everything said so far belongs to it — so you pick
+one only at a session boundary. The bot offers buttons at all three: a room's **first message**,
+**`/newchat`**, and **`/new`**. Ignore them and the room simply runs as the first role in the list.
+Picking applies that role's prompt **and its own `/remember` memory** (`memory.dev.md`).
+
+`/status` shows the room's role in one line; `/persona` shows the prompt behind it. Neither changes
+it. With no `personas` key nothing changes at all — `persona` keeps working exactly as before.
 
 **A separate bot per role** still makes sense when you need two identities in one group at the same
 time, when you're migrating gradually, or when `allowedChatId` must differ. That layout is below.

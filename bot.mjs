@@ -246,7 +246,7 @@ const STR = {
       "• /sessions — list past sessions in this project and pick one to carry on from\n" +
       "• /name — name the current session so it stands out in /sessions\n" +
       "• /jobs — background jobs that outlive replies · you get a message when one ends\n" +
-      "• /persona [role] — which role this room runs as · change it right after /new (needs personas in config)\n" +
+      "• /persona — the role this room runs as, and the prompt behind it · change it at /new\n" +
       "• /tell <room> <message> — hand a message to another room this bot runs · /tell alone lists them\n" +
       "• /compact — compress context to free up space (keeps the session)\n" +
       "• /plan <request> — plan only (no edits), then approve/cancel to run for real\n" +
@@ -321,17 +321,19 @@ const STR = {
     personaOff:
       "🎭 No personas configured. Add a `personas` list to the config file to give each room its own "
       + "role — one bot can then run a dev room and a planning room at once.",
-    personaShow: (cur, list) =>
-      `🎭 This room runs as **${cur}**.\n\n${list}\n\n`
-      + "`/persona <role>` — the number above or any distinctive part of the name.\n"
-      + "Only at a session boundary: send `/new` first if this room already has a conversation going.",
+    personaShow: (name, id, body, others) =>
+      `🎭 This room runs as **${name}** (\`${id}\`).\n\n${body}\n\n`
+      + (others ? `Other roles: ${others}\n` : "")
+      + "A role is fixed for the life of a session — send `/new` to pick again.",
+    personaPick: (cur) => `🎭 Role for this room — now **${cur}**. Tap to change it:`,
+    personaFirst: (cur) =>
+      `🎭 New room. It runs as **${cur}** unless you pick another — just carry on if that's right:`,
     personaSet: (name) => `🎭 This room now runs as **${name}**. Its memory and rules are its own.`,
     personaSame: (name) => `🎭 Already **${name}**.`,
     personaLocked: (cur, next) =>
       `🎭 This room is mid-conversation as **${cur}**, so it can't become **${next}** now — everything said `
       + "so far belongs to the current role.\n\nSend `/new` to drop that context, then pick again.",
-    personaUnknown: (list) => `🎭 No role matches that:\n\n${list}`,
-    personaAmbiguous: (list) => `🎭 That matches more than one role:\n\n${list}\n\nUse the number instead.`,
+    personaGone: "🎭 That role is no longer in the config.",
     tellNoRooms:
       "📨 No other room to hand anything to yet. This bot only knows rooms it has already talked in — "
       + "say something there once and it shows up here.",
@@ -425,6 +427,7 @@ const STR = {
       `• CLIs: Claude ${i.cliVersions.claude} · Codex ${i.cliVersions.codex} · Ollama ${i.cliVersions.ollama}\n` +
       `• Model: ${i.model}\n` +
       `• Fallback: ${i.fallback}\n` +
+      (i.persona ? `• Role: ${i.persona}\n` : "") +
       `• Session: ${i.hasSession ? "active" : "none (fresh)"}\n` +
       `• Scheduled jobs: ${i.jobs}\n` +
       `• Project: ${i.projectDir}\n` +
@@ -520,7 +523,7 @@ const STR = {
       "• /sessions — 이 프로젝트의 지난 세션 목록 · 골라서 이어가기\n" +
       "• /name — 지금 세션에 이름 붙이기 · /sessions 에서 바로 찾기\n" +
       "• /jobs — 답장 후에도 살아 있는 백그라운드 작업 · 끝나면 먼저 알려줌\n" +
-      "• /persona [역할] — 이 방이 어떤 역할로 도는지 · /new 직후에 바꿀 수 있음 (config 에 personas 필요)\n" +
+      "• /persona — 이 방이 어떤 역할로 도는지와 그 프롬프트 본문 · 바꾸는 건 /new 에서\n" +
       "• /tell <방> <메시지> — 이 봇이 맡은 다른 방으로 메시지 넘기기 · /tell 만 보내면 방 목록\n" +
       "• /compact — 컨텍스트 압축 (세션 유지, 공간 확보)\n" +
       "• /plan <요청> — 계획만 세우기 (편집 없음) → 승인/취소로 실제 실행\n" +
@@ -615,6 +618,7 @@ const STR = {
       `• CLI: Claude ${i.cliVersions.claude} · Codex ${i.cliVersions.codex} · Ollama ${i.cliVersions.ollama}\n` +
       `• 모델: ${i.model}\n` +
       `• 폴백: ${i.fallback}\n` +
+      (i.persona ? `• 역할: ${i.persona}\n` : "") +
       `• 세션: ${i.hasSession ? "이어가는 중" : "없음 (새 세션)"}\n` +
       `• 예약 작업: ${i.jobs}개\n` +
       `• 작업 폴더: ${i.projectDir}\n` +
@@ -739,17 +743,19 @@ const STR = {
     personaOff:
       "🎭 설정된 페르소나가 없습니다. config 에 `personas` 목록을 넣으면 방마다 역할을 줄 수 있습니다 — "
       + "봇 하나가 개발방과 기획방을 동시에 맡습니다.",
-    personaShow: (cur, list) =>
-      `🎭 이 방은 **${cur}** 로 돕니다.\n\n${list}\n\n`
-      + "`/persona <역할>` — 위 번호나 이름의 일부만 적어도 됩니다.\n"
-      + "세션 경계에서만 바꿀 수 있습니다. 이미 대화가 진행 중이면 `/new` 를 먼저 보내세요.",
+    personaShow: (name, id, body, others) =>
+      `🎭 이 방은 **${name}** (\`${id}\`) 로 돕니다.\n\n${body}\n\n`
+      + (others ? `다른 역할: ${others}\n` : "")
+      + "역할은 세션이 사는 동안 고정입니다 — `/new` 를 보내면 다시 고를 수 있습니다.",
+    personaPick: (cur) => `🎭 이 방의 역할 — 지금은 **${cur}** 입니다. 눌러서 바꾸세요:`,
+    personaFirst: (cur) =>
+      `🎭 처음 보는 방이네요. 따로 안 고르면 **${cur}** 로 돕니다 — 맞으면 그냥 이어가세요:`,
     personaSet: (name) => `🎭 이 방은 이제 **${name}** 로 돕니다. 메모리와 규칙도 이 역할 것을 씁니다.`,
     personaSame: (name) => `🎭 이미 **${name}** 입니다.`,
     personaLocked: (cur, next) =>
       `🎭 이 방은 **${cur}** 로 대화가 진행 중이라 지금 **${next}** 로 바꿀 수 없습니다 — 지금까지 오간 `
       + "말이 전부 현재 역할의 것입니다.\n\n`/new` 로 그 맥락을 버린 뒤에 다시 고르세요.",
-    personaUnknown: (list) => `🎭 해당하는 역할이 없습니다:\n\n${list}`,
-    personaAmbiguous: (list) => `🎭 여러 역할이 걸립니다:\n\n${list}\n\n번호를 쓰세요.`,
+    personaGone: "🎭 그 역할은 이제 config 에 없습니다.",
     tellNoRooms:
       "📨 넘길 만한 다른 방이 아직 없습니다. 이 봇은 한 번이라도 대화한 방만 압니다 — "
       + "그 방에서 아무 메시지나 한 번 보내면 목록에 뜹니다.",
@@ -1045,7 +1051,7 @@ const COMMANDS = {
     { command: "sessions", description: "List past sessions · pick one to carry on from" },
     { command: "name", description: "Name the current session" },
     { command: "jobs", description: "Background jobs still running (survive replies)" },
-    { command: "persona", description: "Which role this room runs as · change it right after /new" },
+    { command: "persona", description: "The role this room runs as, and the prompt behind it" },
     { command: "tell", description: "Hand a message to another room this bot runs · lists rooms if used alone" },
     { command: "compact", description: "Compress context to free up space (keeps session)" },
     { command: "plan", description: "Plan only (no edits) · on|off to pin plan mode to this room" },
@@ -1071,7 +1077,7 @@ const COMMANDS = {
     { command: "sessions", description: "지난 세션 목록 · 골라서 이어가기" },
     { command: "name", description: "지금 세션에 이름 붙이기" },
     { command: "jobs", description: "백그라운드 작업 목록 (답장 후에도 살아 있는 것)" },
-    { command: "persona", description: "이 방이 어떤 역할로 도는지 · /new 직후에 바꿀 수 있음" },
+    { command: "persona", description: "이 방이 어떤 역할로 도는지와 그 프롬프트 본문" },
     { command: "tell", description: "이 봇이 맡은 다른 방으로 메시지 넘기기 · 인자 없으면 방 목록" },
     { command: "compact", description: "컨텍스트 압축 (세션 유지, 공간 확보)" },
     { command: "plan", description: "계획만 세우기 (편집 없음) · on|off 로 이 방에 고정" },
@@ -2875,54 +2881,66 @@ async function handleName(chatId, arg, l) {
   await send(chatId, t(l, "nameSet", names[id]));
 }
 
-// /persona [역할] — 이 방이 어떤 역할로 도는지 보여주고, 세션 경계에서만 바꾼다.
-// 맥락이 쌓인 세션의 정체성이 도중에 바뀌면 이미 쌓인 대화가 옛 페르소나의 것이라 모순된다.
-// 그래서 세션이 살아 있으면 거절하고 /new 를 권한다 — /new 는 그 맥락을 버리는 자리라 예외다.
-// → docs/design/room-personas.md
-function personaLines(chatId) {
+// 방별 페르소나 — 역할은 **세션 경계에서만** 정해진다. 맥락이 쌓인 세션의 정체성이 도중에 바뀌면
+// 이미 쌓인 대화가 옛 페르소나의 것이라 모순되기 때문이다. 그래서 고르는 자리는 셋뿐이다:
+// 처음 보는 방의 첫 대화 · /newchat · /new. 보는 건 /status 가 한다 — 보기 전용 명령을 따로
+// 두느니 이미 있는 자리에 한 줄 붙이는 쪽이 낫다. → docs/design/room-personas.md
+// 세션 경계인가 — 명령과 버튼이 **같은 판정**을 써야 한다. 살아 있는 세션이 있거나 지금 돌고
+// 있으면 이미 그 역할로 맥락이 쌓이는 중이다. provider 를 바꿔 가며 쓰는 방이 있어 양쪽을 다
+// 본다 — 한쪽만 비어도 이어갈 대화가 남아 있다.
+//
+// **선택 버튼의 "만료"가 이것이다.** 첫 대화에서 버튼을 띄우고 답을 그냥 진행시키므로, 사람이
+// 뒤늦게 누르면 그건 미드-세션 변경이 된다. 타이머로 지우는 대신 누르는 순간 이 판정을 다시
+// 하게 해서, 첫 턴이 시작된 뒤의 버튼은 저절로 무효가 된다.
+function personaChangeable(chatId) {
+  return !getSid(chatId, "claude") && !getSid(chatId, "codex")
+    && !chatRuntime.get(String(chatId))?.busy;
+}
+async function applyPersona(chatId, persona, l) {
   const cur = roomPersona(chatId);
-  return PERSONAS.map((p, i) => `${i + 1}. ${p.name}${p.id === cur?.id ? " ←" : ""}`).join("\n");
-}
-function resolvePersona(token) {
-  const exact = PERSONAS.find((p) => p.id === token);
-  if (exact) return { persona: exact };
-  if (/^\d{1,3}$/.test(token)) {
-    const n = Number(token);
-    if (n >= 1 && n <= PERSONAS.length) return { persona: PERSONAS[n - 1] };
+  if (persona.id === cur.id && chatBucket(chatId).persona) {
+    await send(chatId, t(l, "personaSame", cur.name));
+    return;
   }
-  const needle = token.toLowerCase();
-  const hits = PERSONAS.filter((p) => p.name.toLowerCase().includes(needle) || p.id.includes(needle));
-  if (hits.length === 1) return { persona: hits[0] };
-  if (hits.length > 1) return { ambiguous: true };
-  return {};
+  if (!personaChangeable(chatId)) {
+    await send(chatId, t(l, "personaLocked", cur.name, persona.name));
+    return;
+  }
+  chatBucket(chatId).persona = persona.id;
+  saveState(state);
+  await send(chatId, t(l, "personaSet", persona.name));
 }
-async function handlePersona(chatId, arg, l) {
+// /persona — **확인 전용.** 지금 이 방이 무슨 역할로 도는지와 그 프롬프트 본문을 보여준다.
+// 바꾸는 건 세션 경계의 버튼만 한다. /status 의 한 줄로는 "무슨 지시를 받고 있는지"까지는
+// 알 수 없어서, 본문을 직접 볼 자리가 하나는 있어야 한다.
+const PERSONA_BODY_MAX = 600; // 폰에서 한 화면을 넘기지 않을 만큼만 — 나머지는 말줄임
+async function handlePersona(chatId, l) {
   if (!PERSONAS.length) {
     await send(chatId, t(l, "personaOff"));
     return;
   }
   const cur = roomPersona(chatId);
-  if (!arg) {
-    await send(chatId, t(l, "personaShow", cur.name, personaLines(chatId)));
-    return;
-  }
-  const hit = resolvePersona(arg);
-  if (hit.ambiguous) { await send(chatId, t(l, "personaAmbiguous", personaLines(chatId))); return; }
-  if (!hit.persona) { await send(chatId, t(l, "personaUnknown", personaLines(chatId))); return; }
-  if (hit.persona.id === cur.id && chatBucket(chatId).persona) {
-    await send(chatId, t(l, "personaSame", cur.name));
-    return;
-  }
-  // provider 를 바꿔 가며 쓰는 방이 있어 양쪽을 다 본다 — 한쪽만 비어도 이어갈 맥락이 남아 있다.
-  if (getSid(chatId, "claude") || getSid(chatId, "codex")) {
-    await send(chatId, t(l, "personaLocked", cur.name, hit.persona.name));
-    return;
-  }
-  chatBucket(chatId).persona = hit.persona.id;
-  saveState(state);
-  await send(chatId, t(l, "personaSet", hit.persona.name));
+  const body = cur.prompt.length > PERSONA_BODY_MAX
+    ? `${cur.prompt.slice(0, PERSONA_BODY_MAX).trimEnd()}…`
+    : cur.prompt;
+  const others = PERSONAS.filter((p) => p.id !== cur.id).map((p) => p.name).join(" · ");
+  await send(chatId, t(l, "personaShow", cur.name, cur.id, body, others));
 }
 
+// 역할 선택 버튼. 지금 역할에 ● 를 붙인다. 취소 버튼은 없다 — 안 고르고 그냥 말을 걸면 기본
+// 역할로 진행되는 게 규칙이라, 취소는 이미 "아무것도 안 하기"로 있다.
+async function sendPersonaMenu(chatId, l, key) {
+  if (!PERSONAS.length) return false;
+  const cur = roomPersona(chatId);
+  const rows = [];
+  for (let i = 0; i < PERSONAS.length; i += 2)
+    rows.push(PERSONAS.slice(i, i + 2).map((p) => ({
+      text: p.id === cur.id ? `● ${p.name}` : p.name,
+      callback_data: `pa:${p.id}`,
+    })));
+  await sendMenu(chatId, t(l, key, cur.name), { inline_keyboard: rows });
+  return true;
+}
 // /tell <방> <메시지> — 이 봇이 맡은 다른 방으로 메시지 하나를 넘긴다. 사람이 직접 친 것이므로
 // 대상 방에 물어보지 않고 바로 실행한다(에이전트가 마커로 부르는 길만 승인을 받는다).
 // 인자 없이 부르면 방 목록. → docs/design/room-relay.md
@@ -2996,6 +3014,7 @@ async function newTopic(chatId, name, l) {
   // 이름을 확실히 아는 건 여기뿐이다 — 서비스 메시지 경로는 손으로 만든 토픽을 위한 보조 수단.
   rememberRoomTitle(room, [chatBucket(base).title, title].filter(Boolean).join(" / "));
   await send(room, t(l, "newTopicHello"));
+  await sendPersonaMenu(room, l, "personaFirst"); // 새 방이라 아직 아무 맥락도 없다
   await send(chatId, t(l, "newTopicCreated", title));
 }
 
@@ -3447,6 +3466,11 @@ async function handleCallback(cq) {
     if (!pending) await send(chatId, t(l, "tellExpired"));
     else if (cq.data.startsWith("tl:n:")) await send(chatId, t(l, "tellRejected"));
     else runRelay(pending.from, pending.to, pending.text).catch((e) => console.error("Relay run error:", e.message));
+  } else if (cq.data?.startsWith("pa:")) {
+    const persona = PERSONAS.find((p) => p.id === cq.data.slice(3));
+    // config 에서 사라진 역할의 버튼이 남아 있을 수 있다 — 재시작 전에 띄운 것.
+    if (!persona) await send(chatId, t(l, "personaGone"));
+    else await applyPersona(chatId, persona, l);
   } else if (cq.data === "local:kill") {
     await handleLocal(chatId, "kill", l);
   }
@@ -3511,6 +3535,18 @@ async function handle(msg) {
     seen();
     return;
   }
+  // 처음 보는 방의 첫 대화 — 역할 버튼을 띄우되 **답은 그냥 진행한다.** 폰에서 급히 물었는데
+  // 버튼부터 나오고 답이 안 오면 마찰이 크다. 안 고르면 기본 역할로 돈다.
+  // 한 방에 한 번만 묻는다(personaAsked). 버튼은 첫 턴이 시작되면 저절로 무효가 된다 —
+  // personaChangeable() 이 세션·실행 중을 다시 보기 때문이다. → docs/design/room-personas.md
+  if (PERSONAS.length && !text.startsWith("/")) {
+    const b = chatBucket(chatId);
+    if (!b.persona && !b.personaAsked && personaChangeable(chatId)) {
+      b.personaAsked = true;
+      saveState(state);
+      await sendPersonaMenu(chatId, l, "personaFirst");
+    }
+  }
   if (text.startsWith("/*")) {
     seen();
     // 한 메시지 안에서 열고 닫으면(`/* 메모 */`) 블록에 들어가지 않고 1회성 무시로 끝낸다.
@@ -3557,6 +3593,8 @@ async function handle(msg) {
         provider: currentProvider(chatId),
         cliVersions,
         name: cfg.name || "claude-telegram-bot",
+        // 페르소나를 안 쓰는 봇에는 줄 자체가 안 붙는다 — /status 는 이미 길다.
+        persona: roomPersona(chatId)?.name,
         model: currentModel(chatId) || (currentProvider(chatId) === "codex" ? cfg.codexModel : cfg.model)
           || (l === "ko" ? "(기본값)" : "(default)"),
         fallback: currentProvider(chatId) === "codex"
@@ -3607,8 +3645,8 @@ async function handle(msg) {
     await handleJobs(chatId, l);
     return;
   }
-  if (text === "/persona" || text.startsWith("/persona ")) {
-    await handlePersona(chatId, text.slice(9).trim(), l);
+  if (text === "/persona") {
+    await handlePersona(chatId, l);
     return;
   }
   if (text === "/tell" || text.startsWith("/tell ")) {
@@ -3697,6 +3735,9 @@ async function handle(msg) {
     r.compactAsk = 0; // 승인 대기 때문에 미뤄둔 물음도 같이 — 물어볼 컨텍스트 자체가 사라졌다
     saveState(state);
     await send(chatId, t(l, "newSession"));
+    // 맥락을 버린 자리 = 역할을 고를 수 있는 자리. 여기서 안 물으면 사람이 /persona 를 따로
+    // 쳐야 하는데, 그건 이 기능이 있는 줄 아는 사람만 하게 된다.
+    await sendPersonaMenu(chatId, l, "personaPick");
     return;
   }
   if (text === "/local" || text.startsWith("/local ")) {
