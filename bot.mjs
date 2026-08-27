@@ -2974,6 +2974,11 @@ async function handlePersona(chatId, l) {
 // 역할로 진행되는 게 규칙이라, 취소는 이미 "아무것도 안 하기"로 있다.
 async function sendPersonaMenu(chatId, l, key) {
   if (!PERSONAS.length) return false;
+  // 물어봤다는 표시는 여기서 남긴다 — 세 지점 중 어디로 띄웠든 "이 방엔 한 번 물었다"는 같다.
+  // /newchat 으로 판 방이 생성 때 한 번, 그 방 첫 메시지에서 또 한 번 받던 걸 막는다.
+  // /new 는 이 표시와 무관하게 매번 띄운다 — 사람이 맥락을 버리겠다고 친 자리라서다.
+  chatBucket(chatId).personaAsked = true;
+  saveState(state);
   const cur = roomPersona(chatId);
   const rows = [];
   for (let i = 0; i < PERSONAS.length; i += 2)
@@ -3584,11 +3589,8 @@ async function handle(msg) {
   // personaChangeable() 이 세션·실행 중을 다시 보기 때문이다. → docs/design/room-personas.md
   if (PERSONAS.length && !text.startsWith("/")) {
     const b = chatBucket(chatId);
-    if (!b.persona && !b.personaAsked && personaChangeable(chatId)) {
-      b.personaAsked = true;
-      saveState(state);
+    if (!b.persona && !b.personaAsked && personaChangeable(chatId))
       await sendPersonaMenu(chatId, l, "personaFirst");
-    }
   }
   if (text.startsWith("/*")) {
     seen();
