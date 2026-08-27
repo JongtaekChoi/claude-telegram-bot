@@ -60,7 +60,7 @@ cube-brain-trainer/tools/claude-telegram-bot/
 | 파일 | 지금 | 고친 뒤 |
 |---|---|---|
 | `state.json` | config 이름에서 파생 — 안 섞임 | 그대로 |
-| `memory.md` (bot.mjs:88) | `BOT_DIR` 하나 — **두 봇이 공유** | config + 페르소나에서 파생 |
+| `memory.md` (bot.mjs:88) | ~~`BOT_DIR` 하나 — 두 봇이 공유~~ **0.4.13 에서 갈랐다** | config + 페르소나에서 파생 |
 | `codex-handoff.md` (bot.mjs:90) | `BOT_DIR` 하나 — **서로 덮어씀** | 방별로 (아래 곁다리 절) |
 | `local.lock` (bot.mjs:1020) | `BOT_DIR` 하나지만 `lock.room` 을 방 키로 비교 | 그대로 — 봇이 여럿이어도 안 겹침 |
 
@@ -253,6 +253,10 @@ codex 의 `workspace-write` 샌드박스가 쓸 수 있어야 해서 일부러 �
 
 **이 설계에서 가장 조용히 망가지는 자리다.**
 
+> **구현됨(0.4.13).** `memoryPathFor()` 가 경로를 파생하고, `loadMemory`/`saveMemory` 가 방을 받는다.
+> `roomPersona()` 는 `cfg.personas` 도 방별 선택도 없는 지금 늘 `null` 을 돌려주므로 경로가 예전
+> 그대로다 — 1단계가 값을 채우면 그대로 갈린다.
+
 `memory.md` 는 `BOT_DIR` 하나에 있다(bot.mjs:88). 지금은 봇 = 페르소나라 문제가 없지만, 한 봇에
 페르소나가 여럿이면 **기획 규칙이 개발 세션에 그대로 주입된다.** 게다가
 `## RULES (must follow before anything else)` 로 시스템 프롬프트 최상단에 들어가서(bot.mjs:1869)
@@ -430,9 +434,12 @@ Codex 는 세션을 만들 때만 `tellInstruction` 을 받는다(bot.mjs:1971~1
 
 ### 잔가지
 
-- **`id` 는 파일명이 된다.** `[a-z0-9-]` 로 제한한다. `dev/x` 같은 값이 경로를 깨뜨린다.
-- **`ctb` 도 `memory.md` 를 하드코딩한다**(ctb.mjs:314). 3단계만 먼저 하면 ctb 가 옛 경로를 읽어
-  봇과 어긋난다. 구버전 `ctb` 가 설치된 채 봇만 올라간 경우도 같다.
+- ~~**`id` 는 파일명이 된다.**~~ **0.4.13 에서 막았다** — `PERSONA_ID_RE` 를 통과 못 하는 id 는
+  페르소나 없음으로 떨어진다. config 오타를 **부팅 때 짚어 주는 것**은 아직 1단계 몫이다.
+- ~~**`ctb` 도 `memory.md` 를 하드코딩한다**~~ **0.4.13 에서 같이 고쳤다** — `ctb.mjs` 의
+  `memoryPathFor()` 가 봇과 같은 규칙을 쓴다. 다만 **구버전 `ctb` 가 설치된 채 봇만 올라간 경우는
+  그대로 남는다** — 이름 붙은 config 에서 옛 `ctb` 는 공유 `memory.md` 를 계속 읽는다. 이주가
+  원본을 지우지 않고 복사만 하는 이유 중 하나다.
 - **미상 세션을 채택하면 현재 페르소나로 낙인찍힌다** — `setSid` 가 찍기 때문이다. 실제로는 다른
   페르소나의 맥락이어도 이후 영구히 그렇게 표시된다. 의도라면 의도라고 적어 둔다.
 
@@ -442,7 +449,7 @@ Codex 는 세션을 만들 때만 `tellInstruction` 을 받는다(bot.mjs:1971~1
 |---|---|
 | 1 | `cfg.personas[]` · 방별 `persona` · 주입 3곳 · `/persona`(현재 표시 + `/new` 안내) |
 | 2 | 선택 버튼 3지점 (첫 대화 · `/newchat` · `/new`) |
-| 3 | 메모리 페르소나별 분리 |
+| ~~3~~ | ~~메모리 페르소나별 분리~~ — **0.4.13 에서 했다** (경로 파생 · 이주 복사 · `ctb` 동기화) |
 | 4 | `state.sessionPersona` + `/sessions` 필터·표시 |
 | 5 | `/tell` 마커에서 목적지 제거 → 방 선택 버튼, 목록에 페르소나 이름 |
 | 6 | `personas[].dir` + `permissionMode` — outbox·jobs·cwd·`ctb` 를 방별로 (제일 큰 덩어리) |

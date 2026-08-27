@@ -296,6 +296,8 @@ General과 구별할 정도는 되고, 나중에 진짜 이름을 알게 되면 
 
 `state`와 첨부 파일은 config 파일 옆 **`.claude-bot/` 숨김 폴더**에 저장됩니다(프로젝트 격리). 구버전에서 올리면 첫 시작 때 기존 `state.json`·`attachments/`를 `.claude-bot/`로 **자동 이동**합니다(무손실). 로그는 launchd plist가 가리키는 위치 그대로입니다.
 
+`/remember` 메모리도 같은 폴더에 있고, 0.4.13 부터 파일명이 `state`와 같은 규칙으로 config 이름에서 파생됩니다 — `config.json` → `memory.md`, `planner.json` → `planner.memory.md`. 한 폴더에서 봇을 둘 띄워도 서로의 규칙을 읽지 않습니다. 지금까지 공유 `memory.md`를 쓰던 이름 붙은 config는 첫 시작 때 새 경로로 **복사**하고 원본은 그대로 둡니다 — 어느 줄이 어느 봇 것인지는 코드가 가를 수 없어서, 양쪽에 같은 내용을 두고 각자 `/memory rm`으로 지우는 편이 안전합니다.
+
 </details>
 
 ## 첫 실행
@@ -332,7 +334,7 @@ General과 구별할 정도는 되고, 나중에 진짜 이름을 알게 되면 
 | 봇의 규칙을 텔레그램에서 바로 추가합니다 |
 |-|
 | <img src="docs/images/05-remember.ko.png" width="360" alt="/remember 로 출력 형식 규칙을 저장하자, 다음 답변부터 그 형식대로 코드 블록으로 나오는 화면"> |
-| `/remember` 로 넣은 항목은 매 호출 시스템 프롬프트 맨 앞(`RULES`)에 붙어 `/new` 후에도, provider를 바꿔도 유지됩니다. 파일을 못 건드리는 `plan` 봇도 이렇게 규칙을 얻습니다 — 프로젝트 전체에 항구적인 규칙이라면 레포의 `CLAUDE.md` 쪽이 맞고, 이건 **그 봇 하나에만** 걸리는 규칙입니다 (`.claude-bot/memory.md`, git 에 올라가지 않음). |
+| `/remember` 로 넣은 항목은 매 호출 시스템 프롬프트 맨 앞(`RULES`)에 붙어 `/new` 후에도, provider를 바꿔도 유지됩니다. 파일을 못 건드리는 `plan` 봇도 이렇게 규칙을 얻습니다 — 프로젝트 전체에 항구적인 규칙이라면 레포의 `CLAUDE.md` 쪽이 맞고, 이건 **그 봇 하나에만** 걸리는 규칙입니다 (`.claude-bot/` 아래 config 이름에서 파생된 메모리 파일, git 에 올라가지 않음). |
 
 > **규칙을 지웠는데 계속 따르는 것처럼 보인다면** — 정상입니다. `/memory rm` 은 앞으로 주입될
 > `RULES` 블록에서 그 줄을 빼지만, **이미 진행 중인 대화**에는 그 규칙을 따른 답변이 그대로 남아
@@ -464,7 +466,7 @@ claude-telegram-bot ~/projects/B/claudebot.config.json   # 프로젝트 B
 ```
 
 - 텔레그램은 토큰 하나당 폴링 하나만 허용합니다. 그래서 봇마다 BotFather 토큰을 따로 발급해야 합니다.
-- `state`와 첨부 파일은 config 파일 폴더 아래 **`.claude-bot/`** 에 저장되므로 봇끼리 섞이지 않습니다.
+- `state`·첨부 파일·`/remember` 메모리는 config 파일 폴더 아래 **`.claude-bot/`** 에 저장되고, `state`와 메모리 파일명은 config 이름에서 파생되므로 봇끼리 섞이지 않습니다.
 
 역할별로 나눌 때는 코드는 그대로 두고 config만 역할별로 둡니다.
 

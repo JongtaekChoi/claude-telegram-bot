@@ -8,13 +8,14 @@
 // 프로젝트마다 config 파일을 따로 두면 한 코드로 여러 프로젝트를 동시에 운영 가능
 // (단, 텔레그램은 토큰당 폴링 1개라 프로젝트마다 BotFather 토큰이 별도여야 함).
 // 같은 프로젝트를 역할별 봇(개발자/기획자 등)으로 나누려면 config 마다 `persona`(역할
-// 시스템 프롬프트)와 `permissionMode` 를 다르게 주면 됨. state 는 config 이름에서 파생됨.
+// 시스템 프롬프트)와 `permissionMode` 를 다르게 주면 됨. state 와 /remember 메모리는 config
+// 이름에서 파생되므로 한 폴더에서 봇을 여럿 띄워도 안 섞임.
 //
 // 사용자 대상 문구는 영어 기본 + 한국어(STR 테이블). 언어는 텔레그램 from.language_code 로
 // 자동 판별하고, cfg.lang 을 주면 그 언어로 고정함. 콘솔/CLI 출력은 영어 단일.
 
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
 import dns from "node:dns";
 import { fileURLToPath } from "node:url";
@@ -85,7 +86,21 @@ const stateFile = stateBase === "config" ? "state.json" : `${stateBase}.state.js
 const BOT_DIR = join(DATA_DIR, ".claude-bot");
 const STATE_PATH = join(BOT_DIR, stateFile);
 const ATTACH_DIR = join(BOT_DIR, "attachments");
-const MEMORY_PATH = join(BOT_DIR, "memory.md"); // /new 로 초기화해도 유지되는 퍼시스턴트 메모리
+// 메모리 파일명도 state 와 같은 규칙으로 config 이름에서 파생시킨다. 지금까지는 BOT_DIR 아래
+// memory.md 하나뿐이라, 한 폴더에서 봇을 둘 띄우면(개발자·기획자) **서로의 규칙을 주입받았다.**
+// 페르소나가 붙으면 그 뒤에 id 를 더 붙인다 — 한 봇이 여러 역할을 맡아도 안 섞이게.
+// config.json → memory.md · memory.dev.md / planner.json → planner.memory.md · planner.memory.dev.md
+// 기본 config + 페르소나 없음이면 경로가 예전과 같아서 대다수 사용자는 아무것도 바뀌지 않는다.
+// → docs/design/room-personas.md
+const memoryBase = stateBase === "config" ? "memory" : `${stateBase}.memory`;
+// 페르소나 id 는 그대로 파일명이 되므로 경로가 될 수 있는 글자를 막는다 — `dev/x` 하나면
+// .claude-bot/ 밖에 쓴다. 어긋나는 id 는 페르소나 없음으로 떨어뜨린다(config 오타를 부팅 때
+// 짚어 주는 건 페르소나 목록이 생기는 1단계 몫이다).
+const PERSONA_ID_RE = /^[a-z0-9][a-z0-9-]*$/i;
+const memoryPathFor = (personaId) =>
+  join(BOT_DIR, personaId && PERSONA_ID_RE.test(personaId) ? `${memoryBase}.${personaId}.md` : `${memoryBase}.md`);
+const MEMORY_PATH = memoryPathFor(null); // /new 로 초기화해도 유지되는 퍼시스턴트 메모리
+const LEGACY_MEMORY_PATH = join(BOT_DIR, "memory.md"); // 이름 붙은 config 가 예전에 같이 쓰던 파일
 const MEMORY_CROWDED = 8; // 이 개수를 넘으면 /remember 응답에 정리 권유를 붙인다 (loadMemory 위 주석 참고)
 const CODEX_HANDOFF_PATH = join(BOT_DIR, "codex-handoff.md"); // Codex fallback 작업을 Claude에 넘길 요약
 const LEGACY_STATE_PATH = join(DATA_DIR, stateFile); // 구버전(루트 직하) 호환
@@ -102,6 +117,15 @@ function migrateData() {
     if (!existsSync(ATTACH_DIR) && existsSync(LEGACY_ATTACH_DIR)) {
       renameSync(LEGACY_ATTACH_DIR, ATTACH_DIR);
       console.log(`Migrated attachments → ${ATTACH_DIR}`);
+    }
+    // 이름 붙은 config 는 지금까지 공유 memory.md 를 읽었다. 경로가 바뀌는 순간 규칙이 통째로
+    // 주입에서 빠지므로 한 번 채워 준다. **옮기지 않고 복사한다** — 저 파일에는 여러 봇의 규칙이
+    // 섞여 쌓여 있고 어느 줄이 누구 것인지 코드가 가를 수 없다. 양쪽에 같은 내용을 두고 각자
+    // /memory rm 으로 지우는 편이 안전하다: 지운 규칙은 다시 쓰면 되지만, 사라진 규칙은 사라진
+    // 줄도 모른다. 원본은 그대로 두므로 옛 봇이 아직 돌고 있어도 깨지지 않는다.
+    if (MEMORY_PATH !== LEGACY_MEMORY_PATH && !existsSync(MEMORY_PATH) && existsSync(LEGACY_MEMORY_PATH)) {
+      copyFileSync(LEGACY_MEMORY_PATH, MEMORY_PATH);
+      console.log(`Copied memory → ${MEMORY_PATH} (shared memory.md kept — trim each side with /memory rm)`);
     }
     if (IMAGE_SEND) mkdirSync(OUTBOX_DIR, { recursive: true }); // 에이전트가 보낼 이미지를 놓는 폴더
     if (JOBS) mkdirSync(JOBS_DIR, { recursive: true }); // 에이전트가 띄운 백그라운드 작업 기록
@@ -1117,15 +1141,26 @@ async function checkForUpdate() {
 // 항목이 늘어나면 토큰보다 주목도가 문제다 — RULES 블록을 persona 앞에 두고 "must follow before
 // anything else" 를 붙여도, 그 안에 스무 줄이 있으면 신호가 평평해져 기존 규칙까지 약해진다.
 // 그래서 MEMORY_CROWDED 를 넘으면 /remember 응답에 정리 권유를 붙인다.
-function loadMemory() {
-  try { return readFileSync(MEMORY_PATH, "utf8").trim(); } catch { return ""; }
+
+// 방이 가리키는 페르소나. cfg.personas 도 방별 선택도 아직 없는 봇에서는 늘 null 이고, 그러면
+// 메모리 경로가 예전 그대로다. chatBucket 이 아니라 state 를 직접 읽는다 — 경로 하나 고르려고
+// 빈 방 버킷을 만들 이유가 없다. → docs/design/room-personas.md
+function roomPersona(chatId) {
+  const id = chatId == null ? null : state.sessions?.[String(chatId)]?.persona;
+  if (!id) return null;
+  return (cfg.personas || []).find((p) => p.id === id) || null;
 }
-function saveMemory(content) {
-  writeFileSync(MEMORY_PATH, content);
+const memoryPath = (chatId) => memoryPathFor(roomPersona(chatId)?.id);
+
+function loadMemory(chatId) {
+  try { return readFileSync(memoryPath(chatId), "utf8").trim(); } catch { return ""; }
+}
+function saveMemory(chatId, content) {
+  writeFileSync(memoryPath(chatId), content);
 }
 // 메모리는 `- ` 항목 목록. 여러 줄짜리 항목은 첫 줄만 `- ` 로 시작하므로 뒤따르는 줄은 앞 항목에 붙인다.
 // (손으로 편집해 불릿이 없는 파일도 항목으로 받아들여 다시 쓸 때 정규화된다.)
-function memoryItems(mem = loadMemory()) {
+function memoryItems(mem) {
   const items = [];
   let bulleted = false; // 불릿이 하나도 없는 파일이면 줄 단위로 끊는다 — 안 그러면 통째로 한 항목이 된다.
   for (const line of mem.split("\n")) {
@@ -1135,8 +1170,8 @@ function memoryItems(mem = loadMemory()) {
   }
   return items;
 }
-function saveMemoryItems(items) {
-  saveMemory(items.map((s) => `- ${s}`).join("\n"));
+function saveMemoryItems(chatId, items) {
+  saveMemory(chatId, items.map((s) => `- ${s}`).join("\n"));
 }
 // 번호를 붙여 보여준다 — /memory rm <번호> 로 지우기 위한 것. 여러 줄 항목은 이어지는 줄을 들여쓴다.
 function memoryNumbered(items) {
@@ -1864,7 +1899,7 @@ function runClaude(prompt, sessionId, opts = {}) {
       ? `Current model: ${model || "claude (default)"}. Model tiers (low→high): haiku → sonnet → opus → fable. If this question seems to require more capability than the current model, append one short line at the very end of your reply: 💡 \`/model sonnet\` (or \`/model opus\`, \`/model fable\`) for a stronger answer. Omit the suggestion for simple questions.`
       : null;
     // opts.injectMemory: 퍼시스턴트 메모리를 시스템 프롬프트에 주입 (/new 로 초기화해도 유지)
-    const mem = opts.injectMemory ? loadMemory() : "";
+    const mem = opts.injectMemory ? loadMemory(opts.chatId) : "";
     // 메모리는 persona보다 앞에 배치하고 헤더를 강화 → persona가 덮어쓰는 것 방지
     const memoryBlock = mem ? `## RULES (must follow before anything else)\n${mem}` : null;
     const handoff = opts.injectHandoff !== false ? loadCodexHandoff() : "";
@@ -1973,7 +2008,7 @@ function runCodex(prompt, lang = "en", opts = {}) {
       // 한 번에 싣고, 이어가는 세션이면 메모리만 매 턴 다시 싣는다 — 세션이 시작된 뒤 /remember 로
       // 추가한 규칙이 그 세션에는 영영 안 들어가던 문제. (Claude 는 매 호출 --append-system-prompt
       // 로 들어가므로 원래 이 구멍이 없다.)
-      const mem = loadMemory();
+      const mem = loadMemory(opts.chatId);
       const context = resumeSessionId
         ? (mem ? `## RULES (must follow before anything else)\n${mem}` : "")
         : [mem, cfg.persona, cfg.appendSystemPrompt, IMAGE_SEND ? imageSendInstruction() : null, JOBS ? jobInstruction() : null,
@@ -3586,20 +3621,21 @@ async function handle(msg) {
   if (text.startsWith("/remember ")) {
     const content = text.slice(10).trim();
     if (!content) { await send(chatId, t(l, "rememberUsage")); return; }
-    const existing = loadMemory();
-    saveMemory(existing ? `${existing}\n- ${content}` : `- ${content}`);
-    const n = memoryItems().length;
+    const existing = loadMemory(chatId);
+    const updated = existing ? `${existing}\n- ${content}` : `- ${content}`;
+    saveMemory(chatId, updated);
+    const n = memoryItems(updated).length;
     await send(chatId, n > MEMORY_CROWDED ? `${t(l, "remembered")}\n\n${t(l, "memoryCrowded", n)}` : t(l, "remembered"));
     return;
   }
   if (text === "/memory" || text.startsWith("/memory ")) {
     const arg = text.slice(7).trim();
     if (arg === "clear") {
-      saveMemory("");
+      saveMemory(chatId, "");
       await send(chatId, t(l, "memoryCleared"));
       return;
     }
-    const items = memoryItems();
+    const items = memoryItems(loadMemory(chatId));
     if (arg === "rm" || arg.startsWith("rm ")) {
       if (!items.length) { await send(chatId, t(l, "memoryEmpty")); return; }
       // `rm 3` · `rm 3 5 7` · `rm 3-9` — 섞어 써도 된다. 정리는 몰아서 하게 되는 일이라
@@ -3622,7 +3658,7 @@ async function handle(msg) {
       }
       if (bad || !picked.size) { await send(chatId, t(l, "memoryUsage", items.length)); return; }
       const removed = items.filter((_, i) => picked.has(i + 1));
-      saveMemoryItems(items.filter((_, i) => !picked.has(i + 1)));
+      saveMemoryItems(chatId, items.filter((_, i) => !picked.has(i + 1)));
       await send(chatId, t(l, "memoryRemoved", removed.join("\n"), removed.length));
       return;
     }

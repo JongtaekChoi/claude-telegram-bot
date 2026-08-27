@@ -481,6 +481,13 @@ file, so projects stay isolated. Upgrading from an older version **auto-moves** 
 `state.json` / `attachments/` into `.claude-bot/` on first start (no data loss). Logs stay wherever
 your launchd plist points them.
 
+Persistent memory (`/remember`) lives there too, and since 0.4.13 its filename is derived from the
+config name the same way state is — `config.json` → `memory.md`, `planner.json` →
+`planner.memory.md`. Two bots run from one folder no longer read each other's rules. A named config
+that was already using the shared `memory.md` gets it **copied** once on first start and the
+original is left in place, because no code can tell which line belonged to which bot — keep both
+and trim each side with `/memory rm`.
+
 </details>
 
 ### Usage details
@@ -625,7 +632,8 @@ The code is project-agnostic: make **one config file per project** and run sever
 <summary><b>Multi-project setup</b> — one config per project, one BotFather token each</summary>
 
 - Run: `node bot.mjs /absolute/path/to/project.config.json` (no arg → `./mybot.json`, fallback `./config.json`)
-- State and attachments live in **`.claude-bot/` inside the config file's folder**, so projects don't mix.
+- State, attachments, and `/remember` memory live in **`.claude-bot/` inside the config file's
+  folder**, with state and memory filenames derived from the config name, so projects don't mix.
 - **Note**: Telegram allows only one poller per token → each project needs its **own BotFather
   token**.
 - For always-on, copy the launchd template per project (see below).

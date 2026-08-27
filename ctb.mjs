@@ -70,6 +70,15 @@ function statePathFor(configPath) {
   const base = basename(configPath, ".json");
   return join(dirname(configPath), ".claude-bot", base === "config" ? "state.json" : `${base}.state.json`);
 }
+// 메모리도 같은 규칙으로 가른다 — bot.mjs 의 memoryPathFor 와 짝이어야 한다. 여기가 어긋나면
+// 터미널과 봇이 서로 다른 규칙을 읽는다. 방이 페르소나를 가리키면 그 id 까지 붙인다.
+// config.json → .claude-bot/memory.md · memory.dev.md / planner.json → planner.memory.md
+function memoryPathFor(configPath, personaId) {
+  const base = basename(configPath, ".json");
+  const stem = base === "config" ? "memory" : `${base}.memory`;
+  const safe = personaId && /^[a-z0-9][a-z0-9-]*$/i.test(personaId); // id 가 파일명이 된다
+  return join(dirname(configPath), ".claude-bot", safe ? `${stem}.${personaId}.md` : `${stem}.md`);
+}
 
 // 한글·CJK 는 터미널에서 두 칸을 먹는다 — padEnd 는 글자 수만 세서 표가 어긋난다.
 const cellWidth = (s) =>
@@ -311,7 +320,7 @@ async function main() {
   const sysArgs = [];
   if (provider === "claude" && !forwardedArgs.includes("--append-system-prompt")) {
     let memory = "";
-    try { memory = readFileSync(join(botDir, "memory.md"), "utf8").trim(); } catch {}
+    try { memory = readFileSync(memoryPathFor(configPath, room?.persona), "utf8").trim(); } catch {}
     // 메모리를 persona 앞에 두고 헤더를 세게 다는 것까지 bot.mjs 와 같게 — persona 가 덮어쓰지 않게.
     const appendSys = [
       memory ? `## RULES (must follow before anything else)\n${memory}` : null,
