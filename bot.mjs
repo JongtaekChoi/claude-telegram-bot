@@ -127,6 +127,14 @@ function migrateData() {
       copyFileSync(LEGACY_MEMORY_PATH, MEMORY_PATH);
       console.log(`Copied memory → ${MEMORY_PATH} (shared memory.md kept — trim each side with /memory rm)`);
     }
+    // personas 를 새로 넣은 봇: 아직 아무 방도 안 골랐어도 기본 페르소나로 돌기 시작하므로
+    // 메모리 경로도 같이 옮겨간다. 그대로 두면 지금까지 쌓인 규칙이 조용히 주입에서 빠진다.
+    // 위와 같은 이유로 옮기지 않고 복사한다.
+    const defaultMemory = PERSONAS.length ? memoryPathFor(PERSONAS[0].id) : null;
+    if (defaultMemory && !existsSync(defaultMemory) && existsSync(MEMORY_PATH)) {
+      copyFileSync(MEMORY_PATH, defaultMemory);
+      console.log(`Copied memory → ${defaultMemory} (default persona "${PERSONAS[0].id}")`);
+    }
     if (IMAGE_SEND) mkdirSync(OUTBOX_DIR, { recursive: true }); // 에이전트가 보낼 이미지를 놓는 폴더
     if (JOBS) mkdirSync(JOBS_DIR, { recursive: true }); // 에이전트가 띄운 백그라운드 작업 기록
   } catch (e) {
@@ -167,6 +175,26 @@ const JOB_LOG_TAIL = 1200; // 완료 알림에 붙일 로그 꼬리 길이
 // 방 사이 전달(/tell): 이 봇이 맡은 다른 방으로 메시지 하나를 넘긴다. 방마다 세션이 독립이라
 // 옆방이 알아낸 걸 가져올 통로가 없던 자리다. → docs/design/room-relay.md
 const ROOM_RELAY = cfg.roomRelay !== false;
+// 방별 페르소나: config 에 역할 목록을 두고 방마다 하나를 가리킨다. 역할을 프로세스가 아니라
+// 방으로 가르는 것이라, 봇 하나가 개발방·기획방을 동시에 맡을 수 있다. **목록이 없으면 지금과
+// 완전히 같이 동작한다** — 이 레포는 공개 배포물이고 대다수 사용자는 페르소나를 안 쓴다.
+// id 는 메모리 파일명과 state 키가 되므로 부팅 때 걸러 내고, 왜 뺐는지 로그에 남긴다.
+// → docs/design/room-personas.md
+const PERSONAS = (() => {
+  const list = cfg.personas;
+  if (list === undefined) return [];
+  if (!Array.isArray(list)) { console.error("config.personas must be an array — ignoring it"); return []; }
+  const out = [], seen = new Set();
+  for (const p of list) {
+    const id = typeof p?.id === "string" ? p.id.trim() : "";
+    if (!PERSONA_ID_RE.test(id)) { console.error(`Persona skipped — id must be [a-z0-9-]: ${JSON.stringify(p?.id)}`); continue; }
+    if (seen.has(id)) { console.error(`Persona skipped — duplicate id: ${id}`); continue; }
+    if (typeof p.prompt !== "string" || !p.prompt.trim()) { console.error(`Persona skipped — no prompt: ${id}`); continue; }
+    seen.add(id);
+    out.push({ ...p, id, name: typeof p.name === "string" && p.name.trim() ? p.name.trim() : id });
+  }
+  return out;
+})();
 // 사람은 한 생각을 여러 메시지로 쪼개 보낸다 — "아까 그 버그 말인데" / "테스트부터 돌려봐" / "아 로그도".
 // 첫 줄에 즉시 반응하면 나머지는 이미 시작된 작업 뒤에 줄을 서고(`⏳ 대기열에 추가됐습니다`), 반쪽짜리
 // 맥락으로 돌린 그 실행은 답까지 따로 와서 통째로 버려진다. 그래서 잠깐 기다렸다 합쳐 한 번만 돈다.
@@ -218,6 +246,7 @@ const STR = {
       "• /sessions — list past sessions in this project and pick one to carry on from\n" +
       "• /name — name the current session so it stands out in /sessions\n" +
       "• /jobs — background jobs that outlive replies · you get a message when one ends\n" +
+      "• /persona [role] — which role this room runs as · change it right after /new (needs personas in config)\n" +
       "• /tell <room> <message> — hand a message to another room this bot runs · /tell alone lists them\n" +
       "• /compact — compress context to free up space (keeps the session)\n" +
       "• /plan <request> — plan only (no edits), then approve/cancel to run for real\n" +
@@ -289,6 +318,20 @@ const STR = {
       "Send it again if you still want it.",
     planProviderUnsupported: "/plan approval flow currently requires provider=claude.",
     tellOff: "Room relay is off (`roomRelay: false` in config).",
+    personaOff:
+      "🎭 No personas configured. Add a `personas` list to the config file to give each room its own "
+      + "role — one bot can then run a dev room and a planning room at once.",
+    personaShow: (cur, list) =>
+      `🎭 This room runs as **${cur}**.\n\n${list}\n\n`
+      + "`/persona <role>` — the number above or any distinctive part of the name.\n"
+      + "Only at a session boundary: send `/new` first if this room already has a conversation going.",
+    personaSet: (name) => `🎭 This room now runs as **${name}**. Its memory and rules are its own.`,
+    personaSame: (name) => `🎭 Already **${name}**.`,
+    personaLocked: (cur, next) =>
+      `🎭 This room is mid-conversation as **${cur}**, so it can't become **${next}** now — everything said `
+      + "so far belongs to the current role.\n\nSend `/new` to drop that context, then pick again.",
+    personaUnknown: (list) => `🎭 No role matches that:\n\n${list}`,
+    personaAmbiguous: (list) => `🎭 That matches more than one role:\n\n${list}\n\nUse the number instead.`,
     tellNoRooms:
       "📨 No other room to hand anything to yet. This bot only knows rooms it has already talked in — "
       + "say something there once and it shows up here.",
@@ -477,6 +520,7 @@ const STR = {
       "• /sessions — 이 프로젝트의 지난 세션 목록 · 골라서 이어가기\n" +
       "• /name — 지금 세션에 이름 붙이기 · /sessions 에서 바로 찾기\n" +
       "• /jobs — 답장 후에도 살아 있는 백그라운드 작업 · 끝나면 먼저 알려줌\n" +
+      "• /persona [역할] — 이 방이 어떤 역할로 도는지 · /new 직후에 바꿀 수 있음 (config 에 personas 필요)\n" +
       "• /tell <방> <메시지> — 이 봇이 맡은 다른 방으로 메시지 넘기기 · /tell 만 보내면 방 목록\n" +
       "• /compact — 컨텍스트 압축 (세션 유지, 공간 확보)\n" +
       "• /plan <요청> — 계획만 세우기 (편집 없음) → 승인/취소로 실제 실행\n" +
@@ -692,6 +736,20 @@ const STR = {
       "필요하면 다시 보내세요.",
     planProviderUnsupported: "/plan 승인 흐름은 현재 provider=claude에서만 사용할 수 있습니다.",
     tellOff: "방 사이 전달이 꺼져 있습니다 (config 의 `roomRelay: false`).",
+    personaOff:
+      "🎭 설정된 페르소나가 없습니다. config 에 `personas` 목록을 넣으면 방마다 역할을 줄 수 있습니다 — "
+      + "봇 하나가 개발방과 기획방을 동시에 맡습니다.",
+    personaShow: (cur, list) =>
+      `🎭 이 방은 **${cur}** 로 돕니다.\n\n${list}\n\n`
+      + "`/persona <역할>` — 위 번호나 이름의 일부만 적어도 됩니다.\n"
+      + "세션 경계에서만 바꿀 수 있습니다. 이미 대화가 진행 중이면 `/new` 를 먼저 보내세요.",
+    personaSet: (name) => `🎭 이 방은 이제 **${name}** 로 돕니다. 메모리와 규칙도 이 역할 것을 씁니다.`,
+    personaSame: (name) => `🎭 이미 **${name}** 입니다.`,
+    personaLocked: (cur, next) =>
+      `🎭 이 방은 **${cur}** 로 대화가 진행 중이라 지금 **${next}** 로 바꿀 수 없습니다 — 지금까지 오간 `
+      + "말이 전부 현재 역할의 것입니다.\n\n`/new` 로 그 맥락을 버린 뒤에 다시 고르세요.",
+    personaUnknown: (list) => `🎭 해당하는 역할이 없습니다:\n\n${list}`,
+    personaAmbiguous: (list) => `🎭 여러 역할이 걸립니다:\n\n${list}\n\n번호를 쓰세요.`,
     tellNoRooms:
       "📨 넘길 만한 다른 방이 아직 없습니다. 이 봇은 한 번이라도 대화한 방만 압니다 — "
       + "그 방에서 아무 메시지나 한 번 보내면 목록에 뜹니다.",
@@ -987,6 +1045,7 @@ const COMMANDS = {
     { command: "sessions", description: "List past sessions · pick one to carry on from" },
     { command: "name", description: "Name the current session" },
     { command: "jobs", description: "Background jobs still running (survive replies)" },
+    { command: "persona", description: "Which role this room runs as · change it right after /new" },
     { command: "tell", description: "Hand a message to another room this bot runs · lists rooms if used alone" },
     { command: "compact", description: "Compress context to free up space (keeps session)" },
     { command: "plan", description: "Plan only (no edits) · on|off to pin plan mode to this room" },
@@ -1012,6 +1071,7 @@ const COMMANDS = {
     { command: "sessions", description: "지난 세션 목록 · 골라서 이어가기" },
     { command: "name", description: "지금 세션에 이름 붙이기" },
     { command: "jobs", description: "백그라운드 작업 목록 (답장 후에도 살아 있는 것)" },
+    { command: "persona", description: "이 방이 어떤 역할로 도는지 · /new 직후에 바꿀 수 있음" },
     { command: "tell", description: "이 봇이 맡은 다른 방으로 메시지 넘기기 · 인자 없으면 방 목록" },
     { command: "compact", description: "컨텍스트 압축 (세션 유지, 공간 확보)" },
     { command: "plan", description: "계획만 세우기 (편집 없음) · on|off 로 이 방에 고정" },
@@ -1142,14 +1202,18 @@ async function checkForUpdate() {
 // anything else" 를 붙여도, 그 안에 스무 줄이 있으면 신호가 평평해져 기존 규칙까지 약해진다.
 // 그래서 MEMORY_CROWDED 를 넘으면 /remember 응답에 정리 권유를 붙인다.
 
-// 방이 가리키는 페르소나. cfg.personas 도 방별 선택도 아직 없는 봇에서는 늘 null 이고, 그러면
-// 메모리 경로가 예전 그대로다. chatBucket 이 아니라 state 를 직접 읽는다 — 경로 하나 고르려고
-// 빈 방 버킷을 만들 이유가 없다. → docs/design/room-personas.md
+// 방이 가리키는 페르소나. **고르지 않은 방은 기본값(personas[0])으로 돈다** — 프롬프트와 메모리가
+// 같은 페르소나를 가리켜야 하므로 그 판단을 여기 한 곳에서 한다. 목록이 없으면 null 이라 경로도
+// 주입도 예전 그대로다. 없는 id(config 에서 지운 뒤)도 기본값으로 떨어진다.
+// chatBucket 이 아니라 state 를 직접 읽는다 — 경로 하나 고르려고 빈 방 버킷을 만들 이유가 없다.
+// chatId 가 없는 호출(cron)도 기본값이다. → docs/design/room-personas.md
 function roomPersona(chatId) {
+  if (!PERSONAS.length) return null;
   const id = chatId == null ? null : state.sessions?.[String(chatId)]?.persona;
-  if (!id) return null;
-  return (cfg.personas || []).find((p) => p.id === id) || null;
+  return (id && PERSONAS.find((p) => p.id === id)) || PERSONAS[0];
 }
+// 시스템 프롬프트에 실릴 역할 본문. 페르소나를 안 쓰면 예전처럼 cfg.persona 다.
+const personaPrompt = (chatId) => roomPersona(chatId)?.prompt ?? cfg.persona;
 const memoryPath = (chatId) => memoryPathFor(roomPersona(chatId)?.id);
 
 function loadMemory(chatId) {
@@ -1910,7 +1974,7 @@ function runClaude(prompt, sessionId, opts = {}) {
     const jobHint = JOBS ? jobInstruction() : null;
     // 넘길 방이 없으면 null 이라 방 하나짜리 봇은 이 토큰을 내지 않는다.
     const tellHint = ROOM_RELAY ? tellInstruction(opts.chatId) : null;
-    const appendSys = [memoryBlock, handoffBlock, cfg.persona, brevity, modelHint, imageHint, jobHint, tellHint].filter(Boolean).join("\n\n");
+    const appendSys = [memoryBlock, handoffBlock, personaPrompt(opts.chatId), brevity, modelHint, imageHint, jobHint, tellHint].filter(Boolean).join("\n\n");
     if (appendSys) args.push("--append-system-prompt", appendSys);
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
@@ -2011,7 +2075,7 @@ function runCodex(prompt, lang = "en", opts = {}) {
       const mem = loadMemory(opts.chatId);
       const context = resumeSessionId
         ? (mem ? `## RULES (must follow before anything else)\n${mem}` : "")
-        : [mem, cfg.persona, cfg.appendSystemPrompt, IMAGE_SEND ? imageSendInstruction() : null, JOBS ? jobInstruction() : null,
+        : [mem, personaPrompt(opts.chatId), cfg.appendSystemPrompt, IMAGE_SEND ? imageSendInstruction() : null, JOBS ? jobInstruction() : null,
            ROOM_RELAY ? tellInstruction(opts.chatId) : null].filter(Boolean).join("\n\n");
       if (context) codexPrompt = `Project instructions and persistent context:\n${context}\n\nUser request:\n${prompt}`;
     }
@@ -2146,7 +2210,7 @@ function runOllama(prompt, lang = "en", opts = {}) {
     const fallbackRole = opts.fallback
       ? "You are a small local model standing in because Claude is temporarily unavailable (rate-limited or out of credits). Do NOT attempt coding, file edits, or tool use — you can't do those reliably. Instead, act as a note-taker: help the user capture, organize, and draft what they'll ask Claude to do once it's back. Summaries, request drafts, and tidy notes are your job."
       : "";
-    const appendSys = [cfg.persona, brevity, fallbackRole].filter(Boolean).join("\n\n");
+    const appendSys = [personaPrompt(opts.chatId), brevity, fallbackRole].filter(Boolean).join("\n\n");
     // `--` 앞은 ollama launch 플래그, 뒤는 claude 플래그로 전달된다.
     const claudeArgs = ["--output-format", "json"];
     if (appendSys) claudeArgs.push("--append-system-prompt", appendSys);
@@ -2809,6 +2873,54 @@ async function handleName(chatId, arg, l) {
   names[id] = arg.replace(/\s+/g, " ").slice(0, 24); // 버튼 한 줄에 들어갈 만큼만
   saveState(state);
   await send(chatId, t(l, "nameSet", names[id]));
+}
+
+// /persona [역할] — 이 방이 어떤 역할로 도는지 보여주고, 세션 경계에서만 바꾼다.
+// 맥락이 쌓인 세션의 정체성이 도중에 바뀌면 이미 쌓인 대화가 옛 페르소나의 것이라 모순된다.
+// 그래서 세션이 살아 있으면 거절하고 /new 를 권한다 — /new 는 그 맥락을 버리는 자리라 예외다.
+// → docs/design/room-personas.md
+function personaLines(chatId) {
+  const cur = roomPersona(chatId);
+  return PERSONAS.map((p, i) => `${i + 1}. ${p.name}${p.id === cur?.id ? " ←" : ""}`).join("\n");
+}
+function resolvePersona(token) {
+  const exact = PERSONAS.find((p) => p.id === token);
+  if (exact) return { persona: exact };
+  if (/^\d{1,3}$/.test(token)) {
+    const n = Number(token);
+    if (n >= 1 && n <= PERSONAS.length) return { persona: PERSONAS[n - 1] };
+  }
+  const needle = token.toLowerCase();
+  const hits = PERSONAS.filter((p) => p.name.toLowerCase().includes(needle) || p.id.includes(needle));
+  if (hits.length === 1) return { persona: hits[0] };
+  if (hits.length > 1) return { ambiguous: true };
+  return {};
+}
+async function handlePersona(chatId, arg, l) {
+  if (!PERSONAS.length) {
+    await send(chatId, t(l, "personaOff"));
+    return;
+  }
+  const cur = roomPersona(chatId);
+  if (!arg) {
+    await send(chatId, t(l, "personaShow", cur.name, personaLines(chatId)));
+    return;
+  }
+  const hit = resolvePersona(arg);
+  if (hit.ambiguous) { await send(chatId, t(l, "personaAmbiguous", personaLines(chatId))); return; }
+  if (!hit.persona) { await send(chatId, t(l, "personaUnknown", personaLines(chatId))); return; }
+  if (hit.persona.id === cur.id && chatBucket(chatId).persona) {
+    await send(chatId, t(l, "personaSame", cur.name));
+    return;
+  }
+  // provider 를 바꿔 가며 쓰는 방이 있어 양쪽을 다 본다 — 한쪽만 비어도 이어갈 맥락이 남아 있다.
+  if (getSid(chatId, "claude") || getSid(chatId, "codex")) {
+    await send(chatId, t(l, "personaLocked", cur.name, hit.persona.name));
+    return;
+  }
+  chatBucket(chatId).persona = hit.persona.id;
+  saveState(state);
+  await send(chatId, t(l, "personaSet", hit.persona.name));
 }
 
 // /tell <방> <메시지> — 이 봇이 맡은 다른 방으로 메시지 하나를 넘긴다. 사람이 직접 친 것이므로
@@ -3493,6 +3605,10 @@ async function handle(msg) {
   }
   if (text === "/jobs") {
     await handleJobs(chatId, l);
+    return;
+  }
+  if (text === "/persona" || text.startsWith("/persona ")) {
+    await handlePersona(chatId, text.slice(9).trim(), l);
     return;
   }
   if (text === "/tell" || text.startsWith("/tell ")) {

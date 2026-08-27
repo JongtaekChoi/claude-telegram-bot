@@ -70,6 +70,15 @@ function statePathFor(configPath) {
   const base = basename(configPath, ".json");
   return join(dirname(configPath), ".claude-bot", base === "config" ? "state.json" : `${base}.state.json`);
 }
+// 방이 가리키는 페르소나 — bot.mjs 의 roomPersona 와 **같은 규칙이어야 한다.** 고르지 않은 방은
+// 기본값(personas[0]). 여기가 어긋나면 터미널과 봇이 서로 다른 역할·다른 메모리로 돈다.
+function personaFor(cfg, room) {
+  const ok = (p) => p && typeof p.id === "string" && /^[a-z0-9][a-z0-9-]*$/i.test(p.id.trim())
+    && typeof p.prompt === "string" && p.prompt.trim();
+  const list = Array.isArray(cfg.personas) ? cfg.personas.filter(ok) : [];
+  if (!list.length) return null;
+  return list.find((p) => p.id.trim() === room?.persona) || list[0];
+}
 // 메모리도 같은 규칙으로 가른다 — bot.mjs 의 memoryPathFor 와 짝이어야 한다. 여기가 어긋나면
 // 터미널과 봇이 서로 다른 규칙을 읽는다. 방이 페르소나를 가리키면 그 id 까지 붙인다.
 // config.json → .claude-bot/memory.md · memory.dev.md / planner.json → planner.memory.md
@@ -320,11 +329,12 @@ async function main() {
   const sysArgs = [];
   if (provider === "claude" && !forwardedArgs.includes("--append-system-prompt")) {
     let memory = "";
-    try { memory = readFileSync(memoryPathFor(configPath, room?.persona), "utf8").trim(); } catch {}
+    const persona = personaFor(cfg, room);
+    try { memory = readFileSync(memoryPathFor(configPath, persona?.id), "utf8").trim(); } catch {}
     // 메모리를 persona 앞에 두고 헤더를 세게 다는 것까지 bot.mjs 와 같게 — persona 가 덮어쓰지 않게.
     const appendSys = [
       memory ? `## RULES (must follow before anything else)\n${memory}` : null,
-      cfg.persona,
+      persona?.prompt || cfg.persona,
     ].filter(Boolean).join("\n\n");
     if (appendSys) sysArgs.push("--append-system-prompt", appendSys);
   }

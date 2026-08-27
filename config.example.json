@@ -9,6 +9,7 @@
   "model": "",
   "lang": "",
   "persona": "System prompt defining this bot's role/voice (optional). Used to differentiate persona bots (developer/planner/...).",
+  "personas": [],
   "appendSystemPrompt": "",
   "env": {},
   "mergeWindowMs": 1000,

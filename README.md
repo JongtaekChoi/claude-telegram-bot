@@ -274,6 +274,7 @@ Core commands:
 | `/sessions` | List this project's past sessions for the active provider and pick one to carry on from (🔒 held by another room, 💻 open in a terminal — both are blocked) |
 | `/name <name>` | Name the current session so it stands out in `/sessions` (`/name -` removes it) |
 | `/jobs` | Background jobs that outlive replies — ▶ running, ✅ finished |
+| `/persona [role]` | Which role this room runs as. Sent bare, it lists the roles. Changing it needs a session boundary — `/new` first |
 | `/tell [room] [message]` | Hand a message to another room this bot runs — it executes there, with that room's session. Sent bare, it lists the rooms |
 | `/plan <request>` | Produce a plan and wait for approval (Claude only) |
 | `/plan on` · `/plan off` | Pin plan mode to this room — every message plans first (Claude only) |
@@ -396,6 +397,7 @@ The only keys you need to start are `token`, `allowedChatId`, `projectDir`, `cla
 | `lang` | (optional) UI language. Empty = auto-detect per user (English default, Korean for Korean Telegram clients). Force with `"en"` / `"ko"`. |
 | `name` | (optional) Bot name shown in `/help` — handy for telling multiple bots apart |
 | `persona` | (optional) Role system prompt — defines a persona (developer/planner/…). See below |
+| `personas` | (optional) A **list** of roles, so one bot can run several. Each needs `id` (`[a-z0-9-]`, becomes a filename), `prompt`, and optionally `name`. Rooms pick one with `/persona`; rooms that never pick run as the first. See below |
 | `appendSystemPrompt` | (optional) Override the default "be concise for Telegram" instruction |
 | `env` | (optional) Extra environment variables passed to provider processes |
 | `mergeWindowMs` | (optional) Wait this long for a follow-up message and answer both at once (default: `1000`; `0` runs each message immediately). Override at runtime with `/mergewindow` (persists in state). |
@@ -651,8 +653,28 @@ node bot.mjs ~/projects/B/claudebot.config.json   # instance B
 
 ## Multiple personas (roles)
 
-You can split the **same project** into role-based bots (e.g. **Developer** + **Planner**).
-One codebase, **a separate config file per role**.
+You can split the **same project** into roles (e.g. **Developer** + **Planner**) — either as
+**one bot whose rooms have different roles**, or as **a separate bot per role**.
+
+**Rooms as roles** (`personas` in the config) is usually the one you want: one process, one Telegram
+identity, and `/tell` can hand work between roles because they're the same bot — separate bots
+**cannot** talk to each other at all (Telegram bots don't receive other bots' messages).
+
+```jsonc
+"personas": [
+  { "id": "dev",     "name": "Developer", "prompt": "You are the senior developer on this project. …" },
+  { "id": "planner", "name": "Planner",   "prompt": "You are the product/UX planner. …" }
+]
+```
+
+Each room picks one with `/persona <role>`, and that role's prompt **and its own `/remember` memory**
+(`memory.dev.md`) apply there. A role is fixed for the life of a session — everything said so far
+belongs to it — so `/persona` only takes effect at a session boundary; send `/new` first. Rooms that
+never pick run as the first entry in the list. With no `personas` key, nothing changes: `persona`
+keeps working exactly as before.
+
+**A separate bot per role** still makes sense when you need two identities in one group at the same
+time, when you're migrating gradually, or when `allowedChatId` must differ. That layout is below.
 
 | Bot | permissionMode | Role |
 |---|---|---|
