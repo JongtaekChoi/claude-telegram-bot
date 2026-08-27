@@ -12,9 +12,10 @@
 
 ## 다음
 
-- [ ] **봇 사이 인박스 전달** — 같은 봇 안 방 사이는 `/tell` 로 끝났다. 다른 봇 프로세스는
-      `projectDir` 가 달라 서로를 못 보고, 텔레그램으로는 봇끼리 메시지가 닿지 않아 파일 인박스가
-      유일한 길이다. → [design/room-relay.md](design/room-relay.md) 의 "다음 단계"(결정 4가지)
+- [ ] **방별 페르소나** — 역할을 프로세스가 아니라 방으로 가른다. 세션 시작 때 페르소나를 고르고,
+      봇을 합칠지는 프로젝트마다 고른다(강제 아님). 설계 완료, 구현 전. 6단계로 나눠 뒀고 3단계
+      (메모리 페르소나별 분리)는 지금 있는 버그를 고치는 거라 단독으로도 값이 있다.
+      → [design/room-personas.md](design/room-personas.md)
 - [ ] **Claude ↔ Codex 방별 인수인계** — 설계 완료, 구현 전.
       → [design/provider-session-handoff.md](design/provider-session-handoff.md)
       (문서 끝의 "구현 전 확정할 결정" 5가지부터 정하고 시작한다)
@@ -36,6 +37,10 @@
       마커로 이미 나간다. 로그·CSV·zip 같은 걸 `sendDocument` 로 보내는 통로가 없다.
 - [ ] **봇 간 공유 문서 (블랙보드)** — `.claude-bot/shared.md` 를 여러 페르소나 봇이 읽고 쓴다.
       코드 없이 persona 프롬프트 컨벤션만으로 가능. 위 봇 사이 인박스와 겹치는지 먼저 판단할 것.
+- [ ] **봇 사이 파일 인박스** — 다른 봇 프로세스의 `.claude-bot/inbox/` 에 파일을 떨구는 방식.
+      방별 페르소나로 봇을 합칠 수 있게 되면 대개 필요 없어져서 미뤘다. 봇을 일부러 나눠 두는
+      구성에서 역할 사이 전달이 정말 필요해지면 그때 연다.
+      → [design/room-relay.md](design/room-relay.md) 의 "다음 단계"
 - [ ] **웹훅 모드** — `cfg.webhookUrl`, `node:http` 로 zero-dep 유지. 로컬 개발엔 폴링이 편하므로 설정으로 고른다.
 - [ ] **데모 GIF** — `ctb` → 텔레그램 세션 연속성. → [images/SHOTLIST.md](images/SHOTLIST.md)
 
