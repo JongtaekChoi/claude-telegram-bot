@@ -419,6 +419,16 @@ const STR = {
       `Group setup, including the BotFather privacy setting: ${guide}\n\n` +
       "⚠️ Allowing a group hands the bot to **everyone in it** — the allow list is per room, not per person.\n" +
       "*(Said once per chat, so I don't become a spam relay.)*",
+    routeAsk: (preview) =>
+      `📮 This is the group's parent topic — which room is this for?\n\n> ${preview}`,
+    routeAttachOnly: "(attachment)",
+    routeHereBtn: "▶ Run here",
+    routeCancelBtn: "❌ Drop",
+    routeSent: (room) => `📮 → ${room}`,
+    routeHere: "▶ Running here.",
+    routeCanceled: "❌ Dropped — nothing ran.",
+    routeExpired: "That prompt is gone (the bot restarted). Send it again.",
+    routeMuted: (room) => `📨 ${room} is muted (\`/*\`). Nothing was sent — unmute it there with \`*/\` first.`,
     allowHeader: "🔐 Chats allowed to use this bot",
     allowFooter:
       "Add: /allow <chatId> · Remove: /allow rm <chatId>\n" +
@@ -644,6 +654,16 @@ const STR = {
       `그룹 설정 방법 (BotFather privacy 설정 포함): ${guide}\n\n` +
       "⚠️ 그룹을 허용하면 **그 방에 있는 모든 사람**에게 봇을 넘기는 것과 같습니다 — 화이트리스트는 사람이 아니라 방 단위입니다.\n" +
       "*(스팸 중계기가 되지 않도록 이 안내는 방마다 한 번만 보냅니다.)*",
+    routeAsk: (preview) =>
+      `📮 여기는 상위 토픽입니다 — 어디로 보낼까요?\n\n> ${preview}`,
+    routeAttachOnly: "(첨부)",
+    routeHereBtn: "▶ 여기서 실행",
+    routeCancelBtn: "❌ 안 보냄",
+    routeSent: (room) => `📮 → ${room}`,
+    routeHere: "▶ 여기서 실행합니다.",
+    routeCanceled: "❌ 보내지 않았습니다 — 아무것도 실행되지 않았습니다.",
+    routeExpired: "그 메시지는 사라졌습니다 (봇이 재시작했습니다). 다시 보내주세요.",
+    routeMuted: (room) => `📨 ${room} 은 뮤트 상태입니다 (\`/*\`). 아무것도 보내지 않았습니다 — 그 방에서 \`*/\` 로 먼저 푸세요.`,
     allowHeader: "🔐 이 봇을 쓸 수 있는 방",
     allowFooter:
       "추가: /allow <chatId> · 삭제: /allow rm <chatId>\n" +
@@ -2021,6 +2041,85 @@ async function offerRelay(from, tell, relayed) {
     return;
   }
   await askRelay(from, hit.room.room, tell.text, BOT_LANG);
+}
+
+// ── 접수처 방 (포럼 상위 토픽) ────────────────────────────────────────────
+// 포럼 그룹은 열면 기본으로 상위에 서고, 알림에서 들어가도, "모두" 뷰에서 답장해도 그렇다. 그래서
+// **특정 토픽에 갈 말이 상위 방으로 나가는 사고**가 반복된다. 상위 방도 세션을 가진 실행 방이라
+// 조용히 돌아버리고, 알아차렸을 땐 (1) 엉뚱한 세션이 오염됐고 (2) 토큰을 버렸고 (3) 정작 그 말이
+// 가야 할 방은 못 들었다. /stop 은 타이핑이 실행보다 느려서 대개 늦는다.
+//
+// 그래서 상위 방에서는 provider 를 띄우지 않고 **어디로 보낼지 버튼으로 묻는다.** 잘못 눌러도
+// 잘못 보낸 게 아니라 안 보낸 게 된다 — 실패가 시끄러워진다.
+//
+// **켜는 명령도 설정도 없다.** 봇이 이미 아는 사실 셋이 사고가 나는 방과 정확히 일치하기 때문이다:
+// 포럼 그룹인가(`forum`, chat.is_forum 에서 자동으로 찍힌다) · 방 키가 그룹 ID 와 같은가(= 상위
+// 토픽) · 형제 토픽이 있는가. DM·일반 그룹·단일 방 봇은 구조적으로 안 걸리고, 토픽을 안 쓰는
+// 포럼도 형제가 없어 안 걸린다. 사람이 켜는 걸 잊으면 기능이 있어도 사고가 나므로 자동이 맞다.
+// 오탐의 대가는 탭 한 번([여기서 실행])이고, 놓쳤을 때의 대가는 위의 셋이다.
+// → docs/design/room-router.md
+function routerSiblings(chatId) {
+  const key = String(chatId);
+  if (!state.sessions?.[key]?.forum) return []; // 포럼이 아니면 상위/토픽 구분 자체가 없다
+  if (key !== String(baseChatId(key))) return []; // 토픽 방은 그 자체가 목적지다
+  return knownRooms().filter((r) => r.room !== key && String(baseChatId(r.room)) === key);
+}
+
+// 버튼에는 그룹 이름을 뗀 토픽 이름만 남긴다 — 「봇유지보수 / 구현」 이 넷이면 앞부분이 전부 같아서
+// 정작 구별해야 할 뒷부분이 잘린다.
+const routeShortLabel = (title, parent) =>
+  parent && title.startsWith(`${parent} / `) ? title.slice(parent.length + 3) : title;
+
+// 어느 말의 버튼인지 알아볼 한 줄. 여러 개가 밀려 있을 수 있다.
+function routePreview(msg, l) {
+  const body = (msg.text || msg.caption || "").replace(/\s+/g, " ").trim();
+  if (!body) return t(l, "routeAttachOnly");
+  return body.length > 80 ? `${body.slice(0, 79)}…` : body;
+}
+
+// 계획 승인·/tell 과 같은 성질이라 메모리에만 둔다 — 재시작하면 사라지고 그 뒤에 누르면 만료
+// 안내가 나간다. 사람이 안 누르고 지나간 말이 디스크에 쌓일 이유가 없다.
+const pendingRoutes = new Map(); // id → { msg }
+const PENDING_ROUTE_MAX = 20;
+let routeSeq = 0;
+
+async function askRoute(chatId, msg, l, rooms) {
+  const id = String(++routeSeq);
+  pendingRoutes.set(id, { msg });
+  if (pendingRoutes.size > PENDING_ROUTE_MAX) pendingRoutes.delete(pendingRoutes.keys().next().value);
+  const parent = state.sessions?.[String(chatId)]?.title;
+  const rows = [];
+  for (let i = 0; i < rooms.length; i += 2)
+    rows.push(rooms.slice(i, i + 2).map((r) => ({
+      text: routeShortLabel(r.title, parent) + (chatRuntime.get(String(r.room))?.busy ? " ⏳" : ""),
+      callback_data: `rt:${id}:${r.room}`,
+    })));
+  rows.push([
+    { text: t(l, "routeHereBtn"), callback_data: `rt:${id}:here` },
+    { text: t(l, "routeCancelBtn"), callback_data: `rt:${id}:x` },
+  ]);
+  // sendMenu 가 아니라 send 다. 뒤이어 또 말을 걸면 dropLiveMenu 가 이 버튼을 걷어가는데,
+  // 그러면 붙잡아 둔 말이 손댈 방법 없이 사라진다 — 조용히 잃는 것이 이 기능이 막으려는 바로 그것이다.
+  await send(chatId, t(l, "routeAsk", routePreview(msg, l)), { replyMarkup: { inline_keyboard: rows } });
+}
+
+// 주소만 고쳐 그 방에 넣는다. `/tell` 과 달리 머리말도 `_relay` 도 붙이지 않는다 — 전달이 아니라
+// **처음부터 그 방으로 갔어야 할 말**이라, 받는 방은 사람이 거기서 친 것과 완전히 같게 받아야 한다.
+// 원본 msg 를 그대로 들고 방 키만 바꾸는 게 요점이다: 첨부·캡션·미디어 그룹·발신자가 전부 딸려온다.
+// 로그나 스크린샷을 붙여 보내다 방을 틀리는 경우가 오히려 흔해서, 첨부를 흘리면 절반만 쓸모 있다.
+// message_id 만 뗀다 — 메시지 ID 는 방마다 별개라, 그대로 두면 목적지에서 엉뚱한 메시지에 반응한다.
+async function runRoute(msg, to) {
+  const target = tgTarget(to);
+  const moved = {
+    ...msg,
+    chat: { ...msg.chat, id: target.chat_id },
+    message_id: undefined,
+    is_topic_message: target.message_thread_id !== undefined || undefined,
+    message_thread_id: target.message_thread_id,
+    _router: true,   // 목적지에서 다시 묻지 않게
+    _drained: true,  // 병합 창에 다시 붙잡히지 않게
+  };
+  await handle(moved);
 }
 
 // 에이전트에게 옆방에 메시지 넘기는 법을 알려주는 시스템 프롬프트 조각.
@@ -3953,6 +4052,24 @@ async function handleCallback(cq) {
     if (!pending) await send(chatId, t(l, "tellExpired"));
     else if (cq.data.startsWith("tl:n:")) await send(chatId, t(l, "tellRejected"));
     else runRelay(pending.from, pending.to, pending.text).catch((e) => console.error("Relay run error:", e.message));
+  } else if (cq.data?.startsWith("rt:")) {
+    const sep = cq.data.indexOf(":", 3);
+    const pending = pendingRoutes.get(cq.data.slice(3, sep));
+    pendingRoutes.delete(cq.data.slice(3, sep));
+    const dest = cq.data.slice(sep + 1);
+    if (!pending) await send(chatId, t(l, "routeExpired"));
+    else if (dest === "x") await send(chatId, t(l, "routeCanceled"));
+    else if (dest === "here") {
+      await send(chatId, t(l, "routeHere"));
+      handle(Object.assign(pending.msg, { _router: true, _drained: true }))
+        .catch((e) => console.error("Route run error:", e.message));
+    } else if (state.sessions?.[dest]?.muted) {
+      // 뮤트된 방은 /tell 과 같은 규칙으로 거절한다. 보내고 삼켜지면 실패가 다시 조용해진다.
+      await send(chatId, t(l, "routeMuted", roomLabel(dest)));
+    } else {
+      await send(chatId, t(l, "routeSent", roomLabel(dest)));
+      runRoute(pending.msg, dest).catch((e) => console.error("Route run error:", e.message));
+    }
   } else if (cq.data?.startsWith("dp:")) {
     const id = cq.data.slice(5);
     const pending = pendingDispatch.get(id);
@@ -4381,6 +4498,19 @@ async function handle(msg) {
   if (mergeWindowMs() > 0 && !msg._drained) {
     holdForMore(chatId, msg);
     return;
+  }
+  // 접수처: 포럼 상위 토픽이면 실행하지 않고 어디로 보낼지 묻는다. 자리가 여기인 게 중요하다 —
+  // 명령은 위에서 전부 처리돼 돌아갔고(/status·/stop·/tell 은 접수처에서도 즉시 동작한다),
+  // 병합 창도 지났으므로 붙여넣어 쪼개진 조각이 아니라 **합쳐진 말 하나**에 대해 한 번만 묻는다.
+  // `_relay` 는 건너뛴다 — /tell 과 `ctb send` 는 이미 사람이 주소를 정해서 들어온 말이다.
+  // (문서는 `_drained` 메시지에만 걸라고 적었지만, 그러면 병합 창을 끈 방에서 게이트가 통째로
+  //  안 걸린다. 자리는 문서대로 창 뒤에 두되 조건에서 `_drained` 는 뺐다.)
+  if (!msg._router && !msg._relay) {
+    const siblings = routerSiblings(chatId);
+    if (siblings.length) {
+      await askRoute(chatId, msg, l, siblings);
+      return;
+    }
   }
   r.busy = true;
   const started = Date.now();
