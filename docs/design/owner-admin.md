@@ -85,8 +85,10 @@ const isOwner = allowedIds.includes(String(from?.id));   // bot.mjs:1654
 - 게이트는 `msg.from.id`. 오너가 아니면 명령 자체를 모르는 척한다(존재를 알리지 않는다).
 - 흐름이 자연스럽게 닫힌다: 새 그룹에 초대 → 봇이 `chatId` 안내(bot.mjs:1648) → 오너가 DM 에서
   `/allow <그 값>`.
-- `state.adoptedChatIds` 를 그대로 재사용한다. 이름이 "승격으로 물려받은" 뜻이라 안 맞으면
-  `state.allowedChatIds` 를 새로 두고 부팅 병합(bot.mjs:1328)에 한 줄 더한다 — 구현 때 정한다.
+- ~~`state.adoptedChatIds` 를 그대로 재사용한다.~~ — **구현에서 새 키로 정했다.**
+  `state.allowedChatIds` 를 따로 두고 부팅 병합에 한 줄 더한다. 재사용하면 이름이 거짓말을 한다 —
+  "승격으로 물려받았다"는 말에 수동 추가가 섞이면, 나중에 `adoptedChatIds` 를 특별 취급하는 코드가
+  전부 어긋난다. 갈라 두면 목록도 `[config]`·`[added]`·`[adopted]` 세 갈래로 정직하게 보인다.
 
 ### 에이전트는 이 경로를 못 부른다
 
@@ -123,15 +125,20 @@ const isOwner = allowedIds.includes(String(from?.id));   // bot.mjs:1654
 
 | 단계 | 내용 |
 |---|---|
-| 1 | `isOwner` 공용화 + `/allow` 나열·추가·제거 · 안내 문구 6자리 · README 두 벌 |
-| 2 | `greetUnknownRoom` 안내에 `/allow` 흐름 연결 |
+| ~~1~~ | ~~`isOwner` 공용화 + `/allow` 나열·추가·제거 · 안내 문구 6자리 · README 두 벌~~ — **0.5.0 에서 했다** |
+| ~~2~~ | ~~`greetUnknownRoom` 안내에 `/allow` 흐름 연결~~ — **0.5.0 에서 1 과 같이 했다** (문구 한 줄이라 떼어 둘 값이 없었다. 오너에게만 `/allow <id>` 를 보여준다) |
+
+**구현에서 더 막은 것 하나.** 오너가 아니면 거절 문구도 보내지 않고 **에이전트에게 넘기지도
+않는다.** 처음엔 "모르는 척 = 평범한 미지의 명령처럼 통과"로 생각했는데, 통과시키면 그 문자열이
+그대로 프롬프트가 되어 `bypassPermissions` 에서 에이전트가 config 를 고칠 수 있다 — 이 문서가
+막으려던 바로 그 경로다. 그래서 조용히 버리고 콘솔에만 남긴다.
 
 페르소나를 채팅에서 만드는 흐름(→ [room-personas.md](room-personas.md) 8단계)이 같은 게이트를
 쓴다. 이 문서의 1단계가 그쪽의 선행 조건이다.
 
 ## 열린 질문
 
-- **`state.adoptedChatIds` 재사용 vs 새 키.** 이름 의미가 갈린다. 목록에서 출처를 "승격 채택"과
-  "수동 추가"로 구분해 보여줄 값이 있으면 새 키가 낫다.
+- ~~**`state.adoptedChatIds` 재사용 vs 새 키.**~~ — **새 키(`state.allowedChatIds`)로 정했다.**
+  위 "`/allow`" 절 참고. 목록이 세 출처를 그대로 보여주는 값이 실제로 있었다.
 - **오너가 여럿인 구성.** 지금 규칙은 "DM 이 화이트리스트에 있는 사람"이라 DM 을 여러 개 넣으면
   전원이 오너다. 별도 `owners` 개념이 필요한지는 실제로 그런 구성이 생길 때 판단한다.

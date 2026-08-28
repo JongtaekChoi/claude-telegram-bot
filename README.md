@@ -153,7 +153,8 @@ to execute commands; that power is the point, and also the risk. Read this befor
 1. **The allowed chat.** Anyone with access to the Telegram account whose `chatId` you allow can
    run commands. Lock your phone and Telegram account (2FA). If the allowed chat is a **group**, that
    means every member of it — the whitelist is per *room*, not per person, so adding someone to the
-   group hands them the bot.
+   group hands them the bot. **This applies identically to rooms opened with `/allow`** — a chat added
+   from your DM has exactly the same access as one written into `config.json`.
 2. **Whoever holds the bot token.** The token is the bot's password. With it, an attacker can read
    incoming messages and impersonate the bot. The `allowedChatId` whitelist still blocks command
    *execution* (Telegram-supplied `chatId`s can't be forged), but **treat a leaked token as an
@@ -286,6 +287,7 @@ Core commands:
 | `/status` | Show version, provider, CLI versions, model, fallback, and session state |
 | `/remember <text>` · `/memory` | Save or inspect persistent memory (`/memory rm <n>` drops lines — `3`, `3 5 7`, or `3-9`) |
 | `/cron` · `/reserve` | Manage scheduled jobs and usage-limit retries |
+| `/allow` | Chats allowed to use this bot, with where each came from · `/allow <chatId>` opens one (in effect immediately, no restart) · `/allow rm <chatId>` closes it. **Owner only** — the gate is your Telegram user id, not the room, and neither the agent nor `ctb send` can reach it. `[config]` entries are read-only here: edit the file and `/restart` |
 | `/autocompact` · `/mergewindow` · `/restart` · `/id` · `/help` | Maintenance and help commands |
 
 > **A removed rule can look like it's still in effect** — that's expected. `/memory rm` drops the

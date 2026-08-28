@@ -284,6 +284,7 @@ const STR = {
       "• /autocompact — view / set the auto-compact token threshold\n" +
       "• /mergewindow — view / set how long to wait for a follow-up message\n" +
       "• /id — show this chat ID\n" +
+      "• /allow — chats allowed to use this bot · `/allow <chatId>` opens one (owner only, no restart)\n" +
       `\nWorking dir: ${dir}\nPermission mode: ${cfg.permissionMode}`,
     chatMigrated: (from, to) =>
       "🔀 This group was upgraded to a supergroup, so Telegram issued it a new chat ID " +
@@ -405,11 +406,12 @@ const STR = {
     localKillFail: (pid) =>
       `⚠️ Couldn't end PID ${pid} — it may need to be closed in the terminal.`,
     needChatId: (id) => `Add this chat ID to "allowedChatId" in config.json:\n${id}`,
-    roomNotAllowed: (id, cfgPath, guide) =>
+    roomNotAllowed: (id, cfgPath, guide, owner) =>
       "👋 I'm in this chat, but it isn't on the allow list — until it is, I ignore everything said here.\n\n" +
       "This chat's ID:\n" +
       `\`${id}\`\n\n` +
-      "Add it to `allowedChatId` in the bot's config file, then restart the bot:\n" +
+      (owner ? `From your DM with me: \`/allow ${id}\` — takes effect right away, no restart.\n\n` : "") +
+      "Or add it to `allowedChatId` in the bot's config file and restart the bot:\n" +
       `\`${cfgPath}\`\n\n` +
       "```json\n" +
       `{ "allowedChatId": ["<existing id>", "${id}"] }\n` +
@@ -417,6 +419,28 @@ const STR = {
       `Group setup, including the BotFather privacy setting: ${guide}\n\n` +
       "⚠️ Allowing a group hands the bot to **everyone in it** — the allow list is per room, not per person.\n" +
       "*(Said once per chat, so I don't become a spam relay.)*",
+    allowHeader: "🔐 Chats allowed to use this bot",
+    allowFooter:
+      "Add: /allow <chatId> · Remove: /allow rm <chatId>\n" +
+      "`[config]` entries live in config.json — edit the file and /restart to change those.\n" +
+      "⚠️ Allowing a group hands the bot to **everyone in it**, with the same access you have.",
+    allowUsage: "Usage: /allow · /allow <chatId> · /allow rm <chatId>",
+    allowBadId: (v) =>
+      `That isn't a chat ID: \`${v}\`\nIt's a plain number — \`-1001234567890\` for a group, \`123456789\` for a DM. ` +
+      "Run /id in the chat you want to add, or read it off the message the bot sent there.",
+    allowAdded: (id) =>
+      `✅ Allowed \`${id}\` — in effect right now, no restart needed.\n\n` +
+      "⚠️ If it's a group, **everyone in it** can now drive this bot with your access. " +
+      "It survives restarts (kept in state.json); /allow rm takes it back.",
+    allowAlready: (id, src) => `\`${id}\` is already allowed (\`[${src}]\`). /allow shows the full list.`,
+    allowRmDone: (id, here) =>
+      `🗑️ Removed \`${id}\` from the allow list.` +
+      (here ? "\n\n⚠️ That's **this** chat — this is the last thing I'll say here." : ""),
+    allowRmConfig: (id, cfgPath) =>
+      `\`${id}\` comes from \`allowedChatId\` in the config file, which I don't write to. Remove it there and /restart:\n` +
+      `\`${cfgPath}\``,
+    allowRmNotFound: (id) => `\`${id}\` isn't on the allow list. /allow shows what is.`,
+    allowRmSelf: "I won't remove your own DM — that would lock you out of /allow with no way back from a phone.",
     cronEmpty:
       "No scheduled tasks yet.\nAdd one in plain language, e.g. `/cron add summarize open issues every weekday at 9am`.",
     cronListHeader: "⏰ Scheduled tasks",
@@ -574,6 +598,7 @@ const STR = {
       "• /autocompact — 자동 압축 임계값 보기·설정\n" +
       "• /mergewindow — 다음 메시지를 얼마나 기다렸다 합칠지 보기·설정\n" +
       "• /id — 이 채팅 ID 확인\n" +
+      "• /allow — 이 봇을 쓸 수 있는 방 목록 · `/allow <chatId>` 로 추가 (오너만, 재시작 불필요)\n" +
       `\n작업 폴더: ${dir}\n권한 모드: ${cfg.permissionMode}`,
     chatMigrated: (from, to) =>
       "🔀 이 그룹이 슈퍼그룹으로 승격되면서 텔레그램이 채팅 ID 를 새로 발급했습니다 " +
@@ -601,11 +626,12 @@ const STR = {
     localKilled: (pid) => `🛑 로컬 \`ctb\` 세션을 종료했습니다 (PID ${pid}).`,
     localKillFail: (pid) => `⚠️ PID ${pid} 를 종료하지 못했습니다 — 터미널에서 직접 닫아야 할 수 있습니다.`,
     needChatId: (id) => `이 채팅 ID를 config.json 의 allowedChatId 에 넣으세요:\n${id}`,
-    roomNotAllowed: (id, cfgPath, guide) =>
+    roomNotAllowed: (id, cfgPath, guide, owner) =>
       "👋 이 방에 들어왔지만 아직 허용 목록에 없습니다 — 등록되기 전까지는 여기서 하는 말을 전부 무시합니다.\n\n" +
       "이 방의 채팅 ID 입니다:\n" +
       `\`${id}\`\n\n` +
-      "봇 설정 파일의 `allowedChatId` 에 넣고 봇을 재시작하세요:\n" +
+      (owner ? `저와의 DM 에서 \`/allow ${id}\` — 재시작 없이 바로 적용됩니다.\n\n` : "") +
+      "또는 봇 설정 파일의 `allowedChatId` 에 넣고 봇을 재시작하세요:\n" +
       `\`${cfgPath}\`\n\n` +
       "```json\n" +
       `{ "allowedChatId": ["기존 ID", "${id}"] }\n` +
@@ -613,6 +639,28 @@ const STR = {
       `그룹 설정 방법 (BotFather privacy 설정 포함): ${guide}\n\n` +
       "⚠️ 그룹을 허용하면 **그 방에 있는 모든 사람**에게 봇을 넘기는 것과 같습니다 — 화이트리스트는 사람이 아니라 방 단위입니다.\n" +
       "*(스팸 중계기가 되지 않도록 이 안내는 방마다 한 번만 보냅니다.)*",
+    allowHeader: "🔐 이 봇을 쓸 수 있는 방",
+    allowFooter:
+      "추가: /allow <chatId> · 삭제: /allow rm <chatId>\n" +
+      "`[config]` 은 config.json 에 있는 것 — 그건 파일을 고치고 /restart 해야 바뀝니다.\n" +
+      "⚠️ 그룹을 허용하면 **그 안의 전원**이 당신과 같은 권한으로 이 봇을 씁니다.",
+    allowUsage: "사용법: /allow · /allow <chatId> · /allow rm <chatId>",
+    allowBadId: (v) =>
+      `채팅 ID 가 아닙니다: \`${v}\`\n숫자 하나입니다 — 그룹은 \`-1001234567890\`, DM 은 \`123456789\` 같은 꼴입니다. ` +
+      "넣으려는 방에서 /id 를 치거나, 봇이 그 방에 남긴 안내 메시지에서 확인하세요.",
+    allowAdded: (id) =>
+      `✅ \`${id}\` 를 허용했습니다 — 재시작 없이 지금부터 적용됩니다.\n\n` +
+      "⚠️ 그룹이라면 **그 안의 전원**이 당신과 같은 권한으로 이 봇을 씁니다. " +
+      "재시작해도 유지되며(state.json 에 남습니다), /allow rm 으로 되돌립니다.",
+    allowAlready: (id, src) => `\`${id}\` 는 이미 허용되어 있습니다 (\`[${src}]\`). 전체 목록은 /allow.`,
+    allowRmDone: (id, here) =>
+      `🗑️ \`${id}\` 를 허용 목록에서 뺐습니다.` +
+      (here ? "\n\n⚠️ **이 방**입니다 — 여기서 하는 말은 이게 마지막입니다." : ""),
+    allowRmConfig: (id, cfgPath) =>
+      `\`${id}\` 는 설정 파일의 \`allowedChatId\` 에서 온 값입니다. 봇은 이 파일을 고치지 않으니 거기서 지우고 /restart 하세요:\n` +
+      `\`${cfgPath}\``,
+    allowRmNotFound: (id) => `\`${id}\` 는 허용 목록에 없습니다. 목록은 /allow.`,
+    allowRmSelf: "본인 DM 은 빼지 않습니다 — 빼면 /allow 자체에 못 닿고, 폰에서는 되돌릴 방법이 없습니다.",
     cronEmpty:
       "등록된 예약 작업이 없습니다.\n`/cron add 매일 아침 9시에 …` 처럼 자연어로 추가해 보세요.",
     cronListHeader: "⏰ 예약 작업",
@@ -1116,6 +1164,7 @@ const COMMANDS = {
     { command: "mergewindow", description: "View / set how long to wait for a follow-up message" },
     { command: "reserve", description: "Schedule retry when usage limit resets · /reserve rm to cancel" },
     { command: "id", description: "Show this chat ID" },
+    { command: "allow", description: "Chats allowed to use this bot · add / remove one (owner only)" },
     { command: "help", description: "Help" },
   ],
   ko: [
@@ -1142,6 +1191,7 @@ const COMMANDS = {
     { command: "mergewindow", description: "다음 메시지를 기다리는 시간 보기·설정" },
     { command: "reserve", description: "한도 리셋 시 재시도 예약 · /reserve rm 으로 취소" },
     { command: "id", description: "이 채팅 ID 확인" },
+    { command: "allow", description: "이 봇을 쓸 수 있는 방 목록 · 추가·삭제 (오너만)" },
     { command: "help", description: "도움말" },
   ],
 };
@@ -1366,9 +1416,22 @@ function currentProvider(chatId) {
   return (chatId !== undefined ? chatBucket(chatId).provider : undefined) || DEFAULT_PROVIDER;
 }
 
-// 그룹 승격으로 물려받은 채팅 ID (adoptMigratedChat 참고). config.json 은 봇이 고칠 수 없으니
-// state 에 남겨서 재시작 후에도 화이트리스트가 유지되게 한다.
+// 화이트리스트의 출처는 셋이다. config 는 사람 것이고 봇이 못 고치므로(→ docs/design/owner-admin.md),
+// 런타임에 늘어난 것은 전부 state 에 남겨 재시작 후에도 유지되게 한다.
+//   [config]  config.json 의 allowedChatId — /allow 로 못 지운다
+//   [added]   오너가 /allow 로 넣은 것
+//   [adopted] 그룹 승격으로 물려받은 것 (adoptMigratedChat 참고)
+// 병합 전 스냅샷을 떠 둬야 /allow 목록에서 출처를 가를 수 있다. 두 state 키를 따로 두는 건
+// 이름이 뜻을 지키게 하려는 것이다 — "승격으로 물려받았다"는 말에 수동 추가를 섞으면 그 뒤에
+// adoptedChatIds 를 특별 취급하는 코드가 전부 어긋난다.
+const CONFIG_ALLOWED = [...allowedIds];
+for (const id of state.allowedChatIds || []) if (!allowedIds.includes(id)) allowedIds.push(id);
 for (const id of state.adoptedChatIds || []) if (!allowedIds.includes(id)) allowedIds.push(id);
+
+// 오너 = DM 이 화이트리스트에 있는 사람. "내 DM 의 chatId = 내 텔레그램 user id" 라는 성질을
+// 쓴다. **방이 아니라 사람으로 가르는 게 핵심이다** — 그룹 멤버십이 권한이 되면 그룹 관리자가
+// 사람을 추가하는 순간 어드민이 늘어난다. → docs/design/owner-admin.md
+const isOwner = (from) => allowedIds.includes(String(from?.id));
 
 // ── 방(chatId)별 세션 ─────────────────────────────────────────────────────
 // 같은 봇이 여러 방(DM·그룹)을 담당할 때 방마다 대화 맥락과 provider/model override 를 분리한다.
@@ -1694,9 +1757,10 @@ async function greetUnknownRoom(roomKey, rawChatId, from, l) {
   if (greetedRooms.size >= 200) greetedRooms.delete(greetedRooms.values().next().value); // 가장 오래된 것부터
   greetedRooms.add(key);
   // 설정 파일 경로에는 계정 이름 같은 게 묻어 있다 — 허용된 방의 주인일 때만 실제 경로를 알린다.
-  const isOwner = allowedIds.includes(String(from?.id));
+  // 오너에게는 /allow 로 재시작 없이 끝내는 길도 같이 알린다(그쪽이 폰에서 유일하게 되는 길이다).
+  const owner = isOwner(from);
   const guide = `${GUIDE_URL}${l === "ko" ? ".ko" : ""}.md`;
-  await send(roomKey, t(l, "roomNotAllowed", key, isOwner ? CONFIG_PATH : "config.json", guide)).catch(() => {});
+  await send(roomKey, t(l, "roomNotAllowed", key, owner ? CONFIG_PATH : "config.json", guide, owner)).catch(() => {});
 }
 
 // 봇의 가입·탈퇴(my_chat_member)는 privacy mode 와 무관하게 항상 오는 업데이트다. 초대 직후 여기서
@@ -2611,6 +2675,57 @@ async function extractCron(input, l) {
   if (!parseCron(obj.cron)) return { error: t(l, "extractBadCron", obj.cron) };
   if (!obj.prompt) return { error: t(l, "extractNoPrompt") };
   return obj;
+}
+
+// ── 화이트리스트 (/allow) ────────────────────────────────────────────────
+// 방을 하나 늘리려고 SSH 를 켜야 하는 걸 없앤다. **봇은 config.json 을 쓰지 않는다** — 부팅
+// JSON.parse 에 보호가 없어서 config 가 깨지면 크래시 루프에 빠지고, 원격 관리하려고 만든 기능이
+// 실패할 때 SSH 를 유일한 복구 수단으로 만든다. 그래서 추가분만 state 에 적고 allowedIds 에 바로
+// 밀어 넣는다(그룹 승격 채택이 이미 쓰는 경로다). → docs/design/owner-admin.md
+//
+// 이 명령은 bot.mjs 가 직접 파싱해야 한다. 에이전트가 화이트리스트를 늘릴 수 있으면 **프롬프트
+// 주입이 권한 부여에 닿는다** — 붙여넣은 로그나 읽은 문서 안의 지시가 방을 여는 경로가 된다.
+const CHAT_ID_RE = /^-?\d+$/;
+const allowSource = (id) =>
+  CONFIG_ALLOWED.includes(id) ? "config"
+  : (state.allowedChatIds || []).includes(id) ? "added"
+  : (state.adoptedChatIds || []).includes(id) ? "adopted"
+  : null;
+
+async function handleAllow(chatId, arg, l, from, rawChatId) {
+  if (!arg) {
+    const rows = allowedIds.map((id) => `[${allowSource(id) || "?"}] ${id}`);
+    await send(chatId, t(l, "allowHeader") + "\n```\n" + rows.join("\n") + "\n```\n" + t(l, "allowFooter"));
+    return;
+  }
+  const rm = /^rm\b/.test(arg);
+  const id = (rm ? arg.replace(/^rm\b/, "") : arg).trim();
+  if (!CHAT_ID_RE.test(id)) {
+    await send(chatId, id ? t(l, "allowBadId", id) : t(l, "allowUsage"));
+    return;
+  }
+  const src = allowSource(id);
+  if (rm) {
+    if (!src) { await send(chatId, t(l, "allowRmNotFound", id)); return; }
+    // config 출신은 못 지운다 — 지웠다고 말해 놓고 재시작하면 되살아나는 게 제일 나쁘다.
+    if (src === "config") { await send(chatId, t(l, "allowRmConfig", id, CONFIG_PATH)); return; }
+    // 본인 DM 을 빼면 /allow 자체에 못 닿는다. 폰에서 되돌릴 방법이 없어지므로 막는다.
+    if (id === String(from?.id)) { await send(chatId, t(l, "allowRmSelf")); return; }
+    const key = src === "added" ? "allowedChatIds" : "adoptedChatIds";
+    state[key] = (state[key] || []).filter((x) => x !== id);
+    const at = allowedIds.indexOf(id);
+    if (at >= 0) allowedIds.splice(at, 1);
+    saveState(state);
+    // 지운 게 지금 이 방이면 이 답장이 마지막이다 — send() 에는 화이트리스트 검사가 없어 나가긴 한다.
+    await send(chatId, t(l, "allowRmDone", id, id === String(rawChatId)));
+    return;
+  }
+  if (src) { await send(chatId, t(l, "allowAlready", id, src)); return; }
+  state.allowedChatIds = [...(state.allowedChatIds || []), id];
+  allowedIds.push(id); // 즉시 발효 — 재시작 없이 그 방이 열린다
+  saveState(state);
+  console.log(`Allowed chat added: ${id} (by ${from?.id})`);
+  await send(chatId, t(l, "allowAdded", id));
 }
 
 function cronListText(l) {
@@ -3919,6 +4034,17 @@ async function handle(msg) {
   // 명령어
   if (text === "/start" || text === "/help") {
     await send(chatId, t(l, "help", roomDir(chatId) || cfg.projectDir));
+    return;
+  }
+  if (text === "/allow" || text.startsWith("/allow ")) {
+    // 오너가 아니면 **명령의 존재 자체를 알리지 않는다.** 거절 문구도 안 보내고 에이전트에게
+    // 넘기지도 않는다 — 넘기면 "권한을 달라"는 말이 그대로 프롬프트가 되고, bypassPermissions
+    // 에서는 에이전트가 config 를 실제로 고칠 수 있다.
+    if (!isOwner(msg.from)) {
+      console.warn(`/allow ignored — not the owner (from ${msg.from?.id}, room ${chatId})`);
+      return;
+    }
+    await handleAllow(chatId, text.slice("/allow".length).trim(), l, msg.from, rawChatId);
     return;
   }
   if (text === "/id") {
