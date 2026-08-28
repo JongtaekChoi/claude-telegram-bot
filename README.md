@@ -271,7 +271,7 @@ Core commands:
 | `/model [name\|default]` | View or switch this room's active-provider model |
 | `/new` | Reset the conversation session — both Claude and Codex, so a fallback can't resume the old context |
 | `/newchat [name]` *(or `/newtopic`)* | Open a **new forum topic** in this group and start a fresh session there (needs Topics on + the bot's *Manage topics* permission) |
-| `/sessions` | List this project's past sessions for the active provider and pick one to carry on from (🔒 held by another room, 💻 open in a terminal — both are blocked; with `personas`, only this room's role is listed, ❓ = predates roles) |
+| `/sessions` | List past sessions in **this room's working folder** for the active provider and pick one to carry on from (🔒 held by another room, 💻 open in a terminal — both are blocked; with `personas`, only this room's role is listed, ❓ = predates roles) |
 | `/name <name>` | Name the current session so it stands out in `/sessions` (`/name -` removes it) |
 | `/jobs` | Background jobs that outlive replies — ▶ running, ✅ finished |
 | `/persona` | The role this room runs as, and the prompt behind it (view only — you change it from the buttons at `/new`) |
@@ -397,7 +397,7 @@ The only keys you need to start are `token`, `allowedChatId`, `projectDir`, `cla
 | `lang` | (optional) UI language. Empty = auto-detect per user (English default, Korean for Korean Telegram clients). Force with `"en"` / `"ko"`. |
 | `name` | (optional) Bot name shown in `/help` — handy for telling multiple bots apart |
 | `persona` | (optional) Role system prompt — defines a persona (developer/planner/…). See below |
-| `personas` | (optional) A **list** of roles, so one bot can run several. Each needs `id` (`[a-z0-9-]`, becomes a filename), `prompt`, and optionally `name`. Rooms pick one with `/persona`; rooms that never pick run as the first. See below |
+| `personas` | (optional) A **list** of roles, so one bot can run several. Each needs `id` (`[a-z0-9-]`, becomes a filename), `prompt`, and optionally `name`, `model`/`provider`, and `dir` (its own working folder, relative to `projectDir`). Rooms pick one at a session boundary; rooms that never pick run as the first. See below |
 | `appendSystemPrompt` | (optional) Override the default "be concise for Telegram" instruction |
 | `env` | (optional) Extra environment variables passed to provider processes |
 | `mergeWindowMs` | (optional) Wait this long for a follow-up message and answer both at once (default: `1000`; `0` runs each message immediately). Override at runtime with `/mergewindow` (persists in state). |
@@ -718,6 +718,37 @@ without this it would offer **every room's** sessions — carrying a planning se
 would quietly bypass the session-boundary rule. Sessions started before you added `personas` have no
 role recorded; they stay in the list marked **❓**, and picking one files it under the current room's
 role from then on.
+
+### A role can have its own working folder (`dir`)
+
+Add `dir` to a role and that room runs in that folder — relative to `projectDir` (absolute paths work
+too). Leave it out and the room uses `projectDir` exactly as before.
+
+```jsonc
+"projectDir": "/Users/me/code",
+"personas": [
+  { "id": "dev",   "name": "Developer", "prompt": "…" },
+  { "id": "alpha", "name": "Alpha",     "prompt": "…", "dir": "projects/alpha" },
+  { "id": "notes", "name": "Notes",     "prompt": "…", "dir": "/Users/me/notes" }
+]
+```
+
+This is how **one bot covers several projects**. The biggest win is that the folder's own
+`CLAUDE.md` comes along — a role becomes *its config prompt + that folder's project rules*. Everything
+that hangs off the working folder follows the room: the child process's `cwd`, `/sessions`
+(sessions are scanned per folder, so different folders separate on their own), `.ctb-outbox` and
+`.ctb-jobs` (one pair per folder — `/jobs` watches all of them and tags which project each job is
+from), and `ctb --chat <room>` in the terminal.
+
+Subfolders of `projectDir` are recommended but not required. Note that `.ctb-outbox`/`.ctb-jobs` are
+created inside **each** working folder, so scattered folders each need their own `.gitignore` entry.
+
+If a role's `dir` does not exist, **that room refuses to run** and says so; the folder is not created
+for you and the room does not fall back to another role's folder — either would quietly edit the
+wrong project. Create the folder (or fix `dir` and `/restart`) and it comes back.
+
+Permissions are still global (`permissionMode`, `codexSandbox`). Per-role permissions are a separate
+piece of work — see [docs/design/room-personas.md](docs/design/room-personas.md).
 
 **A separate bot per role** still makes sense when you need two identities in one group at the same
 time, when you're migrating gradually, or when `allowedChatId` must differ. That layout is below.

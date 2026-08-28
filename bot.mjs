@@ -135,8 +135,17 @@ function migrateData() {
       copyFileSync(MEMORY_PATH, defaultMemory);
       console.log(`Copied memory → ${defaultMemory} (default persona "${PERSONAS[0].id}")`);
     }
-    if (IMAGE_SEND) mkdirSync(OUTBOX_DIR, { recursive: true }); // 에이전트가 보낼 이미지를 놓는 폴더
-    if (JOBS) mkdirSync(JOBS_DIR, { recursive: true }); // 에이전트가 띄운 백그라운드 작업 기록
+    // 아웃박스·작업 기록은 작업 폴더마다 하나씩이다(페르소나가 dir 을 가지면 여럿). **없는 폴더는
+    // 만들지 않는다** — dir 오타나 아직 clone 안 한 프로젝트에 빈 트리를 파 놓으면, 그 페르소나가
+    // 왜 안 도는지 알아볼 유일한 단서가 사라진다.
+    for (const dir of workDirs()) {
+      if (!existsSync(dir)) {
+        console.error(`Persona dir missing — that room will not run: ${dir}`);
+        continue;
+      }
+      if (IMAGE_SEND) mkdirSync(join(dir, OUTBOX_NAME), { recursive: true }); // 에이전트가 보낼 이미지
+      if (JOBS) mkdirSync(join(dir, JOBS_NAME), { recursive: true }); // 에이전트가 띄운 백그라운드 작업 기록
+    }
   } catch (e) {
     console.error("Data migration skipped:", e.message);
   }
@@ -159,9 +168,10 @@ console.log({ ...cfg, token: cfg.token ? "<redacted>" : "(none)" });
 const TG = `https://api.telegram.org/bot${cfg.token}`;
 // 이미지 전송(아웃박스): 에이전트가 답변 끝에 [[ctb-image: 파일명 | 캡션]] 마커를 붙이면
 // bot.mjs 가 마커를 떼고 그 파일을 사진으로 전송한다. 파일은 아래 전용 폴더에서만 읽으며(basename만
-// 취해 경로탈출 불가), projectDir 안에 둬서 Claude·Codex(workspace-write 샌드박스) 둘 다 쓸 수 있다.
+// 취해 경로탈출 불가), 작업 폴더 안에 둬서 Claude·Codex(workspace-write 샌드박스) 둘 다 쓸 수 있다.
+// 페르소나가 dir 을 가지면 작업 폴더가 방마다 달라지므로 폴더도 방마다다 → outboxDir(), workDirs().
 const IMAGE_SEND = cfg.sendImages !== false;
-const OUTBOX_DIR = join(cfg.projectDir || DATA_DIR, ".ctb-outbox");
+const OUTBOX_NAME = ".ctb-outbox";
 const OUTBOX_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 const OUTBOX_MAX_BYTES = 10 * 1024 * 1024; // 텔레그램 sendPhoto 상한(대략)
 // 백그라운드 작업(.ctb-jobs): 텔레그램용 에이전트는 메시지마다 새 프로세스로 떴다가 답장과 함께
@@ -169,7 +179,7 @@ const OUTBOX_MAX_BYTES = 10 * 1024 * 1024; // 텔레그램 sendPhoto 상한(대�
 // 그룹 밖에 내보내고 봇은 여기서 **생사만 지켜본다**. 봇이 자식으로 소유하면 /restart 한 번에 전부
 // 죽는다 — 배포 수단이 작업 학살 수단이 되면 안 된다. 아웃박스와 같은 파일시스템 인계 방식이다.
 const JOBS = cfg.backgroundJobs !== false;
-const JOBS_DIR = join(cfg.projectDir || DATA_DIR, ".ctb-jobs");
+const JOBS_NAME = ".ctb-jobs";
 const JOB_TICK_MS = 30_000;
 const JOB_LOG_TAIL = 1200; // 완료 알림에 붙일 로그 꼬리 길이
 // 방 사이 전달(/tell): 이 봇이 맡은 다른 방으로 메시지 하나를 넘긴다. 방마다 세션이 독립이라
@@ -244,7 +254,7 @@ const langOf = (msg) =>
 
 const STR = {
   en: {
-    help: () =>
+    help: (dir) =>
       `${cfg.name || "Claude Code Telegram bot"}\n\n` +
       "• Just send a message and Claude works in the project.\n" +
       "• Start a message with // and the bot ignores it — leave yourself a note in the chat\n" +
@@ -274,7 +284,7 @@ const STR = {
       "• /autocompact — view / set the auto-compact token threshold\n" +
       "• /mergewindow — view / set how long to wait for a follow-up message\n" +
       "• /id — show this chat ID\n" +
-      `\nWorking dir: ${cfg.projectDir}\nPermission mode: ${cfg.permissionMode}`,
+      `\nWorking dir: ${dir}\nPermission mode: ${cfg.permissionMode}`,
     chatMigrated: (from, to) =>
       "🔀 This group was upgraded to a supergroup, so Telegram issued it a new chat ID " +
       `(${from} → ${to}). The bot followed the move — sessions came along and everything keeps working.\n` +
@@ -515,6 +525,10 @@ const STR = {
     nameSet: (n) => `🏷 This session is now \`${n}\`.`,
     nameCleared: "🏷 Name removed.",
     nameNoSession: "No session to name yet — send a message first, then name it.",
+    roomDirMissing: (dir) =>
+      `📂 This room's working folder does not exist:\n\`${dir}\`\n\n` +
+      "Its persona points there with `dir`. Create the folder (or fix `dir` in config.json and `/restart`) — " +
+      "nothing runs here until then, on purpose: falling back to another folder would edit the wrong project.",
     jobsOff: "Background jobs are off (`backgroundJobs: false` in config).",
     jobsEmpty: "No background jobs. Ask for something long-running and it'll be started detached, so it survives the reply.",
     jobsList: (run, done, body, dir) =>
@@ -530,7 +544,7 @@ const STR = {
     contextTooLong: "⚠️ Prompt is too long. Use `/compact` to compress context, or `/new` to start fresh.",
   },
   ko: {
-    help: () =>
+    help: (dir) =>
       `${cfg.name || "Claude Code 텔레그램 봇"}\n\n` +
       "• 그냥 메시지를 보내면 Claude가 프로젝트에서 작업합니다.\n" +
       "• 메시지를 // 로 시작하면 봇이 무시합니다 — 채팅에 혼잣말 메모를 남기는 용도\n" +
@@ -560,7 +574,7 @@ const STR = {
       "• /autocompact — 자동 압축 임계값 보기·설정\n" +
       "• /mergewindow — 다음 메시지를 얼마나 기다렸다 합칠지 보기·설정\n" +
       "• /id — 이 채팅 ID 확인\n" +
-      `\n작업 폴더: ${cfg.projectDir}\n권한 모드: ${cfg.permissionMode}`,
+      `\n작업 폴더: ${dir}\n권한 모드: ${cfg.permissionMode}`,
     chatMigrated: (from, to) =>
       "🔀 이 그룹이 슈퍼그룹으로 승격되면서 텔레그램이 채팅 ID 를 새로 발급했습니다 " +
       `(${from} → ${to}). 봇이 알아서 따라왔고 세션도 그대로 옮겼습니다.\n` +
@@ -706,6 +720,11 @@ const STR = {
     nameSet: (n) => `🏷 이 세션의 이름을 \`${n}\` 으로 정했습니다.`,
     nameCleared: "🏷 이름을 지웠습니다.",
     nameNoSession: "아직 이름 붙일 세션이 없습니다 — 메시지를 한 번 보낸 뒤에 붙여주세요.",
+    roomDirMissing: (dir) =>
+      `📂 이 방의 작업 폴더가 없습니다:\n\`${dir}\`\n\n` +
+      "이 방의 역할이 `dir` 로 저기를 가리키고 있습니다. 폴더를 만들거나 config.json 의 `dir` 을 고치고 " +
+      "`/restart` 하세요 — 그때까지 이 방에서는 아무것도 돌지 않습니다. 다른 폴더로 물러서면 엉뚱한 " +
+      "프로젝트를 고치게 되므로 일부러 멈춥니다.",
     jobsOff: "백그라운드 작업이 꺼져 있습니다 (config 의 `backgroundJobs: false`).",
     jobsEmpty: "돌고 있는 백그라운드 작업이 없습니다. 오래 걸리는 일을 시키면 답장과 무관하게 살아남도록 떼어 내서 띄웁니다.",
     jobsList: (run, done, body, dir) =>
@@ -938,9 +957,11 @@ function sessionPreview(text) {
 // Claude 기록 폴더는 프로젝트 경로를 인코딩한 이름(`/Users/x/y` → `-Users-x-y`)인데 비공식
 // 규칙이라 바뀔 수 있다. 그래서 이름으로 먼저 찾고, 없으면 각 폴더의 jsonl 에 박혀 있는
 // cwd 로 되짚는다 — 규칙이 바뀌어도 목록이 통째로 사라지지는 않게.
-function claudeSessionDir() {
+// 기준 폴더는 **방마다** 다르다(personas[].dir). 전역 cfg.projectDir 로 거르면 dir 을 가진 방에서
+// /sessions 가 자기 세션은 하나도 못 찾고 남의 것만 보여준다 — 제일 조용히 깨지는 자리다.
+function claudeSessionDir(dir) {
   const root = join(process.env.HOME || "", ".claude", "projects");
-  const guess = join(root, resolve(cfg.projectDir).replace(/[^a-zA-Z0-9]/g, "-"));
+  const guess = join(root, resolve(dir).replace(/[^a-zA-Z0-9]/g, "-"));
   if (existsSync(guess)) return guess;
   let dirs;
   try { dirs = readdirSync(root); } catch { return null; }
@@ -949,13 +970,13 @@ function claudeSessionDir() {
     let files;
     try { files = readdirSync(full).filter((f) => f.endsWith(".jsonl")); } catch { continue; }
     if (!files.length) continue;
-    if (readHead(join(full, files[0]), 8192).includes(`"cwd":"${resolve(cfg.projectDir)}"`)) return full;
+    if (readHead(join(full, files[0]), 8192).includes(`"cwd":"${resolve(dir)}"`)) return full;
   }
   return null;
 }
 
-function claudeSessions() {
-  const dir = claudeSessionDir();
+function claudeSessions(projectDir) {
+  const dir = claudeSessionDir(projectDir);
   if (!dir) return [];
   let files;
   try { files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")); } catch { return []; }
@@ -995,7 +1016,7 @@ function claudePreviewFrom(lines) {
 
 // Codex 는 날짜별 폴더(YYYY/MM/DD)에 전 프로젝트가 섞여 쌓인다. 대신 첫 줄 session_meta 에
 // cwd 가 들어 있어 경로 인코딩을 추측할 필요가 없다 — 최신 파일부터 훑다가 필요한 만큼 찾으면 멈춘다.
-function codexSessions() {
+function codexSessions(projectDir) {
   const root = join(process.env.HOME || "", ".codex", "sessions");
   const paths = [];
   const walk = (dir, depth) => {
@@ -1020,7 +1041,7 @@ function codexSessions() {
   for (const { path, at } of byRecent) {
     if (out.length >= SESSION_LIST_MAX) break;
     const head = readHead(path);
-    if (!head.includes(`"cwd":"${resolve(cfg.projectDir)}"`)) continue;
+    if (!head.includes(`"cwd":"${resolve(projectDir)}"`)) continue;
     let id;
     for (const line of head.split("\n")) {
       let e;
@@ -1247,6 +1268,28 @@ function roomPersona(chatId) {
 // 시스템 프롬프트에 실릴 역할 본문. 페르소나를 안 쓰면 예전처럼 cfg.persona 다.
 const personaPrompt = (chatId) => roomPersona(chatId)?.prompt ?? cfg.persona;
 const memoryPath = (chatId) => memoryPathFor(roomPersona(chatId)?.id);
+
+// ── 방별 작업 폴더 (personas[].dir) ───────────────────────────────────────
+// 페르소나가 dir 을 가지면 그 방의 실행은 그 폴더에서 돈다 — cfg.projectDir 기준 상대경로이고,
+// 절대경로도 그대로 받는다(resolve 가 알아서 갈라준다). **dir 을 안 쓰면 값이 예전과 완전히 같다.**
+// 이게 있으면 한 봇이 여러 프로젝트를 맡는다: 폴더가 갈리면 그 폴더의 CLAUDE.md 가 따라오고
+// /sessions 도 저절로 갈린다. → docs/design/room-personas.md
+// 반환이 undefined 일 수 있는 건 예전 그대로다 — cfg.projectDir 이 없으면 spawn 이 프로세스
+// cwd 를 상속한다. 폴더를 **합성**하는 자리(아웃박스·작업 기록)만 roomBase() 로 DATA_DIR 에 떨군다.
+const personaDirOf = (p) => (p?.dir ? resolve(cfg.projectDir || DATA_DIR, p.dir) : cfg.projectDir);
+const roomDir = (chatId) => personaDirOf(roomPersona(chatId));
+const roomBase = (chatId) => roomDir(chatId) || DATA_DIR;
+const outboxDir = (chatId) => join(roomBase(chatId), OUTBOX_NAME);
+// 폴더가 여럿이면 부팅 mkdir 과 작업 감시가 **전부** 훑어야 한다. 한 폴더만 보면 다른 프로젝트에서
+// 띄운 작업이 영영 회수되지 않는다(끝난 줄도 모른다). 방을 몰라도 되는 자리는 이 목록을 쓴다.
+const workDirs = () => {
+  const out = [cfg.projectDir || DATA_DIR];
+  for (const p of PERSONAS) {
+    const d = personaDirOf(p) || DATA_DIR;
+    if (!out.includes(d)) out.push(d);
+  }
+  return out;
+};
 
 function loadMemory(chatId) {
   try { return readFileSync(memoryPath(chatId), "utf8").trim(); } catch { return ""; }
@@ -1679,21 +1722,23 @@ async function tgSendPhoto(chatId, absPath, caption) {
   return r.json();
 }
 
-// 마커의 파일명을 검증한다. basename만 취해 경로탈출을 원천 차단하고, 반드시 OUTBOX_DIR 안의
-// 실제 파일이며 허용 확장자·크기여야 한다. 실패 시 null(전송 안 함).
-function validateOutboxImage(rawName, rawCap) {
+// 마커의 파일명을 검증한다. basename만 취해 경로탈출을 원천 차단하고, 반드시 **그 방의** 아웃박스
+// 안의 실제 파일이며 허용 확장자·크기여야 한다. 실패 시 null(전송 안 함).
+// 폴더를 방에서 받는 게 핵심이다 — 페르소나가 dir 을 가지면 에이전트가 이미지를 놓는 자리도
+// 그 폴더 안이라, 전역 한 곳만 보면 "저장했는데 안 온다"가 된다.
+function validateOutboxImage(dir, rawName, rawCap) {
   try {
     const name = basename(String(rawName).trim());
     if (!name || name.startsWith(".")) return null;
     const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
     if (!OUTBOX_EXT.has(ext)) { console.warn(`Outbox: unsupported type ${name}`); return null; }
-    const abs = join(OUTBOX_DIR, name);
-    if (!existsSync(abs)) { console.warn(`Outbox: file not found ${name}`); return null; }
+    const abs = join(dir, name);
+    if (!existsSync(abs)) { console.warn(`Outbox: file not found ${name} (${dir})`); return null; }
     const st = statSync(abs);
     if (!st.isFile()) return null;
     if (st.size > OUTBOX_MAX_BYTES) { console.warn(`Outbox: too large ${name} (${st.size}B)`); return null; }
     // 심볼릭 링크로 폴더 밖을 가리키는 경우 차단
-    const realOut = realpathSync(OUTBOX_DIR);
+    const realOut = realpathSync(dir);
     const real = realpathSync(abs);
     if (real !== realOut && !real.startsWith(realOut + sep)) { console.warn(`Outbox: escapes dir ${name}`); return null; }
     const caption = rawCap ? String(rawCap).trim().slice(0, 1024) || undefined : undefined;
@@ -1706,12 +1751,12 @@ function validateOutboxImage(rawName, rawCap) {
 
 // 답변 텍스트에서 [[ctb-image: 파일명 | 캡션]] 마커를 뽑아내고, 마커는 텍스트에서 제거한다.
 const OUTBOX_MARKER = /\[\[ctb-image:\s*([^\]|]+?)\s*(?:\|\s*([^\]]*?))?\s*\]\]/g;
-function extractOutboxImages(text) {
+function extractOutboxImages(text, chatId) {
   const images = [];
   if (!IMAGE_SEND || !text || !text.includes("[[ctb-image:")) return { text: text || "", images };
   const clean = String(text)
     .replace(OUTBOX_MARKER, (_m, name, cap) => {
-      const img = validateOutboxImage(name, cap);
+      const img = validateOutboxImage(outboxDir(chatId), name, cap);
       if (img) images.push(img);
       return ""; // 유효하든 아니든 마커 자체는 사용자에게 노출하지 않는다
     })
@@ -1725,7 +1770,7 @@ function extractOutboxImages(text) {
 async function deliver(chatId, text, opts = {}) {
   // 옆방 전달 마커를 먼저 떼고 이미지 마커를 뗀다 — 둘 다 사용자에게 보이면 안 되는 지시문이다.
   const { text: relayClean, tells } = extractRelayTells(text);
-  const { text: clean, images } = extractOutboxImages(relayClean);
+  const { text: clean, images } = extractOutboxImages(relayClean, chatId);
   let lastId = null;
   // 텍스트가 남아 있거나(정상) 보낼 이미지가 없으면 텍스트를 보낸다.
   // 이미지만 있고 본문이 빈 경우엔 "(empty response)" 버블을 만들지 않도록 텍스트 전송을 건너뛴다.
@@ -1751,8 +1796,8 @@ async function deliver(chatId, text, opts = {}) {
 }
 
 // 에이전트에게 이미지 전송법을 알려주는 시스템 프롬프트 조각.
-function imageSendInstruction() {
-  return `To send an image to this Telegram chat: save the image file into the folder ${OUTBOX_DIR} `
+function imageSendInstruction(chatId) {
+  return `To send an image to this Telegram chat: save the image file into the folder ${outboxDir(chatId)} `
     + `(bare filename, no subfolders), then add a line at the very END of your reply in this exact form:\n`
     + `[[ctb-image: FILENAME | optional caption]]\n`
     + `Use only the filename (e.g. chart.png), not a path. Repeat the line for multiple images. `
@@ -1772,13 +1817,13 @@ const jobEnv = (chatId) => ({
 // 에이전트에게 오래 걸리는 작업 띄우는 법을 알려주는 시스템 프롬프트 조각.
 // 스킬이 아니라 시스템 프롬프트인 이유: 스킬은 에이전트가 "관련 있다"고 판단해야 로드된다. 안 걸리면
 // run_in_background 를 써서 작업이 죽는데, 그게 바로 이 규칙이 막으려는 일이다. 항상 켜져 있어야 한다.
-function jobInstruction() {
+function jobInstruction(chatId) {
   return `Background work in this chat: your process exits when this reply is sent, and anything you `
     + `started with run_in_background dies with it.\n`
     + `- Work you will read back BEFORE replying (a quick build, a test run you wait on): run_in_background is fine.\n`
     + `- Work that must OUTLIVE this reply (dev servers, long builds, watchers, anything you report back on later): `
     + `detach it from this process and register it, or it will be killed.\n\n`
-    + `To detach and register, run this as ONE Bash call from ${cfg.projectDir || DATA_DIR} `
+    + `To detach and register, run this as ONE Bash call from ${roomBase(chatId)} `
     + `(one call so $! still refers to the job when the record is written):\n`
     + `  nohup <command> > .ctb-jobs/<name>.log 2>&1 & PID=$!; disown; echo "{\\"pid\\":$PID,\\"cmd\\":\\"<command>\\",\\"log\\":\\"<name>.log\\",\\"chat\\":\\"$CTB_CHAT_ID\\",\\"at\\":$(date +%s000)}" > .ctb-jobs/<name>.json\n`
     + `Use a short bare <name> (letters, digits, dash) — same name for both files, no subfolders. `
@@ -1964,12 +2009,12 @@ function classifyClaudeError(raw, code) {
 }
 
 // ── 커스텀 명령어 스크립트 실행 ──────────────────────────────────────────
-function runCustomCommand(run, args) {
+function runCustomCommand(run, args, chatId) {
   return new Promise((resolve) => {
     const cmd = args ? `${run} ${args}` : run;
     const child = spawn(cmd, [], {
       shell: true,
-      cwd: cfg.projectDir,
+      cwd: roomDir(chatId),
       env: { ...process.env, ...(cfg.env || {}) },
     });
     let out = "", err = "";
@@ -2001,8 +2046,20 @@ function ctxTokensOf(usage, numTurns) {
   return Math.round(total / Math.max(numTurns || 1, 1));
 }
 
+// 페르소나가 가리킨 폴더가 없으면 **그 방만** 멈춘다. 페르소나를 목록에서 빼지 않는 게 핵심이다 —
+// 빼면 그 방이 조용히 personas[0] 로 떨어져 정체성·메모리 파일·세션 목록이 통째로 갈아타고, 남의
+// 프로젝트 폴더에서 돌기 시작한다. 폴더를 만들어 주지도 않는다(남의 프로젝트를 새로 파는 쪽이 더
+// 놀랍다). 외장 디스크가 안 붙었거나 아직 clone 안 한 경우라면 폴더만 생기면 그대로 되살아난다.
+// 여기서 막지 않으면 spawn 이 ENOENT 로 죽어서 "claude 를 못 띄웠다"로 보인다 — 원인이 안 보인다.
+const missingRoomDir = (chatId) => {
+  const dir = roomDir(chatId);
+  return dir && !existsSync(dir) ? dir : null;
+};
+
 // ── Claude 실행 ───────────────────────────────────────────────────────────
 function runClaude(prompt, sessionId, opts = {}) {
+  const missing = missingRoomDir(opts.chatId);
+  if (missing) return Promise.resolve({ ok: false, text: t(opts.lang || BOT_LANG, "roomDirMissing", missing) });
   return new Promise((resolve) => {
     const args = [
       "--output-format", "json",
@@ -2024,8 +2081,8 @@ function runClaude(prompt, sessionId, opts = {}) {
     const handoffBlock = handoff
       ? `## CODEX FALLBACK HANDOFF\nClaude and Codex sessions are separate. The notes below summarize work Codex handled while Claude was unavailable; use them as context, not as your own prior messages.\n${handoff}`
       : null;
-    const imageHint = IMAGE_SEND ? imageSendInstruction() : null;
-    const jobHint = JOBS ? jobInstruction() : null;
+    const imageHint = IMAGE_SEND ? imageSendInstruction(opts.chatId) : null;
+    const jobHint = JOBS ? jobInstruction(opts.chatId) : null;
     // 넘길 방이 없으면 null 이라 방 하나짜리 봇은 이 토큰을 내지 않는다.
     const tellHint = ROOM_RELAY ? tellInstruction(opts.chatId) : null;
     const appendSys = [memoryBlock, handoffBlock, personaPrompt(opts.chatId), brevity, modelHint, imageHint, jobHint, tellHint].filter(Boolean).join("\n\n");
@@ -2037,7 +2094,7 @@ function runClaude(prompt, sessionId, opts = {}) {
     args.push("-p", "--", prompt);
 
     const child = spawn(cfg.claudeBin || "claude", args, {
-      cwd: cfg.projectDir,
+      cwd: roomDir(opts.chatId),
       env: jobEnv(opts.chatId),
     });
     if (opts.trackChild) opts.trackChild.child = child; // /stop 에서 kill 가능하도록 방 런타임에 노출
@@ -2113,6 +2170,8 @@ function resolveCodexBin() {
 // Claude와 Codex 세션은 호환되지 않는다. Codex는 별도 session id를 방별 codexSessionId에
 // 저장하고(호출부가 opts.sessionId로 넘김), Claude 복귀 시 codex-handoff.md 요약을 시스템 프롬프트로 넘겨 맥락을 연결한다.
 function runCodex(prompt, lang = "en", opts = {}) {
+  const missingDir = missingRoomDir(opts.chatId);
+  if (missingDir) return Promise.resolve({ ok: false, text: t(lang, "roomDirMissing", missingDir) });
   return new Promise((resolve) => {
     const header = opts.noHeader ? "" : (lang === "ko" ? "🤖 Codex 폴백\n\n" : "🤖 Codex fallback\n\n");
     const lastPath = join(BOT_DIR, `codex-last-message-${process.pid}.txt`);
@@ -2129,7 +2188,7 @@ function runCodex(prompt, lang = "en", opts = {}) {
       const mem = loadMemory(opts.chatId);
       const context = resumeSessionId
         ? (mem ? `## RULES (must follow before anything else)\n${mem}` : "")
-        : [mem, personaPrompt(opts.chatId), cfg.appendSystemPrompt, IMAGE_SEND ? imageSendInstruction() : null, JOBS ? jobInstruction() : null,
+        : [mem, personaPrompt(opts.chatId), cfg.appendSystemPrompt, IMAGE_SEND ? imageSendInstruction(opts.chatId) : null, JOBS ? jobInstruction(opts.chatId) : null,
            ROOM_RELAY ? tellInstruction(opts.chatId) : null].filter(Boolean).join("\n\n");
       if (context) codexPrompt = `Project instructions and persistent context:\n${context}\n\nUser request:\n${prompt}`;
     }
@@ -2139,13 +2198,13 @@ function runCodex(prompt, lang = "en", opts = {}) {
       if (model) args.push("--model", model);
       args.push(resumeSessionId, "-");
     } else {
-      args.push("--json", "-o", lastPath, "-C", cfg.projectDir, "--sandbox", cfg.codexSandbox || "workspace-write");
+      args.push("--json", "-o", lastPath, "-C", roomBase(opts.chatId), "--sandbox", cfg.codexSandbox || "workspace-write");
       if (model) args.push("--model", model);
       args.push("-");
     }
 
     const child = spawn(resolveCodexBin(), args, {
-      cwd: cfg.projectDir,
+      cwd: roomDir(opts.chatId),
       env: jobEnv(opts.chatId),
     });
     if (opts.trackChild) opts.trackChild.child = child;
@@ -2253,6 +2312,8 @@ async function getCliVersions() {
 // 있으면 `--resume`으로 기존 대화 맥락을 그대로 이어받는다(HTTP api/chat 방식과 달리 세션 유지).
 // 터미널 검증: ollama launch claude --model <m> --yes -- -p -- <prompt> --resume <id>
 function runOllama(prompt, lang = "en", opts = {}) {
+  const missingDir = missingRoomDir(opts.chatId);
+  if (missingDir) return Promise.resolve({ ok: false, text: t(lang, "roomDirMissing", missingDir) });
   return new Promise((resolve) => {
     const header = opts.noHeader ? "" : (lang === "ko"
       ? "🌙 Claude가 잠시 쉬고 있어요. 그동안 저(로컬 모델)는 복귀하면 Claude에게 넘길 내용을 정리하는 걸 도와드릴게요 — 코딩·파일 작업은 Claude가 돌아온 뒤에요.\n\n"
@@ -2273,7 +2334,7 @@ function runOllama(prompt, lang = "en", opts = {}) {
     const args = ["launch", "claude", "--model", model, "--yes", "--", ...claudeArgs];
 
     const child = spawn(resolveOllamaBin(), args, {
-      cwd: cfg.projectDir,
+      cwd: roomDir(opts.chatId),
       env: jobEnv(opts.chatId),
     });
     // 로컬 4B 모델 콜드스타트는 첫 응답까지 수 분이 걸릴 수 있어 기본 타임아웃을 넉넉히 잡는다.
@@ -2438,15 +2499,15 @@ async function runScheduled(job) {
 // pid 의 생사만 확인한다 — kill(pid, 0) 은 신호를 보내지 않고 존재 여부만 던진다(없으면 ESRCH).
 // 덕분에 감시자가 무상태다: 봇을 재시작해도 작업은 살아 있고 폴더만 다시 읽으면 감시가 이어진다.
 
-function jobRecords() {
+function jobRecords(dir) {
   try {
-    return readdirSync(JOBS_DIR)
+    return readdirSync(dir)
       .filter((f) => f.endsWith(".json"))
       .sort()
       .map((file) => {
         try {
-          const rec = JSON.parse(readFileSync(join(JOBS_DIR, file), "utf8"));
-          return typeof rec?.pid === "number" ? { ...rec, file, name: basename(file, ".json") } : null;
+          const rec = JSON.parse(readFileSync(join(dir, file), "utf8"));
+          return typeof rec?.pid === "number" ? { ...rec, dir, file, name: basename(file, ".json") } : null;
         } catch {
           return null; // 에이전트가 쓰다 만 파일 — 다음 틱에 다시 본다
         }
@@ -2457,6 +2518,11 @@ function jobRecords() {
   }
 }
 
+// 작업 폴더가 여럿이면(personas[].dir) 기록도 여럿이다. 감시도 목록도 **전부** 훑는다 —
+// 한 폴더만 보면 다른 프로젝트에서 띄운 작업이 끝나도 아무도 안 알린다. 기록마다 출처 폴더를
+// 달고 다니므로(rec.dir) 로그 읽기·완료 표시가 자기 폴더로 되돌아간다.
+const allJobRecords = () => workDirs().flatMap((d) => jobRecords(join(d, JOBS_NAME)));
+
 function jobAlive(pid) {
   try {
     process.kill(pid, 0);
@@ -2466,16 +2532,16 @@ function jobAlive(pid) {
   }
 }
 
-// 로그는 기록에 적힌 이름을 그대로 믿지 않는다 — basename 만 취해 JOBS_DIR 밖으로 못 나가게 한다
-// (아웃박스 파일명 검증과 같은 방식).
-const jobLogPath = (rec) => (rec.log ? join(JOBS_DIR, basename(String(rec.log))) : null);
+// 로그는 기록에 적힌 이름을 그대로 믿지 않는다 — basename 만 취해 그 기록이 나온 폴더 밖으로
+// 못 나가게 한다 (아웃박스 파일명 검증과 같은 방식).
+const jobLogPath = (rec) => (rec.log && rec.dir ? join(rec.dir, basename(String(rec.log))) : null);
 
 async function sweepJobs() {
-  for (const rec of jobRecords()) {
+  for (const rec of allJobRecords()) {
     if (rec.done || jobAlive(rec.pid)) continue;
     // 알리기 **전에** 완료로 표시한다 — 전송이 실패해도 다음 틱에 또 보내지 않게.
     try {
-      writeFileSync(join(JOBS_DIR, rec.file), JSON.stringify({ ...rec, file: undefined, name: undefined, done: Date.now() }));
+      writeFileSync(join(rec.dir, rec.file), JSON.stringify({ ...rec, dir: undefined, file: undefined, name: undefined, done: Date.now() }));
     } catch (e) {
       console.error(`Job sweep: cannot mark ${rec.file}:`, e.message);
       continue;
@@ -2943,7 +3009,7 @@ function sessionKeyboard(chatId, provider, l) {
   const held = sessionsHeldElsewhere(chatId, provider);
   const running = sessionsRunningInTerminal();
   const mine = roomPersona(chatId)?.id;
-  const list = (provider === "codex" ? codexSessions() : claudeSessions())
+  const list = (provider === "codex" ? codexSessions(roomBase(chatId)) : claudeSessions(roomBase(chatId)))
     .filter((s) => !mine || !sessionPersonaOf(s.id) || sessionPersonaOf(s.id) === mine);
   return {
     inline_keyboard: list.map((s) => {
@@ -3285,21 +3351,26 @@ async function handleJobs(chatId, l) {
     await send(chatId, t(l, "jobsOff"));
     return;
   }
-  const recs = jobRecords();
+  const recs = allJobRecords();
   if (!recs.length) {
     await send(chatId, t(l, "jobsEmpty"));
     return;
   }
   const running = [], finished = [];
   for (const rec of recs) (rec.done || !jobAlive(rec.pid) ? finished : running).push(rec);
+  // 작업 폴더가 여럿이면 이름만으로는 어느 프로젝트 것인지 알 수 없다 — 폴더가 하나뿐인
+  // (= 대다수) 구성에서는 붙이지 않는다. 없던 잡음을 만들 이유가 없다.
+  const dirs = workDirs();
+  const tag = (rec) => (dirs.length > 1 && rec.dir ? ` · ${basename(dirname(rec.dir))}` : "");
   const line = (rec, mark) =>
-    `${mark} \`${rec.name}\` · ${rec.at ? jobElapsed((rec.done || Date.now()) - rec.at, l) : "?"}` +
+    `${mark} \`${rec.name}\` · ${rec.at ? jobElapsed((rec.done || Date.now()) - rec.at, l) : "?"}${tag(rec)}` +
     (rec.cmd ? `\n   ${rec.cmd}` : "");
   const body = [
     ...running.map((r) => line(r, "▶")),
     ...finished.map((r) => line(r, "✅")),
   ].join("\n");
-  await send(chatId, t(l, "jobsList", running.length, finished.length, body, JOBS_DIR));
+  await send(chatId, t(l, "jobsList", running.length, finished.length, body,
+    dirs.map((d) => join(d, JOBS_NAME)).join("\` · \`")));
 }
 
 // 로컬 세션 상태·종료 — /local, /stop(봇 작업이 없을 때), localBusy 버튼이 모두 여기로 온다.
@@ -3647,7 +3718,7 @@ async function runApprovedPlan(chatId, l) {
     const gen = r.gen; // 실행 중 /new 가 들어오면 결과 세션을 버린다 (commitSid 참고)
     // permissionMode 를 넘기지 않아 cfg.permissionMode 로 돈다 — 승인 실행은 plan 고정을 무시해야
     // 한다. 여기서 고정을 따르면 승인한 계획을 또 계획하고 앉아 있게 된다.
-    const res = await runClaude(PLAN_PROCEED_PROMPT, pending.sessionId, { modelHint: true, trackChild: r, injectMemory: true, chatId });
+    const res = await runClaude(PLAN_PROCEED_PROMPT, pending.sessionId, { modelHint: true, trackChild: r, injectMemory: true, chatId, lang: l });
     if (res.sessionId) commitSid(r, gen, chatId, res.sessionId, "claude");
     await replyWithClaudeResult(chatId, l, PLAN_PROCEED_PROMPT, syntheticMsg, res, started, false, gen);
   } catch (e) {
@@ -3847,7 +3918,7 @@ async function handle(msg) {
 
   // 명령어
   if (text === "/start" || text === "/help") {
-    await send(chatId, t(l, "help"));
+    await send(chatId, t(l, "help", roomDir(chatId) || cfg.projectDir));
     return;
   }
   if (text === "/id") {
@@ -3881,7 +3952,8 @@ async function handle(msg) {
               : (l === "ko" ? "꺼짐" : "off"),
         hasSession: Boolean(getSid(chatId)),
         jobs: schedule.length,
-        projectDir: cfg.projectDir,
+        // 방마다 다를 수 있다 — 페르소나가 dir 을 가지면 여기가 그 방이 실제로 도는 폴더다.
+        projectDir: roomDir(chatId) || cfg.projectDir,
         // plan 고정 중이면 지금 실제로 쓰이는 값이 plan 이다 — 설정값만 보여주면 왜 파일이
         // 안 바뀌는지 알 길이 없다. Codex 방에서는 고정이 놀고 있다는 것도 여기서 드러나야 한다.
         permissionMode: !planLocked(chatId)
@@ -4123,7 +4195,9 @@ async function handle(msg) {
       const run = typeof def === "object" ? def.run : null;
       if (run) {
         const args = text.length > cmdName.length + 1 ? text.slice(cmdName.length + 2) : "";
-        const res = await runCustomCommand(run, args || undefined);
+        const missingDir = missingRoomDir(chatId); // 커스텀 명령도 방 폴더에서 돈다
+        if (missingDir) { await send(chatId, t(l, "roomDirMissing", missingDir)); return; }
+        const res = await runCustomCommand(run, args || undefined, chatId);
         const out = res.text.length > 4000 ? res.text.slice(0, 3990) + "\n…(truncated)" : res.text;
         await send(chatId, `${res.ok ? "" : "⚠️ "}${out}`);
         return;
@@ -4169,7 +4243,7 @@ async function handle(msg) {
       const planReq = text.slice(5).trim();
       r.prevSession = { chatId: String(chatId), provider: "claude", sessionId: getSid(chatId, "claude") };
       const planGen = r.gen;
-      const res = await runClaude(planReq, getSid(chatId, "claude"), { permissionMode: "plan", modelHint: true, trackChild: r, injectMemory: true, chatId });
+      const res = await runClaude(planReq, getSid(chatId, "claude"), { permissionMode: "plan", modelHint: true, trackChild: r, injectMemory: true, chatId, lang: l });
       if (res.sessionId) commitSid(r, planGen, chatId, res.sessionId, "claude");
       if (!res.ok) {
         await send(chatId, `⚠️ ${res.text}`);
