@@ -639,8 +639,12 @@ checks, reminders. Each entry runs the prompt and sends the result to `allowedCh
 - **Fresh session**: scheduled jobs run in their **own session** so they never pollute your
   interactive conversation context (`state.json` stays yours). They run in their own slot, so
   they don't wait on your rooms (and your rooms don't wait on them) — but they serialize against
-  each other, so a job is **skipped** (logged) if another scheduled job is still running when it
-  fires.
+  each other, so a job is **skipped** if another scheduled job is still running when it fires.
+  A local `ctb` session skips them too: scheduled jobs don't run while one holds the lock.
+- **A skipped run says so.** Either way the bot posts one line to the room the job would have
+  reported to — with a button to end the local session when that's the cause. It used to be logged
+  only, so a missed run was invisible unless you read the log. Repeats are capped at one notice per
+  job per hour so a frequent job can't flood the room.
 - **Silent jobs (conditional alerts)**: if Claude's output is **empty or exactly `SKIP`**, that run
   sends **nothing** to Telegram. To get "alert only when it matters, stay quiet otherwise," tell the
   prompt to *output just `SKIP` when the condition isn't met*. This lets even frequent jobs (e.g.

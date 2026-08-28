@@ -467,6 +467,11 @@ const STR = {
     attachFail: (m) => `⚠️ Failed to handle attachment: ${m}`,
     botError: (m) => `Bot error: ${m}`,
     scheduledError: (m) => `⏰ Scheduled task error: ${m}`,
+    scheduledSkippedBusy: (label) =>
+      `⏰ Skipped "${label}" — another scheduled task was still running. It will run at its next scheduled time.`,
+    scheduledSkippedLocal: (label, pid, mins, where) =>
+      `⏰ Skipped "${label}" — a local \`ctb\` session is open (pid ${pid}, ${mins}m${where ? `, ${where}` : ""}). ` +
+      `Scheduled tasks don't run while one is open — end it to unblock the next run.`,
     extractFail: "Extraction failed",
     extractNoUnderstand: "Couldn't understand the schedule. Try rephrasing.",
     extractBadCron: (cron) => `Couldn't parse cron: ${cron}`,
@@ -686,6 +691,11 @@ const STR = {
     attachFail: (m) => `⚠️ 첨부 파일 처리 실패: ${m}`,
     botError: (m) => `봇 오류: ${m}`,
     scheduledError: (m) => `⏰ 예약 작업 오류: ${m}`,
+    scheduledSkippedBusy: (label) =>
+      `⏰ "${label}" 을 건너뛰었습니다 — 앞선 예약 작업이 아직 돌고 있었습니다. 다음 예정 시각에 다시 실행합니다.`,
+    scheduledSkippedLocal: (label, pid, mins, where) =>
+      `⏰ "${label}" 을 건너뛰었습니다 — 로컬 \`ctb\` 세션이 열려 있습니다(pid ${pid}, ${mins}분${where ? `, ${where}` : ""}). ` +
+      `세션이 떠 있는 동안 예약 작업은 돌지 않습니다 — 종료하면 다음 실행부터 풀립니다.`,
     extractFail: "추출 실패",
     extractNoUnderstand: "일정을 이해하지 못했어요. 다르게 표현해 보세요.",
     extractBadCron: (cron) => `cron 해석 실패: ${cron}`,
@@ -2516,11 +2526,36 @@ function scheduleTargets(job) {
   });
 }
 
+// 건너뛴 예약 작업은 지금까지 로그에만 남았다 — 로그를 읽는 사람이 없으니 조용히 사라졌다.
+// (2026-08-28: 로컬 세션이 2시간 반 떠 있는 동안 위생 점검 한 주기가 통째로 유실됐는데,
+//  로그를 파보고서야 알았다.) 결과가 갈 자리에 "안 돌았다"도 한 줄 남긴다 — 안 온 메시지는
+// 눈에 안 띄지만 온 메시지는 띈다.
+// 자주 도는 작업이 오래 막히면 도배가 되므로 작업마다 한 시간에 한 번만 알린다.
+const SKIP_NOTICE_GAP = 60 * 60_000;
+const skipNoticed = new Map(); // `cron|label` → 마지막으로 알린 시각
+
+async function notifySkipped(job, lock) {
+  const key = `${job.cron}|${job.label || ""}`;
+  const last = skipNoticed.get(key); // 없음 = 아직 한 번도 안 알림 (0 과 구별한다)
+  if (last !== undefined && Date.now() - last < SKIP_NOTICE_GAP) return;
+  skipNoticed.set(key, Date.now());
+  const label = job.label || job.cron;
+  // 락 파일이 그 사이 사라졌어도 원인은 로컬 세션이 맞다 — 방금 읽은 pid 로 알린다.
+  const info = lock ? localLockInfo() || { pid: lock.pid, mins: 0, where: "" } : null;
+  const text = info
+    ? t(BOT_LANG, "scheduledSkippedLocal", label, info.pid, info.mins, info.where)
+    : t(BOT_LANG, "scheduledSkippedBusy", label);
+  // 원인이 로컬 세션이면 그 자리에서 끝낼 수 있게 /local 과 같은 버튼을 붙인다.
+  for (const id of scheduleTargets(job)) await send(id, text, info ? { replyMarkup: localKillMarkup(BOT_LANG) } : {});
+}
+
 async function runScheduled(job) {
   const r = rt(CRON_KEY); // 예약 작업끼리는 직렬화하되 사용자 방과는 병렬로 돈다
   // 예약 작업은 방이 아니라 전용 슬롯에서 돈다 — 어느 방의 로컬 세션이든 있으면 건너뛴다.
-  if (r.busy || readLocalLock()) {
+  const lock = readLocalLock();
+  if (r.busy || lock) {
     console.warn(`Skipped scheduled job (busy): ${job.cron} — ${String(job.prompt).slice(0, 40)}`);
+    await notifySkipped(job, lock);
     return;
   }
   r.busy = true;
