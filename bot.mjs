@@ -2058,6 +2058,20 @@ async function offerRelay(from, tell, relayed) {
 // 포럼도 형제가 없어 안 걸린다. 사람이 켜는 걸 잊으면 기능이 있어도 사고가 나므로 자동이 맞다.
 // 오탐의 대가는 탭 한 번([여기서 실행])이고, 놓쳤을 때의 대가는 위의 셋이다.
 // → docs/design/room-router.md
+// 다만 "이 방의 모든 메시지"에 걸면, 상위 방에서 일부러 일을 시키는 사람은 매번 탭이 하나씩
+// 붙는다. 그렇다고 끄는 스위치를 주면 끈 방은 보호가 통째로 사라진다. 그래서 **대화가 이어지는
+// 중인지**로 가른다 — 이 방에서 마지막으로 실행한 지 얼마 안 됐으면 묻지 않고 그냥 실행한다.
+// 새어나오는 사고는 대개 "다른 토픽에서 한참 일하다 상위에 흘린 첫 메시지"라 조용한 뒤에 오고,
+// 일부러 여기서 하는 대화는 첫 한 번만 버튼을 거친 뒤 평소처럼 흐른다.
+// 내용을 보고 방을 추측하는 것과는 다르다(그건 접었다) — 모델을 안 쓰고 시각만 본다.
+// 대가는 정직하게 말해 이 창 안에 새어나온 말은 못 잡는다는 것이고, 그건 이 기능이 없던 때와
+// 같은 실패지 더 나빠지는 건 아니다.
+const ROUTE_QUIET_MS = 10 * 60 * 1000;
+
+// 실행 시각은 방별 런타임(메모리)에만 둔다. 재시작하면 한 번 더 묻게 되는데, 그 편이 맞다 —
+// 재시작은 대화가 끊긴 자리다.
+const routeInFlow = (chatId) => Date.now() - (rt(chatId).lastRunAt || 0) < ROUTE_QUIET_MS;
+
 function routerSiblings(chatId) {
   const key = String(chatId);
   if (!state.sessions?.[key]?.forum) return []; // 포럼이 아니면 상위/토픽 구분 자체가 없다
@@ -3783,12 +3797,12 @@ function buildMsgMeta(msg) {
 // 방(chat)별 실행 상태 — 방마다 세션이 독립이라 서로 다른 방은 동시에 실행한다.
 // busy·child·typing·prevSession·stopping·queue 를 방 단위로 들고, 한 방 안에서는 여전히 직렬화된다
 // (단일 머신이라도 CLI 프로세스는 방마다 하나씩 병렬 실행). 레이트리밋만 계정 단위라 전역.
-const chatRuntime = new Map(); // chatId → { busy, child, typing, prevSession, stopping, queue, compactAsk, gen }
+const chatRuntime = new Map(); // chatId → { busy, child, typing, prevSession, stopping, queue, compactAsk, gen, lastRunAt }
 function rt(chatId) {
   const id = String(chatId);
   let r = chatRuntime.get(id);
   if (!r) {
-    r = { busy: false, child: null, typing: null, prevSession: null, stopping: false, queue: [], compactAsk: 0, gen: 0 };
+    r = { busy: false, child: null, typing: null, prevSession: null, stopping: false, queue: [], compactAsk: 0, gen: 0, lastRunAt: 0 };
     chatRuntime.set(id, r);
   }
   return r;
@@ -3977,6 +3991,7 @@ async function runApprovedPlan(chatId, l) {
     r.typing = null;
     r.stopping = false;
     r.busy = false;
+    r.lastRunAt = Date.now();
     if (r.queue.length > 0 && !roomRateLimited(chatId)) setImmediate(() => handle(drainQueue(chatId)));
   }
 }
@@ -4505,7 +4520,7 @@ async function handle(msg) {
   // `_relay` 는 건너뛴다 — /tell 과 `ctb send` 는 이미 사람이 주소를 정해서 들어온 말이다.
   // (문서는 `_drained` 메시지에만 걸라고 적었지만, 그러면 병합 창을 끈 방에서 게이트가 통째로
   //  안 걸린다. 자리는 문서대로 창 뒤에 두되 조건에서 `_drained` 는 뺐다.)
-  if (!msg._router && !msg._relay) {
+  if (!msg._router && !msg._relay && !routeInFlow(chatId)) {
     const siblings = routerSiblings(chatId);
     if (siblings.length) {
       await askRoute(chatId, msg, l, siblings);
@@ -4514,6 +4529,9 @@ async function handle(msg) {
   }
   r.busy = true;
   const started = Date.now();
+  // 접수처가 다시 묻지 않을 창의 기준점. 끝날 때도 다시 찍는다 — 20분짜리 작업이 끝나자마자
+  // 이어 말하면 "시작한 지 20분"이라 창 밖이 되는데, 그건 대화가 끊긴 게 아니다.
+  r.lastRunAt = started;
   // 긴 작업 동안 타이핑 표시 유지
   r.typing = setInterval(
     () =>
