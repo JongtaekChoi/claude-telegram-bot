@@ -581,6 +581,27 @@ const STR = {
     reserveRm: "🚫 Queue cleared. No retry scheduled.",
     reserveNone: "No retry is scheduled.",
     contextTooLong: "⚠️ Prompt is too long. Use `/compact` to compress context, or `/new` to start fresh.",
+    errCredit: "💳 Out of API credit. Top up at console.anthropic.com.",
+    errRateLimit: "⏱️ Too many requests. Try again in a moment.",
+    errOverloaded: "🔄 Claude's servers are temporarily overloaded. Try again shortly.",
+    errClaudeAuth: (raw) =>
+      "🔑 **Claude failed to authenticate** — the login this bot uses is no longer valid.\n\n" +
+      "Note this is Claude, not Codex, and not the bot itself. If `claude` works in your terminal but the bot " +
+      "still fails, the credentials have split in two: the bot (under launchd) reads the **keychain** while the " +
+      "terminal reads `~/.claude/.credentials.json`. Logging in from the terminal only refreshes the file.\n" +
+      "Fix: `security delete-generic-password -s \"Claude Code-credentials\"`, then restart the bot.\n\n" +
+      "```\n" + raw.slice(0, 400) + "\n```",
+    errClaudeFailed: (code, raw) => `⚠️ **Claude failed** (exit ${code})\n\n\`\`\`\n${raw}\n\`\`\``,
+    credNone: "🔑 No Claude credentials found. Run `claude` in a terminal to log in, then restart the bot.",
+    credExpired: (store) =>
+      `🔑 **The Claude login has expired** (${store}). Requests will fail with an auth error until it's renewed.\n` +
+      "Log in again with `claude` in a terminal, then restart the bot.",
+    credSplit:
+      "🔑 **Claude credentials have split in two.** The keychain copy and `~/.claude/.credentials.json` hold " +
+      "different tokens.\nThe bot runs under launchd and reads the **keychain**; a terminal reads the **file** — " +
+      "so logging in from a terminal leaves the bot on the old token, and logging in rotates the refresh token so " +
+      "the old copy can no longer renew itself. The bot will start failing auth.\n" +
+      "Fix: `security delete-generic-password -s \"Claude Code-credentials\"`, then restart the bot.",
   },
   ko: {
     help: (dir) =>
@@ -904,6 +925,27 @@ const STR = {
       `📨 ${room} 으로는 넘기지 않았습니다 — 다른 방에서 전달받은 메시지는 다시 전달할 수 없습니다. `
       + "이 한 홉 규칙이 두 방이 서로 영원히 대화하는 걸 막습니다.",
     contextTooLong: "⚠️ 프롬프트가 너무 깁니다. `/compact` 로 컨텍스트를 압축하거나 `/new` 로 새 세션을 시작하세요.",
+    errCredit: "💳 API 크레딧이 부족합니다. console.anthropic.com 에서 충전해주세요.",
+    errRateLimit: "⏱️ 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.",
+    errOverloaded: "🔄 Claude 서버가 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해주세요.",
+    errClaudeAuth: (raw) =>
+      "🔑 **Claude 인증 실패** — 이 봇이 쓰는 로그인이 더 이상 유효하지 않습니다.\n\n" +
+      "Codex 도 봇 자체도 아니고 **Claude** 쪽입니다. 터미널에서 `claude` 는 잘 되는데 봇만 이러면 " +
+      "자격증명이 두 벌로 갈라진 것입니다 — 봇(launchd)은 **키체인**을, 터미널은 " +
+      "`~/.claude/.credentials.json` 을 읽습니다. 터미널에서 로그인하면 파일만 새로 써집니다.\n" +
+      "해결: `security delete-generic-password -s \"Claude Code-credentials\"` 실행 후 봇 재시작.\n\n" +
+      "```\n" + raw.slice(0, 400) + "\n```",
+    errClaudeFailed: (code, raw) => `⚠️ **Claude 실행 실패** (exit ${code})\n\n\`\`\`\n${raw}\n\`\`\``,
+    credNone: "🔑 Claude 자격증명을 찾을 수 없습니다. 터미널에서 `claude` 로 로그인한 뒤 봇을 재시작해주세요.",
+    credExpired: (store) =>
+      `🔑 **Claude 로그인이 만료됐습니다** (${store}). 갱신 전까지 모든 요청이 인증 오류로 실패합니다.\n` +
+      "터미널에서 `claude` 로 다시 로그인한 뒤 봇을 재시작해주세요.",
+    credSplit:
+      "🔑 **Claude 자격증명이 두 벌로 갈라져 있습니다.** 키체인 사본과 `~/.claude/.credentials.json` 의 " +
+      "토큰이 서로 다릅니다.\n봇은 launchd 로 떠서 **키체인**을, 터미널은 **파일**을 읽습니다 — 그래서 " +
+      "터미널에서 로그인해도 봇은 낡은 토큰을 계속 쓰고, 로그인이 리프레시 토큰을 회전시키므로 낡은 쪽은 " +
+      "스스로 갱신도 못 합니다. 곧 인증 오류가 나기 시작합니다.\n" +
+      "해결: `security delete-generic-password -s \"Claude Code-credentials\"` 실행 후 봇 재시작.",
     testFallbackDisabled: "⚠️ 폴백이 비활성화 상태입니다. config.json에 `\"codexFallback\": true`(권장) 또는 `\"ollamaFallback\": true` 를 추가하세요.",
     testFallbackFail: (m) => `⚠️ 폴백 테스트 실패: ${m}`,
     ollamaDisabled: "⚠️ Ollama 모드가 비활성화 상태입니다. config.json에 `\"ollamaFallback\": true` 를 추가하세요.",
@@ -2181,18 +2223,80 @@ function isFallbackError(raw, code) {
     || t.includes("overloaded") || code === 529;
 }
 
-function classifyClaudeError(raw, code) {
-  const t = raw.toLowerCase();
-  if (t.includes("credit") || t.includes("balance") || t.includes("billing") || t.includes("payment"))
-    return "💳 API 크레딧이 부족합니다. console.anthropic.com 에서 충전해주세요.";
-  if (t.includes("rate_limit") || t.includes("rate limit") || t.includes("too many requests") || code === 429
-      || t.includes("usage limit") || t.includes("monthly limit") || t.includes("session limit"))
-    return "⏱️ 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.";
-  if (t.includes("overloaded") || code === 529)
-    return "🔄 Claude 서버가 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해주세요.";
-  if (t.includes("prompt is too long") || (t.includes("context") && (t.includes("length") || t.includes("limit") || t.includes("window"))))
+// ── Claude 자격증명 점검 ──────────────────────────────────────────────────
+// Claude Code 는 자격증명을 **두 곳**에 둘 수 있고, 읽는 쪽이 실행 컨텍스트마다 다르다:
+// launchd 로 뜬 봇은 키체인을 읽고, 터미널은 키체인에 접근하지 못해 파일로 폴백한다.
+// 그래서 터미널에서 로그인하면 파일만 새로 써지고 키체인 사본은 낡은 채로 남는데, 로그인이
+// 리프레시 토큰까지 회전시키므로 **낡은 쪽은 스스로 갱신도 못 한다.** 봇만 죽는다.
+// (2026-09-02: 이 상태로 봇 넷이 조용히 실패했다. 터미널 테스트는 계속 정상이라 원인을
+//  찾는 데 반나절이 걸렸고, 그동안 예약 작업도 같이 날아갔다.)
+// 실패가 답장으로만 가고 로그엔 안 남으므로 — 봇이 **먼저** 말하게 한다.
+const CRED_FILE = join(process.env.CLAUDE_CONFIG_DIR || join(process.env.HOME || "", ".claude"), ".credentials.json");
+const CRED_CHECK_MS = 6 * 60 * 60_000;
+const oauthOf = (o) => o?.claudeAiOauth || o;
+
+function readCredFile() {
+  try { return oauthOf(JSON.parse(readFileSync(CRED_FILE, "utf8"))); } catch { return null; }
+}
+// 키체인을 못 읽는 컨텍스트도 여기로 온다 — 그 경우 이 프로세스는 파일을 쓴다는 뜻이다.
+function readCredKeychain() {
+  if (process.platform !== "darwin") return null;
+  try {
+    const raw = execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+      { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+    return oauthOf(JSON.parse(raw));
+  } catch { return null; }
+}
+// 이 프로세스가 실제로 쓰게 될 쪽을 기준으로 판정한다 — 키체인이 읽히면 키체인이다.
+function credStatus() {
+  const kc = readCredKeychain();
+  const file = readCredFile();
+  const live = kc || file;
+  if (!live) return { why: "none" };
+  // 둘 다 있는데 토큰이 다르면 지금 살아 있어도 다음 회전에서 깨진다. 먼저 말한다.
+  if (kc && file && kc.accessToken !== file.accessToken) return { why: "split" };
+  if (!(Number(live.expiresAt) > Date.now())) return { why: "expired", store: kc ? "keychain" : "file" };
+  return { why: null };
+}
+let credWarned; // 같은 상태로 도배하지 않는다 — 상태가 바뀔 때만 알린다.
+async function checkCredentials() {
+  // Codex 전용 설정에 대고 "Claude 로그인 하세요"라고 하면 그냥 소음이다. 기본이 codex 라도
+  // 방 하나가 claude 면 확인한다 — 그 방이 죽는 건 똑같다.
+  const usesClaude = currentProvider() === "claude"
+    || Object.values(state.sessions || {}).some((b) => b?.provider === "claude");
+  if (!allowedIds.length || !usesClaude) return;
+  const { why, store } = credStatus();
+  if (why === credWarned) return;
+  credWarned = why;
+  if (!why) return;
+  console.error(`Claude credentials: ${why}${store ? ` (${store})` : ""}`);
+  const msg = why === "none" ? t(BOT_LANG, "credNone")
+    : why === "split" ? t(BOT_LANG, "credSplit")
+    : t(BOT_LANG, "credExpired", store);
+  await send(allowedIds[0], msg).catch(() => {});
+}
+
+// 오류 분류. **마지막 줄이 중요하다** — 예전엔 `Execution error` 로만 감싸서 어느 CLI 가
+// 실패했는지가 안 보였다. 2026-09-02 에 Claude 인증 오류를 보고 Codex 를 먼저 뒤졌다 —
+// 사람도 에이전트도 같은 길로 샌다. 이제 문구가 이름을 댄다.
+function classifyClaudeError(raw, code, l = BOT_LANG) {
+  const s = raw.toLowerCase();
+  if (s.includes("credit") || s.includes("balance") || s.includes("billing") || s.includes("payment"))
+    return t(l, "errCredit");
+  if (s.includes("rate_limit") || s.includes("rate limit") || s.includes("too many requests") || code === 429
+      || s.includes("usage limit") || s.includes("monthly limit") || s.includes("session limit"))
+    return t(l, "errRateLimit");
+  if (s.includes("overloaded") || code === 529)
+    return t(l, "errOverloaded");
+  if (s.includes("prompt is too long") || (s.includes("context") && (s.includes("length") || s.includes("limit") || s.includes("window"))))
     return "contextTooLong";
-  return `Execution error (exit ${code}):\n${raw}`;
+  // 인증 실패는 따로 잡는다 — 봐야 할 곳과 고치는 법이 다른 오류와 완전히 다르고,
+  // 봇은 이 상태에서 **모든 방이 죽는다**. 원문을 그대로 던지면 아무도 못 읽는다.
+  if (s.includes("failed to authenticate") || s.includes("oauth") || s.includes("session expired")
+      || s.includes("invalid api key") || s.includes("authentication_error")
+      || (s.includes("log in") || s.includes("login")) && s.includes("expired"))
+    return t(l, "errClaudeAuth", raw);
+  return t(l, "errClaudeFailed", code, raw);
 }
 
 // ── 커스텀 명령어 스크립트 실행 ──────────────────────────────────────────
@@ -4832,6 +4936,10 @@ function dispatch(msg) {
 // ── 롱폴링 루프 ───────────────────────────────────────────────────────────
 async function main() {
   console.log("Bot started. Polling Telegram...");
+  // 부팅 때 한 번, 그 뒤로는 6시간마다. 만료는 봇이 떠 있는 동안 일어나므로 부팅 검사만으로는
+  // 못 잡는다 — 실제로 그렇게 며칠 떠 있다가 조용히 죽었다.
+  checkCredentials().catch(() => {});
+  setInterval(() => checkCredentials().catch(() => {}), CRED_CHECK_MS);
   // /restart 로 재시작했으면 완료 알림 1회 (플래그는 즉시 비움)
   if (state.restartNotify) {
     const to = state.restartNotify;

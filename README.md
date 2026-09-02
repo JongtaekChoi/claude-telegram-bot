@@ -868,8 +868,16 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.pl
 
 - **`launchctl list` shows an error code with no PID** → check `bot.error.log`. Usually a node/claude
   path issue (`command not found`) or a missing config file (`mybot.json`).
-- **Bot doesn't respond** → Claude auth may have expired. Run `node bot.mjs` directly and confirm
-  `claude` is logged in.
+- **Bot doesn't respond, but `claude` works fine in your terminal** → the credentials have **split in
+  two**. Claude Code can keep them in the macOS keychain *and* in `~/.claude/.credentials.json`, and
+  which one is read depends on how the process was started: a bot under **launchd reads the keychain**,
+  while a **terminal falls back to the file** (it can't reach the keychain). Logging in from a terminal
+  therefore refreshes only the file — and because logging in rotates the refresh token, the keychain
+  copy can no longer renew itself. The bot dies with *"OAuth session expired and could not be
+  refreshed"* while every terminal test passes. Fix:
+  `security delete-generic-password -s "Claude Code-credentials"`, then restart the bot.
+  The bot checks for this at startup and every 6 hours, and DMs the owner — so you should hear about
+  it before a room does.
 - **Mac is asleep → polling stops** → disable sleep in System Settings > Battery/Power.
 - **Repeated "polling error" (ETIMEDOUT)** → some networks block IPv6, so Node's fetch times out
   against api.telegram.org (which has an IPv6 address). `bot.mjs` already works around this by

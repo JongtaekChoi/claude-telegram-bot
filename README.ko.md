@@ -616,7 +616,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.pl
 ## 자주 겪는 문제
 
 - **`launchctl list`에 PID 없이 에러 코드만 보임** — `bot.error.log`를 확인하세요. 보통 node/claude 경로 문제이거나 config 누락입니다.
-- **봇이 응답하지 않음** — `claude` 인증이 만료됐을 수 있습니다. 터미널에서 `node bot.mjs`를 직접 실행해 로그인 상태부터 확인하세요.
+- **봇은 응답 안 하는데 터미널에서 `claude` 는 멀쩡함** — 자격증명이 **두 벌로 갈라진** 것입니다. Claude Code 는 자격증명을 macOS 키체인과 `~/.claude/.credentials.json` 양쪽에 둘 수 있는데, **어느 쪽을 읽는지는 프로세스를 어떻게 띄웠는지에 달려 있습니다** — launchd 로 뜬 봇은 **키체인**을 읽고, 터미널은 키체인에 접근하지 못해 **파일**로 폴백합니다. 그래서 터미널에서 로그인하면 파일만 새로 써지고, 로그인이 리프레시 토큰을 회전시키므로 **키체인 사본은 스스로 갱신도 못 합니다.** 봇만 *"OAuth session expired and could not be refreshed"* 로 죽고 터미널 테스트는 계속 통과합니다. 해결: `security delete-generic-password -s "Claude Code-credentials"` 실행 후 봇 재시작. 봇이 부팅 시와 6시간마다 이 상태를 점검해 오너 DM 으로 알리므로, 방에서 터지기 전에 먼저 아실 수 있습니다.
+- **봇이 응답하지 않음(그 밖의 경우)** — 터미널에서 `node bot.mjs`를 직접 실행해 로그인 상태부터 확인하세요.
 - **맥이 잠자기에 들어가면 폴링도 멈춤** — 시스템 설정 > 배터리/전원에서 절전을 풀어두세요.
 - **폴링 오류 반복 (ETIMEDOUT)** — 일부 네트워크는 IPv6 경로가 막혀 있어 `fetch`가 타임아웃 납니다. `bot.mjs`는 IPv4를 우선하도록 이미 처리해 뒀습니다. 그래도 안 되면 `curl https://api.telegram.org`로 네트워크부터 확인하세요.
 
