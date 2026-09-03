@@ -24,7 +24,7 @@
   "scripts": {
     "start": "node bot.mjs",
     "smoke": "node --check bot.mjs && node --check ctb.mjs && node bot.mjs --version && node ctb.mjs --version",
-    "test": "npm run smoke"
+    "test": "npm run smoke && node tests/run.mjs"
   },
   "keywords": [
     "claude",

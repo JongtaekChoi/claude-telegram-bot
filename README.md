@@ -899,8 +899,15 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.pl
 npm test
 ```
 
-The smoke test runs `node --check` on the CLI files and verifies both binaries can print their
-version. CI runs the same checks on Node 18, 20, and 22.
+That runs two things. The **smoke** check runs `node --check` on the CLI files and verifies both
+binaries print their version. Then `tests/*.test.mjs` runs the behaviour suites.
+
+`bot.mjs` is one file with no exports, so the suites **cut blocks out of the source** and run them
+over stubs — testing the real code rather than a copy that quietly drifts from it. The trade-off is
+that an anchor can move; when it does, `cut()` fails naming the anchor instead of dying with a
+stray `SyntaxError`. Each suite is its own process, so one broken anchor doesn't hide the rest.
+
+CI runs the same checks on Node 18, 20, and 22.
 
 See [CHANGELOG.md](./CHANGELOG.md) for recent changes.
 
