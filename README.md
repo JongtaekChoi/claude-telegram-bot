@@ -633,7 +633,7 @@ checks, reminders. Each entry runs the prompt and sends the result to `allowedCh
   the developer role and pasted into the developer's group. Room keys must be in `allowedChatId`
   (forum topics like `-100…:11` are checked against their group); a job naming an unknown room is
   **dropped at startup with an error in the log** rather than posting somewhere unintended. Muted
-  rooms are skipped. Jobs added at runtime with `/cron add` have no `chat`.
+  rooms are skipped. **`/cron add` fills `chat` in with the room you typed it in** — it knows which room asked, so there's no reason to play dumb and broadcast. Leave `chat` out in the config file when you deliberately want a job to reach every room. `/cron` lists each job's destination.
 - The job still runs in the cron slot with **no session** even when `chat` is set — it borrows the
   room's role and address, not its conversation, so it can't be caught by that room's plan lock or
   queue.

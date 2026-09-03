@@ -90,4 +90,32 @@ function build({ schedule = [], cron = null, allowed = ["100", "200"], sessions 
   ok("뮤트 아닌 방만 남는다", b.scheduleTargets({}).join() === "200");
 }
 
+// ── /cron add 가 친 방을 적는가 · 목록이 목적지를 보여주는가 ────────────────
+{
+  const listBlock = cut("function cronListText", "\n// /autocompact");
+  const mk = ({ schedule = [], cron = [], sessions = {} } = {}) =>
+    new Function("cfg", "state", "t", "jobRooms",
+      `${listBlock}\nreturn cronListText;`,
+    )(
+      { schedule }, { cron, sessions },
+      (l, k, ...a) => (k === "cronAllRooms" ? "모든 방" : k === "cronEmpty" ? "(비어 있음)" : `[${k}]`),
+      (j) => [].concat(j.chat ?? []).filter(Boolean).map(String),
+    );
+
+  ok("빈 목록", mk()("ko") === "(비어 있음)");
+  const withRoom = mk({ cron: [{ id: 1, cron: "* * * * *", label: "L", prompt: "p", chat: "100" }],
+                        sessions: { 100: { title: "봇유지보수" } } })("ko");
+  ok("★ 목적지를 방 이름으로 보여준다", withRoom.includes("→ 봇유지보수"), withRoom);
+  const noRoom = mk({ cron: [{ id: 1, cron: "* * * * *", label: "L", prompt: "p" }] })("ko");
+  ok("★ 방 없는 작업은 '모든 방'이라고 밝힌다", noRoom.includes("→ 모든 방"), noRoom);
+  const title = mk({ cron: [{ id: 1, cron: "* * * * *", prompt: "p", chat: "999" }] })("ko");
+  ok("이름 모르는 방은 ID 그대로", title.includes("→ 999"), title);
+  const multi = mk({ cron: [{ id: 1, cron: "* * * * *", prompt: "p", chat: ["100", "200"] }],
+                     sessions: { 100: { title: "A" } } })("ko");
+  ok("여러 방은 쉼표로", multi.includes("→ A, 200"), multi);
+  const cfgJob = mk({ schedule: [{ cron: "0 9 * * *", prompt: "p", chat: "100" }],
+                      sessions: { 100: { title: "A" } } })("ko");
+  ok("config 작업도 목적지 표시", cfgJob.includes("[config]") && cfgJob.includes("→ A"), cfgJob);
+}
+
 report();

@@ -457,10 +457,11 @@ const STR = {
     cronListFooter: "Add: /cron add <natural language> · Remove: /cron rm <id>",
     cronAddUsage:
       "Usage: /cron add <natural-language request>\nExample: /cron add summarize open issues every weekday at 9am",
-    cronAddDone: (id, human, prompt, cron) =>
+    cronAddDone: (id, human, prompt, cron, where) =>
       `⏰ Registered #${id}${human ? ` — ${human}` : ""}\n"${prompt}"\n` +
       "```\n" + cron + "\n```\n" +
-      `Wrong? /cron rm ${id}`,
+      `Reports here (${where}). Wrong? /cron rm ${id}`,
+    cronAllRooms: "all rooms",
     cronRmNotFound:
       "No scheduled task with that id. Run /cron to see the list. (config tasks are removed in the file.)",
     cronRmDone: (id, prompt) => `🗑️ Removed #${id}: ${prompt}`,
@@ -713,10 +714,11 @@ const STR = {
     cronListFooter: "추가: /cron add <자연어> · 삭제: /cron rm <번호>",
     cronAddUsage:
       "사용법: /cron add <자연어 요청>\n예: /cron add 매일 아침 9시에 열린 이슈 요약해줘",
-    cronAddDone: (id, human, prompt, cron) =>
+    cronAddDone: (id, human, prompt, cron, where) =>
       `⏰ 등록됨 #${id}${human ? ` — ${human}` : ""}\n"${prompt}"\n` +
       "```\n" + cron + "\n```\n" +
-      `틀렸으면 /cron rm ${id}`,
+      `결과는 이 방(${where})으로 옵니다. 틀렸으면 /cron rm ${id}`,
+    cronAllRooms: "모든 방",
     cronRmNotFound:
       "그 번호의 예약 작업이 없어요. /cron 으로 목록을 확인하세요. (config 작업은 파일에서 지워야 합니다)",
     cronRmDone: (id, prompt) => `🗑️ 삭제됨 #${id}: ${prompt}`,
@@ -2986,8 +2988,15 @@ function cronListText(l) {
   if (!cfgJobs.length && !dynJobs.length) return t(l, "cronEmpty");
   // cron 의 * 가 마크다운 이탤릭으로 깨지지 않도록 목록 전체를 코드블록(<pre>)으로 감쌈.
   const rows = [];
-  for (const j of cfgJobs) rows.push(`[config] ${j.cron}  ${j.label || ""} — ${j.prompt}`);
-  for (const j of dynJobs) rows.push(`#${j.id} ${j.cron}  ${j.label || ""} — ${j.prompt}`);
+  // 목적지를 같이 보여준다 — 안 보이면 "왜 저 방에도 갔지"가 된다. 방을 안 적은 작업은
+  // 허용된 방 전부로 가므로 그렇게 적는다.
+  const where = (j) => {
+    const rooms = jobRooms(j);
+    if (!rooms.length) return t(l, "cronAllRooms");
+    return rooms.map((r) => state.sessions?.[r]?.title || r).join(", ");
+  };
+  for (const j of cfgJobs) rows.push(`[config] ${j.cron}  ${j.label || ""} → ${where(j)} — ${j.prompt}`);
+  for (const j of dynJobs) rows.push(`#${j.id} ${j.cron}  ${j.label || ""} → ${where(j)} — ${j.prompt}`);
   return t(l, "cronListHeader") + "\n```\n" + rows.join("\n") + "\n```\n" + t(l, "cronListFooter");
 }
 
@@ -3788,11 +3797,15 @@ async function handleCron(chatId, rest, l) {
       }
       const list = Array.isArray(state.cron) ? state.cron : [];
       const id = list.reduce((mx, j) => Math.max(mx, j.id || 0), 0) + 1;
-      list.push({ id, cron: r.cron, prompt: r.prompt, label: r.label });
+      // **친 방을 적어 둔다.** 안 적으면 그 작업은 무주공산이 돼서 기본 역할로 돌고 결과가
+      // `allowedChatId` 전부로 뿌려진다(→ design/room-personas.md). config 의 `schedule` 은
+      // 사람이 일부러 비울 수 있지만, `/cron add` 는 **어느 방에서 쳤는지 알고 있다** — 모르는
+      // 척할 이유가 없다. 여러 방에 뿌리고 싶으면 config 에 적으면 된다.
+      list.push({ id, cron: r.cron, prompt: r.prompt, label: r.label, chat: String(chatId) });
       state.cron = list;
       saveState(state);
       schedule = buildSchedule();
-      await send(chatId, t(l, "cronAddDone", id, r.human, r.prompt, r.cron));
+      await send(chatId, t(l, "cronAddDone", id, r.human, r.prompt, r.cron, state.sessions?.[String(chatId)]?.title || String(chatId)));
     } catch (e) {
       await send(chatId, t(l, "botError", e.message));
     } finally {
