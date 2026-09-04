@@ -2459,6 +2459,20 @@ function resolveCodexBin() {
   return candidates.find((p) => p && existsSync(p)) || "codex";
 }
 
+// codex exec 의 `-o` 출력 파일은 PID 로 이름을 붙여 두는데(한 폴더를 봇 여럿이 공유해도 안 섞이게),
+// 읽고 나서 지우는 자리가 없어 **재시작할 때마다 한 개씩 영구히 쌓였다** — 2026-09-04 에 7월치부터
+// 15개가 남아 있었다. 살아 있는 PID 것은 지금 쓰는 중일 수 있으니 죽은 것(ESRCH)만 쓸어담는다.
+function sweepCodexScratch() {
+  let n = 0;
+  for (const f of readdirSync(BOT_DIR)) {
+    const m = /^codex-last-message-(\d+)\.txt$/.exec(f);
+    if (!m || Number(m[1]) === process.pid) continue;
+    try { process.kill(Number(m[1]), 0); continue; } catch (e) { if (e.code !== "ESRCH") continue; } // EPERM = 살아 있음
+    try { unlinkSync(join(BOT_DIR, f)); n++; } catch {}
+  }
+  return n;
+}
+
 // ── Codex 폴백 실행 ──────────────────────────────────────────────────────
 // Claude와 Codex 세션은 호환되지 않는다. Codex는 별도 session id를 방별 codexSessionId에
 // 저장하고(호출부가 opts.sessionId로 넘김), Claude 복귀 시 codex-handoff.md 요약을 시스템 프롬프트로 넘겨 맥락을 연결한다.
@@ -4953,6 +4967,8 @@ async function main() {
   // 못 잡는다 — 실제로 그렇게 며칠 떠 있다가 조용히 죽었다.
   checkCredentials().catch(() => {});
   setInterval(() => checkCredentials().catch(() => {}), CRED_CHECK_MS);
+  const sweptScratch = sweepCodexScratch();
+  if (sweptScratch) console.log(`Removed ${sweptScratch} stale codex scratch file(s)`);
   // /restart 로 재시작했으면 완료 알림 1회 (플래그는 즉시 비움)
   if (state.restartNotify) {
     const to = state.restartNotify;
