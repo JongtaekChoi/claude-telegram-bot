@@ -2256,32 +2256,52 @@ const oauthOf = (o) => o?.claudeAiOauth || o;
 function readCredFile() {
   try { return oauthOf(JSON.parse(readFileSync(CRED_FILE, "utf8"))); } catch { return null; }
 }
-// 키체인을 못 읽는 컨텍스트도 여기로 온다 — 그 경우 이 프로세스는 파일을 쓴다는 뜻이다.
+// **항목이 없는 것과 있는데 못 읽는 것을 갈라야 한다.** 예전엔 둘 다 catch 로 뭉쳐서 null 을
+// 냈는데, 잠긴 키체인에서는 값 읽기가 상황 따라 실패해서 **같은 상태인데 판정이 계속 뒤집혔다**
+// (2026-09-09: split → expired → split → keychainOnly → split. 바뀐 건 아무것도 없었다).
+// 그래서 존재 확인(-w 없이)과 값 읽기(-w)를 따로 한다. 존재는 하는데 값을 못 읽으면 그건
+// "없다"가 아니라 **"모른다"** 다 — 모르면 판정하지 않는다.
+// 주의: `security` 가 읽을 수 있느냐와 `claude` 가 읽을 수 있느냐는 다르다. 키체인 ACL 은
+// 앱별이라 claude 는 자기 항목에 접근권이 있고 security 는 없을 수 있다. 이 점검은 대리 지표라
+// 확실한 건 launchd 아래에서 `claude -p` 를 직접 돌려 보는 것뿐이다.
+const KEYCHAIN_ARGS = ["find-generic-password", "-s", "Claude Code-credentials"];
 function readCredKeychain() {
-  if (process.platform !== "darwin") return null;
+  if (process.platform !== "darwin") return { absent: true };
   try {
-    const raw = execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+    execFileSync("security", KEYCHAIN_ARGS, { timeout: 5000, stdio: "ignore" });
+  } catch { return { absent: true } }
+  try {
+    const raw = execFileSync("security", [...KEYCHAIN_ARGS, "-w"],
       { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
-    return oauthOf(JSON.parse(raw));
-  } catch { return null; }
+    return { oauth: oauthOf(JSON.parse(raw)) };
+  } catch { return { unreadable: true }; }
 }
 // 이 프로세스가 실제로 쓰게 될 쪽을 기준으로 판정한다 — 키체인이 읽히면 키체인이다.
 function credStatus() {
   const kc = readCredKeychain();
   const file = readCredFile();
-  const live = kc || file;
+  // 항목은 있는데 값을 못 읽으면 어느 쪽이 살아 있는지 알 방법이 없다. 아무 말도 하지 않는다 —
+  // 여기서 추측하면 오탐이 나고, 오탐이 몇 번 오면 진짜 경보를 무시하게 된다.
+  if (kc.unreadable) return { why: "unreadable" };
+  const live = kc.oauth || file;
   if (!live) return { why: "none" };
   // 둘 다 있는데 토큰이 다르면 지금 살아 있어도 다음 회전에서 깨진다. 먼저 말한다.
-  if (kc && file && kc.accessToken !== file.accessToken) return { why: "split" };
-  if (!(Number(live.expiresAt) > Date.now())) return { why: "expired", store: kc ? "keychain" : "file" };
+  if (kc.oauth && file && kc.oauth.accessToken !== file.accessToken) return { why: "split" };
+  if (!(Number(live.expiresAt) > Date.now())) return { why: "expired", store: kc.oauth ? "keychain" : "file" };
   // 키체인에만 있으면 봇은 멀쩡하고 **터미널만** 로그아웃 상태다 — 터미널은 키체인에 접근
   // 못 해 파일로만 폴백하는데 그 파일이 없다. 예전엔 이 상태를 정상으로 봐서 조용했고,
   // 그래서 "봇은 되는데 왜 로컬은 로그인이 안 되지"를 사람이 직접 캐야 했다(2026-09-09).
   // 반대(파일만 있음)는 경고하지 않는다 — 양쪽 다 그 파일을 읽으므로 오히려 성한 상태다.
-  if (kc && !file) return { why: "keychainOnly" };
+  if (kc.oauth && !file) return { why: "keychainOnly" };
   return { why: null };
 }
-let credWarned; // 같은 상태로 도배하지 않는다 — 상태가 바뀔 때만 알린다.
+let credWarned; // 마지막으로 알린 상태. 같은 상태로 도배하지 않는다.
+let credSeen;   // 직전 판독. **한 번 본 걸로는 안 알린다** — 아래 확인 단계 참고.
+let credConfirmTimer;
+// 판정이 바뀌면 곧바로 알리지 않고 잠시 뒤 한 번 더 본다. 키체인 읽기가 상황에 따라 실패해서
+// 같은 상태에서도 판독이 흔들리는데(2026-09-09), 6시간 주기라 한 번 삐끗하면 그대로 나갔다.
+// 오탐이 몇 번 오면 진짜 경보를 무시하게 되는 게 이 기능이 죽는 방식이다.
+const CRED_CONFIRM_MS = 60_000;
 async function checkCredentials() {
   // Codex 전용 설정에 대고 "Claude 로그인 하세요"라고 하면 그냥 소음이다. 기본이 codex 라도
   // 방 하나가 claude 면 확인한다 — 그 방이 죽는 건 똑같다.
@@ -2289,10 +2309,20 @@ async function checkCredentials() {
     || Object.values(state.sessions || {}).some((b) => b?.provider === "claude");
   if (!allowedIds.length || !usesClaude) return;
   const { why, store } = credStatus();
+  if (why !== credSeen) {
+    // 처음 보는 판정 — 굳히지 말고 한 번 더 확인한다.
+    credSeen = why;
+    clearTimeout(credConfirmTimer);
+    credConfirmTimer = setTimeout(() => checkCredentials().catch(() => {}), CRED_CONFIRM_MS);
+    credConfirmTimer.unref?.();
+    return;
+  }
   if (why === credWarned) return;
   credWarned = why;
   if (!why) return;
   console.error(`Claude credentials: ${why}${store ? ` (${store})` : ""}`);
+  // 못 읽는 건 로그까지다. 오너에게 할 말이 없다 — 뭘 해야 하는지 우리도 모른다.
+  if (why === "unreadable") return;
   const msg = why === "none" ? t(BOT_LANG, "credNone")
     : why === "split" ? t(BOT_LANG, "credSplit")
     : why === "keychainOnly" ? t(BOT_LANG, "credKeychainOnly")
