@@ -603,6 +603,14 @@ const STR = {
       "so logging in from a terminal leaves the bot on the old token, and logging in rotates the refresh token so " +
       "the old copy can no longer renew itself. The bot will start failing auth.\n" +
       "Fix: `security delete-generic-password -s \"Claude Code-credentials\"`, then restart the bot.",
+    credKeychainOnly:
+      "🔑 **The terminal is signed out — the bot is fine.** The token now lives only in the keychain; " +
+      "`~/.claude/.credentials.json` is gone.\nThe bot reads the **keychain**, so it keeps working. " +
+      "A terminal cannot reach the keychain and falls back to that **file** — which no longer exists, " +
+      "so `claude` and `ctb` will ask you to log in.\n" +
+      "Fix: run `claude` in a terminal and log in. That writes the file back — but it also rotates the " +
+      "refresh token, leaving the keychain copy stale, so follow it with " +
+      "`security delete-generic-password -s \"Claude Code-credentials\"` and restart the bot.",
   },
   ko: {
     help: (dir) =>
@@ -948,6 +956,14 @@ const STR = {
       "터미널에서 로그인해도 봇은 낡은 토큰을 계속 쓰고, 로그인이 리프레시 토큰을 회전시키므로 낡은 쪽은 " +
       "스스로 갱신도 못 합니다. 곧 인증 오류가 나기 시작합니다.\n" +
       "해결: `security delete-generic-password -s \"Claude Code-credentials\"` 실행 후 봇 재시작.",
+    credKeychainOnly:
+      "🔑 **터미널이 로그아웃 상태입니다 — 봇은 정상입니다.** 토큰이 키체인에만 있고 " +
+      "`~/.claude/.credentials.json` 은 없습니다.\n봇은 **키체인**을 읽으므로 계속 잘 돕니다. " +
+      "터미널은 키체인에 접근하지 못해 그 **파일**로 폴백하는데 파일이 없으니, `claude` · `ctb` 가 " +
+      "로그인을 요구합니다.\n" +
+      "해결: 터미널에서 `claude` 를 실행해 로그인하면 파일이 다시 써집니다. 다만 그 로그인이 리프레시 " +
+      "토큰을 회전시켜 키체인 사본이 낡게 되므로, 이어서 " +
+      "`security delete-generic-password -s \"Claude Code-credentials\"` 까지 하고 봇을 재시작하세요.",
     testFallbackDisabled: "⚠️ 폴백이 비활성화 상태입니다. config.json에 `\"codexFallback\": true`(권장) 또는 `\"ollamaFallback\": true` 를 추가하세요.",
     testFallbackFail: (m) => `⚠️ 폴백 테스트 실패: ${m}`,
     ollamaDisabled: "⚠️ Ollama 모드가 비활성화 상태입니다. config.json에 `\"ollamaFallback\": true` 를 추가하세요.",
@@ -2258,6 +2274,11 @@ function credStatus() {
   // 둘 다 있는데 토큰이 다르면 지금 살아 있어도 다음 회전에서 깨진다. 먼저 말한다.
   if (kc && file && kc.accessToken !== file.accessToken) return { why: "split" };
   if (!(Number(live.expiresAt) > Date.now())) return { why: "expired", store: kc ? "keychain" : "file" };
+  // 키체인에만 있으면 봇은 멀쩡하고 **터미널만** 로그아웃 상태다 — 터미널은 키체인에 접근
+  // 못 해 파일로만 폴백하는데 그 파일이 없다. 예전엔 이 상태를 정상으로 봐서 조용했고,
+  // 그래서 "봇은 되는데 왜 로컬은 로그인이 안 되지"를 사람이 직접 캐야 했다(2026-09-09).
+  // 반대(파일만 있음)는 경고하지 않는다 — 양쪽 다 그 파일을 읽으므로 오히려 성한 상태다.
+  if (kc && !file) return { why: "keychainOnly" };
   return { why: null };
 }
 let credWarned; // 같은 상태로 도배하지 않는다 — 상태가 바뀔 때만 알린다.
@@ -2274,6 +2295,7 @@ async function checkCredentials() {
   console.error(`Claude credentials: ${why}${store ? ` (${store})` : ""}`);
   const msg = why === "none" ? t(BOT_LANG, "credNone")
     : why === "split" ? t(BOT_LANG, "credSplit")
+    : why === "keychainOnly" ? t(BOT_LANG, "credKeychainOnly")
     : t(BOT_LANG, "credExpired", store);
   await send(allowedIds[0], msg).catch(() => {});
 }

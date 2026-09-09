@@ -107,4 +107,42 @@ ok("claudeAiOauth 없이 평면 객체도 읽는다",
   ok("한도가 인증보다 먼저", c("usage limit reached", 1) === "errRateLimit()");
 }
 
+// ── 키체인에만 있음 = 터미널만 로그아웃 (2026-09-09) ─────────────────────
+// 봇은 키체인을 읽어 멀쩡한데 터미널은 파일로만 폴백한다. 예전엔 이 상태를 정상으로 봐서
+// 아무 말도 안 했고, "봇은 되는데 로컬은 왜 로그인이 안 되지"를 사람이 직접 캐야 했다.
+{
+  const s = build({ keychain: cred(1, NOW + 1000) }).credStatus();
+  ok("키체인만, 유효 → keychainOnly", s.why === "keychainOnly", JSON.stringify(s));
+}
+{
+  const s = build({ keychain: cred(1, NOW - 1) }).credStatus();
+  ok("키체인만, 만료 → expired 가 우선", s.why === "expired" && s.store === "keychain", JSON.stringify(s));
+}
+{
+  // 반대 방향은 경고하지 않는다 — 양쪽 다 그 파일을 읽으므로 성한 상태다.
+  const s = build({ file: cred(1, NOW + 1000) }).credStatus();
+  ok("파일만 → 경고 없음", s.why === null, JSON.stringify(s));
+}
+{
+  const s = build({ file: cred(1, NOW + 1000), keychain: cred(1, NOW + 1000) }).credStatus();
+  ok("둘 다 같은 토큰 → 경고 없음", s.why === null, JSON.stringify(s));
+}
+{
+  const s = build({ file: cred(1, NOW + 1000), keychain: cred(2, NOW + 1000) }).credStatus();
+  ok("둘 다 있고 다름 → split 이 우선", s.why === "split", JSON.stringify(s));
+}
+{
+  const b = build({ keychain: cred(1, NOW + 1000) });
+  await b.checkCredentials();
+  ok("keychainOnly: 오너에게 1건", b.sent.length === 1, JSON.stringify(b.sent));
+  ok("keychainOnly: 전용 문구", b.sent[0]?.m.startsWith("credKeychainOnly("), b.sent[0]?.m);
+}
+{
+  // 상태가 안 바뀌면 도배하지 않는다
+  const b = build({ keychain: cred(1, NOW + 1000) });
+  await b.checkCredentials();
+  await b.checkCredentials();
+  ok("keychainOnly: 같은 상태는 한 번만", b.sent.length === 1, String(b.sent.length));
+}
+
 report();

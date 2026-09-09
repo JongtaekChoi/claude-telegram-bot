@@ -876,6 +876,13 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.pl
   copy can no longer renew itself. The bot dies with *"OAuth session expired and could not be
   refreshed"* while every terminal test passes. Fix:
   `security delete-generic-password -s "Claude Code-credentials"`, then restart the bot.
+- **The reverse — the bot is fine but `claude`/`ctb` in a terminal asks you to log in** → the token
+  now lives **only in the keychain**; `~/.claude/.credentials.json` is gone. Applying the fix above
+  and then logging in through another path flips which store is populated. The bot reads the keychain
+  and keeps working; the terminal has nothing to read. Fix: run `claude` in a terminal and log in,
+  which writes the file back — then run
+  `security delete-generic-password -s "Claude Code-credentials"` and restart the bot, since that
+  login rotates the refresh token and leaves the keychain copy stale. The bot detects this state too.
   The bot checks for this at startup and every 6 hours, and DMs the owner — so you should hear about
   it before a room does.
 - **Mac is asleep → polling stops** → disable sleep in System Settings > Battery/Power.
