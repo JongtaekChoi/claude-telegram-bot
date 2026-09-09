@@ -595,7 +595,8 @@ const STR = {
     errClaudeFailed: (code, raw) => `⚠️ **Claude failed** (exit ${code})\n\n\`\`\`\n${raw}\n\`\`\``,
     credNone: "🔑 No Claude credentials found. Run `claude` in a terminal to log in, then restart the bot.",
     credExpired: (store) =>
-      `🔑 **The Claude login has expired** (${store}). Requests will fail with an auth error until it's renewed.\n` +
+      `🔑 **The Claude login cannot renew itself** (${store}). The refresh token is gone or expired, so this\n` +
+      "will not come back on its own — requests will start failing with an auth error.\n" +
       "Log in again with `claude` in a terminal, then restart the bot.",
     credSplit:
       "🔑 **Claude credentials have split in two.** The keychain copy and `~/.claude/.credentials.json` hold " +
@@ -948,7 +949,8 @@ const STR = {
     errClaudeFailed: (code, raw) => `⚠️ **Claude 실행 실패** (exit ${code})\n\n\`\`\`\n${raw}\n\`\`\``,
     credNone: "🔑 Claude 자격증명을 찾을 수 없습니다. 터미널에서 `claude` 로 로그인한 뒤 봇을 재시작해주세요.",
     credExpired: (store) =>
-      `🔑 **Claude 로그인이 만료됐습니다** (${store}). 갱신 전까지 모든 요청이 인증 오류로 실패합니다.\n` +
+      `🔑 **Claude 로그인을 스스로 갱신할 수 없습니다** (${store}). 리프레시 토큰이 없거나 만료돼서\n` +
+      "저절로 돌아오지 않습니다 — 곧 모든 요청이 인증 오류로 실패합니다.\n" +
       "터미널에서 `claude` 로 다시 로그인한 뒤 봇을 재시작해주세요.",
     credSplit:
       "🔑 **Claude 자격증명이 두 벌로 갈라져 있습니다.** 키체인 사본과 `~/.claude/.credentials.json` 의 " +
@@ -2277,6 +2279,8 @@ function readCredKeychain() {
   } catch { return { unreadable: true }; }
 }
 // 이 프로세스가 실제로 쓰게 될 쪽을 기준으로 판정한다 — 키체인이 읽히면 키체인이다.
+const renewable = (o) => !!o?.refreshToken
+  && (o.refreshTokenExpiresAt === undefined || Number(o.refreshTokenExpiresAt) > Date.now());
 function credStatus() {
   const kc = readCredKeychain();
   const file = readCredFile();
@@ -2287,7 +2291,11 @@ function credStatus() {
   if (!live) return { why: "none" };
   // 둘 다 있는데 토큰이 다르면 지금 살아 있어도 다음 회전에서 깨진다. 먼저 말한다.
   if (kc.oauth && file && kc.oauth.accessToken !== file.accessToken) return { why: "split" };
-  if (!(Number(live.expiresAt) > Date.now())) return { why: "expired", store: kc.oauth ? "keychain" : "file" };
+  // **만료 자체는 정상 동작이다** — 리프레시 토큰으로 스스로 되살아난다. 예전엔 그 순간의
+  // expiresAt 만 보고 "곧 실패한다"고 단정해서, 실제로 갱신될 것을 두고 매일 새벽에 알렸다
+  // (2026-09-10 06:06 에 알리고 그 뒤 스스로 갱신됐다). 되살릴 수 없을 때만 말한다.
+  // refreshTokenExpiresAt 이 없는 옛 형식은 갱신 가능한 것으로 본다 — 모르면 조용한 쪽이 맞다.
+  if (!renewable(live)) return { why: "expired", store: kc.oauth ? "keychain" : "file" };
   // 키체인에만 있으면 봇은 멀쩡하고 **터미널만** 로그아웃 상태다 — 터미널은 키체인에 접근
   // 못 해 파일로만 폴백하는데 그 파일이 없다. 예전엔 이 상태를 정상으로 봐서 조용했고,
   // 그래서 "봇은 되는데 왜 로컬은 로그인이 안 되지"를 사람이 직접 캐야 했다(2026-09-09).
@@ -2302,6 +2310,13 @@ let credConfirmTimer;
 // 같은 상태에서도 판독이 흔들리는데(2026-09-09), 6시간 주기라 한 번 삐끗하면 그대로 나갔다.
 // 오탐이 몇 번 오면 진짜 경보를 무시하게 되는 게 이 기능이 죽는 방식이다.
 const CRED_CONFIRM_MS = 60_000;
+// keychainOnly 는 **매일 밤 온다.** Claude Code 가 자동 갱신하면서 저장소를 키체인으로 옮기고
+// 파일을 지우는데(2026-09-09 01:00 · 18:32 · 09-10 00:06 — 셋 다 같은 패턴), 그때마다 터미널이
+// 로그아웃 상태가 되기 때문이다. 봇은 멀쩡하므로 급하지 않은데 매일 알리면 소음이 되고,
+// 소음이 되면 정작 급한 경보(split)를 무시하게 된다 — 이 기능이 죽는 방식이 그것이다.
+// 하루 한 번으로 묶는다. split·none·expired 는 봇이 실제로 죽는 쪽이라 즉시 알린다.
+const CRED_NOTICE_GAP = 24 * 60 * 60_000;
+const credNoticedAt = new Map(); // why → 마지막으로 알린 시각
 async function checkCredentials() {
   // Codex 전용 설정에 대고 "Claude 로그인 하세요"라고 하면 그냥 소음이다. 기본이 codex 라도
   // 방 하나가 claude 면 확인한다 — 그 방이 죽는 건 똑같다.
@@ -2323,6 +2338,9 @@ async function checkCredentials() {
   console.error(`Claude credentials: ${why}${store ? ` (${store})` : ""}`);
   // 못 읽는 건 로그까지다. 오너에게 할 말이 없다 — 뭘 해야 하는지 우리도 모른다.
   if (why === "unreadable") return;
+  const lastAt = credNoticedAt.get(why); // 없음 = 아직 한 번도 안 알림 (0 과 구별한다)
+  if (why === "keychainOnly" && lastAt !== undefined && Date.now() - lastAt < CRED_NOTICE_GAP) return;
+  credNoticedAt.set(why, Date.now());
   const msg = why === "none" ? t(BOT_LANG, "credNone")
     : why === "split" ? t(BOT_LANG, "credSplit")
     : why === "keychainOnly" ? t(BOT_LANG, "credKeychainOnly")

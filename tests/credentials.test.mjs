@@ -7,7 +7,16 @@ const credBlock = cut("const CRED_FILE =", "// 오류 분류.");
 const clsBlock = cut("function classifyClaudeError", "\n// ── 커스텀 명령어");
 
 const NOW = 1_800_000_000_000;
-const cred = (tok, exp) => JSON.stringify({ claudeAiOauth: { accessToken: "tok" + tok, expiresAt: exp } });
+// 기본은 **갱신 가능한** 자격증명이다 — access 가 만료돼도 리프레시로 되살아나는 게 정상이고,
+// 그건 알릴 일이 아니다. dead: true 로 리프레시 토큰을 죽이면 그때가 진짜 경보다.
+const cred = (tok, exp, { dead = false, noRefreshExp = false } = {}) => JSON.stringify({
+  claudeAiOauth: {
+    accessToken: "tok" + tok,
+    expiresAt: exp,
+    ...(dead ? {} : { refreshToken: "r" + tok }),
+    ...(dead || noRefreshExp ? {} : { refreshTokenExpiresAt: NOW + 30 * 86400000 }),
+  },
+});
 
 // 키체인 접근은 두 걸음이다: 존재 확인(-w 없이) → 값 읽기(-w).
 // unreadable 은 "항목은 있는데 값은 못 읽는다" — 잠긴 키체인에서 실제로 나는 상태다.
@@ -55,12 +64,12 @@ function build({
 ok("둘 다 없음 → none", build().credStatus().why === "none");
 ok("파일만, 유효 → 정상", build({ file: cred(1, NOW + 1000) }).credStatus().why === null);
 {
-  const s = build({ file: cred(1, NOW - 1) }).credStatus();
-  ok("파일만, 만료 → expired/file", s.why === "expired" && s.store === "file");
+  const s = build({ file: cred(1, NOW - 1, { dead: true }) }).credStatus();
+  ok("파일만, 갱신 불가 → expired/file", s.why === "expired" && s.store === "file");
 }
 {
-  const s = build({ keychain: cred(1, NOW - 1) }).credStatus();
-  ok("키체인만, 만료 → expired/keychain", s.why === "expired" && s.store === "keychain");
+  const s = build({ keychain: cred(1, NOW - 1, { dead: true }) }).credStatus();
+  ok("키체인만, 갱신 불가 → expired/keychain", s.why === "expired" && s.store === "keychain");
 }
 ok("둘 다 있고 토큰 같음 → 정상",
    build({ file: cred(1, NOW + 1), keychain: cred(1, NOW + 1) }).credStatus().why === null);
@@ -69,10 +78,10 @@ ok("★ 토큰 갈라짐 → split (아직 유효해도 다음 회전에 깨진�
 ok("★ 갈라짐 + 만료 → split 우선 (고치는 법이 다르다)",
    build({ file: cred(2, NOW + 99999), keychain: cred(1, NOW - 1) }).credStatus().why === "split");
 ok("키체인이 읽히면 그쪽이 판정 대상",
-   build({ file: cred(1, NOW + 9), keychain: cred(1, NOW - 1) }).credStatus().store === "keychain");
+   build({ file: cred(1, NOW + 9), keychain: cred(1, NOW - 1, { dead: true }) }).credStatus().store === "keychain");
 ok("깨진 JSON → 없는 것으로", build({ file: "{{{" }).credStatus().why === "none");
 ok("claudeAiOauth 없이 평면 객체도 읽는다",
-   build({ file: JSON.stringify({ accessToken: "a", expiresAt: NOW + 5 }) }).credStatus().why === null);
+   build({ file: JSON.stringify({ accessToken: "a", refreshToken: "r", expiresAt: NOW + 5 }) }).credStatus().why === null);
 
 // ── checkCredentials ─────────────────────────────────────────────────────
 {
@@ -85,7 +94,7 @@ ok("claudeAiOauth 없이 평면 객체도 읽는다",
   ok("같은 상태 반복 → 도배 안 함", b.sent.length === 1, String(b.sent.length));
 }
 {
-  const b = build({ file: cred(1, NOW - 1) });
+  const b = build({ file: cred(1, NOW - 1, { dead: true }) });
   await b.checkCredentials();
   await b.settle();
   ok("expired 문구에 저장소 표시", b.sent[0]?.m === "credExpired(file)", b.sent[0]?.m);
@@ -102,16 +111,16 @@ ok("claudeAiOauth 없이 평면 객체도 읽는다",
   ok("정상이면 조용하다", b.sent.length === 0, JSON.stringify(b.sent));
 }
 {
-  const b = build({ file: cred(1, NOW - 1), provider: "codex" });
+  const b = build({ file: cred(1, NOW - 1, { dead: true }), provider: "codex" });
   await b.checkCredentials();
   ok("codex 전용 설정 → 확인 안 함", b.sent.length === 0);
-  const c = build({ file: cred(1, NOW - 1), provider: "codex", sessions: { a: { provider: "claude" } } });
+  const c = build({ file: cred(1, NOW - 1, { dead: true }), provider: "codex", sessions: { a: { provider: "claude" } } });
   await c.checkCredentials();
   await c.settle();
   ok("★ 기본이 codex 라도 claude 방이 있으면 확인", c.sent.length === 1);
 }
 {
-  const b = build({ file: cred(1, NOW - 1), allowed: [] });
+  const b = build({ file: cred(1, NOW - 1, { dead: true }), allowed: [] });
   await b.checkCredentials();
   ok("허용 방 없음 → 무발송", b.sent.length === 0);
 }
@@ -138,8 +147,8 @@ ok("claudeAiOauth 없이 평면 객체도 읽는다",
   ok("키체인만, 유효 → keychainOnly", s.why === "keychainOnly", JSON.stringify(s));
 }
 {
-  const s = build({ keychain: cred(1, NOW - 1) }).credStatus();
-  ok("키체인만, 만료 → expired 가 우선", s.why === "expired" && s.store === "keychain", JSON.stringify(s));
+  const s = build({ keychain: cred(1, NOW - 1, { dead: true }) }).credStatus();
+  ok("키체인만, 갱신 불가 → expired 가 우선", s.why === "expired" && s.store === "keychain", JSON.stringify(s));
 }
 {
   // 반대 방향은 경고하지 않는다 — 양쪽 다 그 파일을 읽으므로 성한 상태다.
@@ -187,7 +196,7 @@ ok("claudeAiOauth 없이 평면 객체도 읽는다",
   ok("못 읽음 → split 이라고 우기지 않는다", st.why !== "split", JSON.stringify(st));
 }
 {
-  const st = build({ unreadable: true, file: cred(1, NOW - 1) }).credStatus();
+  const st = build({ unreadable: true, file: cred(1, NOW - 1, { dead: true }) }).credStatus();
   ok("못 읽음 → expired 라고도 안 한다", st.why === "unreadable", JSON.stringify(st));
 }
 {
@@ -227,6 +236,49 @@ ok("claudeAiOauth 없이 평면 객체도 읽는다",
   ok("정상: 확인을 거쳐도 조용하다", b.sent.length === 0, JSON.stringify(b.sent));
   await b.checkCredentials();
   ok("정상: 그 뒤로도 조용하다", b.sent.length === 0);
+}
+
+// ── 만료는 정상 동작이다 (2026-09-10) ────────────────────────────────────
+// access 토큰이 만료돼도 리프레시로 되살아난다. 예전엔 그 순간의 expiresAt 만 보고 알려서
+// 매일 새벽에 "로그인이 만료됐다"가 왔다 — 06:06 에 알리고 그 뒤 스스로 갱신됐다.
+{
+  const st = build({ file: cred(1, NOW - 1) }).credStatus();
+  ok("만료됐지만 갱신 가능 → 조용하다", st.why === null, JSON.stringify(st));
+}
+{
+  const st = build({ file: cred(1, NOW - 1, { dead: true }) }).credStatus();
+  ok("만료 + 리프레시 토큰 없음 → expired", st.why === "expired", JSON.stringify(st));
+}
+{
+  // 리프레시 토큰 자체가 만료된 경우 — access 가 아직 살아 있어도 다음 회전에서 죽는다
+  const dead = JSON.stringify({ claudeAiOauth: {
+    accessToken: "a", refreshToken: "r", expiresAt: NOW + 99999, refreshTokenExpiresAt: NOW - 1 } });
+  ok("리프레시가 만료됐으면 access 가 살아 있어도 알린다",
+     build({ file: dead }).credStatus().why === "expired");
+}
+{
+  // 옛 형식에는 refreshTokenExpiresAt 이 없다 — 모르면 조용한 쪽이 맞다
+  const st = build({ file: cred(1, NOW - 1, { noRefreshExp: true }) }).credStatus();
+  ok("refreshTokenExpiresAt 없는 옛 형식 → 갱신 가능으로 본다", st.why === null, JSON.stringify(st));
+}
+
+// ── keychainOnly 는 하루 한 번 ───────────────────────────────────────────
+// Claude Code 가 매일 밤 저장소를 키체인으로 옮기면서 파일을 지운다(09-09 01:00 · 18:32 ·
+// 09-10 00:06). 그때마다 알리면 매일 오고, 매일 오면 정작 급한 split 을 무시하게 된다.
+{
+  const b = build({ keychain: cred(1, NOW + 1000) });
+  await b.checkCredentials(); await b.settle();
+  ok("keychainOnly: 처음엔 알린다", b.sent.length === 1, String(b.sent.length));
+  // 상태가 한 번 정상으로 갔다 다시 돌아와도(매일의 왕복) 하루 안에는 안 알린다
+  b.sent.length = 0;
+  await b.checkCredentials();
+  ok("keychainOnly: 같은 날 다시는 안 알린다", b.sent.length === 0, JSON.stringify(b.sent));
+}
+{
+  // split 은 봇이 실제로 죽는 쪽이라 하루 제한을 받지 않는다
+  const b = build({ file: cred(2, NOW + 9), keychain: cred(1, NOW + 9) });
+  await b.checkCredentials(); await b.settle();
+  ok("split 은 즉시 알린다", b.sent.length === 1 && b.sent[0].m === "credSplit()", JSON.stringify(b.sent));
 }
 
 report();
