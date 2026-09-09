@@ -26,6 +26,15 @@
         바뀌는 건 *에이전트가* 넘길 때 주소를 누가 정하느냐뿐이다. 모델이 마커를 낼 일 자체가
         드물어서 **안 해도 아쉬울 게 없다.**
       → [design/room-personas.md](design/room-personas.md)
+- [ ] **🐞 `ctb` 터미널 세션이 `/clear` 하면 방과 조용히 끊긴다** — `ctb --chat <방>` 은 시작할 때
+      `sessionId` 를 한 번 읽고(ctb.mjs:450) 끝날 때 그 값을 그대로 쓴다(ctb.mjs:510). 대화형이라
+      `stdio: "inherit"` 이고, `/clear` 로 세션이 갈라져도 **실제 id 를 회수할 경로가 없다.**
+      텔레그램 경로에는 되쓰기가 있다(`commitSid`, bot.mjs:4138·4785). **한쪽만 비었다.**
+      갈라져도 양쪽 다 정상 동작해서 아무 데도 증상이 안 뜬다 — 오너가 "이 세션이 뭐냐"고 물어서
+      드러났다. transcript 의 `bridgeSessionId` 가 갈라진 두 세션을 묶는 정확한 키다.
+      ⚠️ 파일만 고쳐선 안 된다 — 봇이 `state` 를 기동 시 한 번 읽어 메모리에 들고 있어서
+      (bot.mjs:1500) 다음 저장에 되돌아간다. **이건 세션 id 말고 다른 필드에서도 재발한다.**
+      → [incidents/2026-09-08-ctb-session-fork-orphan.md](incidents/2026-09-08-ctb-session-fork-orphan.md)
 - [ ] **🐞 `personas[].model`·`provider` 가 배선돼 있지 않다** — README 는 역할마다 모델을 고를 수
       있다고 적었는데(README.md:402), `persona.model` 을 읽는 코드가 한 줄도 없다. 실제 해석은
       `방의 /model → 전역 cfg.model` 뿐이다(`currentModel`, bot.mjs:1577). 역할별 모델을 쓰려면
