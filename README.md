@@ -277,6 +277,7 @@ Core commands:
 | `/jobs` | Background jobs that outlive replies — ▶ running, ✅ finished |
 | `/persona` | The role this room runs as, and the prompt behind it (view only — you change it from the buttons at `/new`) |
 | `/tell [room] [message]` | Hand a message to another room this bot runs — it executes there, with that room's session. Sent bare, it lists the rooms |
+| `/rooms [rm <n>]` | Rooms this bot knows — the list behind `/tell`, `/cron` destinations and the forum router's buttons. Rooms register themselves on first use and pile up; `rm` drops the ones you no longer use (`3`, `3 5 7`, `3-9`). Dropping one only forgets which session that room was on — the transcript stays and `/sessions` there picks it back up |
 | `/plan <request>` | Produce a plan and wait for approval (Claude only) |
 | `/plan on` · `/plan off` | Pin plan mode to this room — every message plans first (Claude only) |
 | `/compact` | Compact the current context (Claude only) |
