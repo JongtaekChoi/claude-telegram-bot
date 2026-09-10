@@ -266,7 +266,7 @@ const STR = {
       "• /jobs — background jobs that outlive replies · you get a message when one ends\n" +
       "• /persona — the role this room runs as, and the prompt behind it · change it at /new\n" +
       "• /tell <room> <message> — hand a message to another room this bot runs · /tell alone lists them\n" +
-      "• /rooms — rooms this bot knows · /rooms rm <n> drops ones you no longer use (`3`, `3 5 7`, `3-9`)\n" +
+      "• /rooms — rooms this bot knows · rm <n> drops ones you no longer use · sweep finds topics deleted in Telegram\n" +
       "• /compact — compress context to free up space (keeps the session)\n" +
       "• /plan <request> — plan only (no edits), then approve/cancel to run for real\n" +
       "• /plan on|off — pin plan mode to this room until you turn it off\n" +
@@ -372,11 +372,17 @@ const STR = {
       + "It runs in that room with that room's session, and the answer stays there.",
     tellUsage: "Usage: `/tell <room> <message>` — send `/tell` on its own to list the rooms.",
     roomsEmpty: "No rooms registered yet. A room registers itself the first time you talk to it there.",
+    roomsSweepNothing: "Nothing to check — sweep looks at forum topics only, and this bot knows none (other than this room, or ones busy right now).",
+    roomsSweepStart: (n) => `🧹 Checking ${n} topic${n > 1 ? "s" : ""}. Telegram never tells a bot when a topic is deleted, so the only honest test is to post a message and take it straight back down. You may see a flicker.`,
+    roomsSweepDone: (list, dead, alive, unknown) =>
+      (dead ? `🧹 Dropped ${dead} deleted topic${dead > 1 ? "s" : ""}:\n${list}\n` : "🧹 Nothing to drop — every topic is still there.\n") +
+      `${alive} still alive.` +
+      (unknown ? `\n\nCouldn't check these, so they were left alone:\n${unknown}` : ""),
     roomsShow: (lines, n) =>
       `🗂 Rooms this bot knows (${n})\n\`\`\`\n${lines}\n\`\`\`\n` +
-      "`/rooms rm <n>` drops entries — `3`, `3 5 7`, or `3-9`.\n" +
+      "`/rooms rm <n>` drops entries — `3`, `3 5 7`, or `3-9`. `/rooms sweep` finds topics you deleted in Telegram.\n" +
       "Dropping one only forgets which session that room was on; the transcript stays and `/sessions` there can pick it back up.",
-    roomsUsage: (n) => `Usage: /rooms · /rooms rm <n>${n ? ` (1–${n})` : ""} — also \`3 5 7\` or \`3-9\``,
+    roomsUsage: (n) => `Usage: /rooms · /rooms rm <n>${n ? ` (1–${n})` : ""} (also \`3 5 7\`, \`3-9\`) · /rooms sweep drops topics deleted in Telegram`,
     roomsRemoved: (list, n) =>
       `🗂 Dropped ${n} room${n > 1 ? "s" : ""}:\n${list}\n` +
       "They'll register again the next time someone talks there — with a fresh session.",
@@ -638,7 +644,7 @@ const STR = {
       "• /jobs — 답장 후에도 살아 있는 백그라운드 작업 · 끝나면 먼저 알려줌\n" +
       "• /persona — 이 방이 어떤 역할로 도는지와 그 프롬프트 본문 · 바꾸는 건 /new 에서\n" +
       "• /tell <방> <메시지> — 이 봇이 맡은 다른 방으로 메시지 넘기기 · /tell 만 보내면 방 목록\n" +
-      "• /rooms — 이 봇이 아는 방 목록 · /rooms rm <번호> 로 안 쓰는 방 정리 (`3`, `3 5 7`, `3-9`)\n" +
+      "• /rooms — 이 봇이 아는 방 목록 · rm <번호> 로 정리 · sweep 은 텔레그램에서 지운 토픽을 찾아 뺍니다\n" +
       "• /compact — 컨텍스트 압축 (세션 유지, 공간 확보)\n" +
       "• /plan <요청> — 계획만 세우기 (편집 없음) → 승인/취소로 실제 실행\n" +
       "• /plan on|off — 끌 때까지 이 방을 plan 모드로 고정\n" +
@@ -933,11 +939,17 @@ const STR = {
       + "그 방의 세션으로 실행되고, 답도 그 방에 남습니다.",
     tellUsage: "사용법: `/tell <방> <메시지>` — `/tell` 만 보내면 방 목록이 나옵니다.",
     roomsEmpty: "등록된 방이 없습니다. 방은 거기서 말을 한 번 걸면 스스로 등록됩니다.",
+    roomsSweepNothing: "확인할 게 없습니다 — 청소는 포럼 토픽만 봅니다. 지금 이 방과 작업 중인 방은 빼고 남는 토픽이 없습니다.",
+    roomsSweepStart: (n) => `🧹 토픽 ${n}개를 확인합니다. 텔레그램은 토픽이 지워져도 봇에게 알려주지 않아서, 메시지를 보냈다가 곧바로 지우는 방법밖에 없습니다. 잠깐 깜빡일 수 있습니다.`,
+    roomsSweepDone: (list, dead, alive, unknown) =>
+      (dead ? `🧹 지워진 토픽 ${dead}개를 목록에서 뺐습니다:\n${list}\n` : "🧹 뺄 게 없습니다 — 토픽이 전부 살아 있습니다.\n") +
+      `${alive}개는 멀쩡합니다.` +
+      (unknown ? `\n\n확인이 안 돼서 그대로 둔 것:\n${unknown}` : ""),
     roomsShow: (lines, n) =>
       `🗂 이 봇이 아는 방 (${n}개)\n\`\`\`\n${lines}\n\`\`\`\n` +
-      "`/rooms rm <번호>` 로 지웁니다 — `3`, `3 5 7`, `3-9`.\n" +
+      "`/rooms rm <번호>` 로 지웁니다 — `3`, `3 5 7`, `3-9`. 텔레그램에서 지운 토픽은 `/rooms sweep` 이 찾아냅니다.\n" +
       "지워도 대화 기록은 안 없어집니다. 그 방이 어느 세션이었는지만 잊고, 그 방에서 `/sessions` 로 다시 고를 수 있습니다.",
-    roomsUsage: (n) => `사용법: /rooms · /rooms rm <번호>${n ? ` (1~${n})` : ""} — \`3 5 7\` · \`3-9\` 도 가능`,
+    roomsUsage: (n) => `사용법: /rooms · /rooms rm <번호>${n ? ` (1~${n})` : ""} (\`3 5 7\` · \`3-9\` 도 가능) · /rooms sweep 은 텔레그램에서 지운 토픽을 찾아 뺍니다`,
     roomsRemoved: (list, n) =>
       `🗂 ${n}개 지웠습니다:\n${list}\n` +
       "그 방에서 누가 말을 걸면 새 세션으로 다시 등록됩니다.",
@@ -1264,7 +1276,7 @@ const COMMANDS = {
     { command: "jobs", description: "Background jobs still running (survive replies)" },
     { command: "persona", description: "The role this room runs as, and the prompt behind it" },
     { command: "tell", description: "Hand a message to another room this bot runs · lists rooms if used alone" },
-    { command: "rooms", description: "Rooms this bot knows · rm <n> drops stale ones" },
+    { command: "rooms", description: "Rooms this bot knows · rm <n> drops them · sweep finds deleted topics" },
     { command: "compact", description: "Compress context to free up space (keeps session)" },
     { command: "plan", description: "Plan only (no edits) · on|off to pin plan mode to this room" },
     { command: "ollama", description: "Toggle Ollama chat mode (bypass Claude, use local LLM)" },
@@ -1292,7 +1304,7 @@ const COMMANDS = {
     { command: "jobs", description: "백그라운드 작업 목록 (답장 후에도 살아 있는 것)" },
     { command: "persona", description: "이 방이 어떤 역할로 도는지와 그 프롬프트 본문" },
     { command: "tell", description: "이 봇이 맡은 다른 방으로 메시지 넘기기 · 인자 없으면 방 목록" },
-    { command: "rooms", description: "이 봇이 아는 방 목록 · rm <번호>로 안 쓰는 방 정리" },
+    { command: "rooms", description: "이 봇이 아는 방 목록 · rm <번호>로 정리 · sweep으로 지운 토픽 청소" },
     { command: "compact", description: "컨텍스트 압축 (세션 유지, 공간 확보)" },
     { command: "plan", description: "계획만 세우기 (편집 없음) · on|off 로 이 방에 고정" },
     { command: "ollama", description: "Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM)" },
@@ -3756,6 +3768,60 @@ function startDispatchServer() {
 // /tell <방> <메시지> — 이 봇이 맡은 다른 방으로 메시지 하나를 넘긴다. 사람이 직접 친 것이므로
 // 대상 방에 물어보지 않고 바로 실행한다(에이전트가 마커로 부르는 길만 승인을 받는다).
 // 인자 없이 부르면 방 목록. → docs/design/room-relay.md
+// `/rooms sweep` — 텔레그램에서 지워진 토픽을 찾아 목록에서만 뺀다.
+//
+// 텔레그램은 토픽이 지워져도 봇에게 **아무것도 안 알려준다.** 조회 API 도 없다
+// (`getForumTopic` 류 없음, 서비스 메시지도 created·edited·closed·reopened 뿐 deleted 는 없다).
+// `sendChatAction` 은 없는 토픽에도 `ok:true` 를 돌려줘서 확인에 못 쓴다 — 실제로 그렇게 나왔다.
+// **진짜 메시지를 보내는 것만이 유일하게 정직한 확인이다**(없는 토픽 → 400 "message thread not
+// found"). 그래서 보내고 곧바로 지운다. 살아 있는 토픽에는 잠깐 깜빡이는 대신 흔적이 안 남는다.
+//
+// 토픽 방만 훑는다. 그룹·DM 까지 넣으면 확인 메시지가 사람들 보는 자리에서 깜빡이고, 애초에
+// 그룹이 사라지는 일은 드물다. 사라졌으면 그 방 실행이 실패하면서 어차피 드러난다.
+//
+// **애매하면 안 지운다.** 죽었다고 확신할 수 있는 응답(thread not found · TOPIC_DELETED ·
+// TOPIC_ID_INVALID)일 때만 뺀다. 네트워크 실패·권한 오류·플러드 제한은 "모른다"로 두고 보고만
+// 한다 — 잠깐 끊긴 것을 죽은 것으로 오해해 멀쩡한 방을 지우는 게 이 기능의 최악이다.
+async function sweepRooms(chatId, l) {
+  const here = String(chatId);
+  const topics = knownRooms().filter((r) =>
+    r.room.includes(":") && r.room !== here && !chatRuntime.get(String(r.room))?.busy);
+  if (!topics.length) {
+    await send(chatId, t(l, "roomsSweepNothing"));
+    return;
+  }
+  await send(chatId, t(l, "roomsSweepStart", topics.length));
+  const dead = [], unknown = [];
+  let alive = 0;
+  for (const r of topics) {
+    const target = tgTarget(r.room);
+    let res;
+    try {
+      res = await tg("sendMessage", { ...target, text: "·", disable_notification: true });
+    } catch (e) {
+      unknown.push(`${r.title} — ${e.message}`);
+      continue;
+    }
+    if (res?.ok) {
+      alive++;
+      // 확인용 메시지는 즉시 치운다. 못 지워도 방은 살아 있는 게 확인됐으니 그대로 진행한다.
+      await tg("deleteMessage", { chat_id: target.chat_id, message_id: res.result.message_id }).catch(() => {});
+    } else if (/thread not found|TOPIC_DELETED|TOPIC_ID_INVALID/i.test(res?.description || "")) {
+      dead.push(r);
+    } else {
+      unknown.push(`${r.title} — ${res?.description || "no answer"}`);
+    }
+    // 토픽이 많으면 연달아 보내다 플러드 제한에 걸린다. 정리는 급한 일이 아니라 천천히 간다.
+    await new Promise((ok) => setTimeout(ok, 300));
+  }
+  for (const r of dead) delete state.sessions[r.room];
+  if (dead.length) saveState(state);
+  await send(chatId, t(l, "roomsSweepDone",
+    dead.length ? dead.map((r) => `• ${r.title}`).join("\n") : "",
+    dead.length, alive,
+    unknown.length ? unknown.map((u) => `• ${u}`).join("\n") : ""));
+}
+
 // /rooms — 이 봇이 아는 방 목록과 그 정리. 방은 **말을 한 번 걸면 자동으로** 등록되는데
 // 지우는 길이 없어서, `/newchat` 으로 만들고 버린 토픽이 그대로 쌓인다(2026-09-10 큐브 봇에
 // "새 대화 08-21 19:24" 같은 항목이 셋). 이 목록은 `/tell` 대상 · `/cron` 목적지 · 포럼
@@ -3775,6 +3841,10 @@ async function handleRooms(chatId, arg, l) {
     const lines = rooms.map((r, i) =>
       `${i + 1}. ${r.title}${chatRuntime.get(String(r.room))?.busy ? " ⏳" : ""}${r.room === here ? " ←" : ""}`);
     await send(chatId, t(l, "roomsShow", lines.join("\n"), rooms.length));
+    return;
+  }
+  if (/^sweep\b/.test(arg)) {
+    await sweepRooms(chatId, l);
     return;
   }
   if (!/^rm\b/.test(arg)) {

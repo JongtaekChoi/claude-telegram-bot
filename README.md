@@ -277,7 +277,7 @@ Core commands:
 | `/jobs` | Background jobs that outlive replies — ▶ running, ✅ finished |
 | `/persona` | The role this room runs as, and the prompt behind it (view only — you change it from the buttons at `/new`) |
 | `/tell [room] [message]` | Hand a message to another room this bot runs — it executes there, with that room's session. Sent bare, it lists the rooms |
-| `/rooms [rm <n>]` | Rooms this bot knows — the list behind `/tell`, `/cron` destinations and the forum router's buttons. Rooms register themselves on first use and pile up; `rm` drops the ones you no longer use (`3`, `3 5 7`, `3-9`). Dropping one only forgets which session that room was on — the transcript stays and `/sessions` there picks it back up |
+| `/rooms` | Rooms this bot knows · `rm <n>` drops them · `sweep` clears out deleted topics → [details below](#tidying-the-room-list-rooms) |
 | `/plan <request>` | Produce a plan and wait for approval (Claude only) |
 | `/plan on` · `/plan off` | Pin plan mode to this room — every message plans first (Claude only) |
 | `/compact` | Compact the current context (Claude only) |
@@ -601,6 +601,54 @@ Define project-specific `/commands` in config that run shell scripts and return 
 - Scripts run independently of Claude — they work even when Claude is busy
 - Output capped at 4 000 characters; 60-second timeout
 
+</details>
+
+### Tidying the room list (`/rooms`)
+
+A room registers itself the first time you talk to the bot there. Nothing ever removes it,
+so forum topics you made with `/newchat` and then abandoned stay on the list forever — and
+that list is what `/tell` targets, what `/cron` sends results to, and what the forum router
+offers as buttons. One dead topic clutters all three.
+
+```
+/rooms                 numbered list · ⏳ running · ← this room
+/rooms rm 3            drop one — also 3 5 7 or 3-9
+/rooms sweep           find topics you deleted in Telegram and drop those
+```
+
+**Dropping a room does not delete anything you said.** The transcript stays in
+`~/.claude/projects/`, and `/sessions` in that room picks it back up. What you lose is the
+link between the room and its session, plus the role you chose there. The room registers
+itself again the next time someone talks in it — with a fresh session.
+
+Two rooms are protected. **This room**, because dropping it only cuts its session loose —
+your next message re-registers it anyway. And **a room that is running something**, because
+its answer needs somewhere to land. If either lands inside a range, the whole command is
+refused rather than half-applied: a partial delete shifts the remaining numbers, and the
+next command you type would hit the wrong room.
+
+<details>
+<summary><b>Why <code>sweep</code> has to post a message</b></summary>
+
+Telegram never tells a bot that a topic was deleted. There is no `getForumTopic` method, and
+the service messages only cover topics being *created*, *edited*, *closed* and *reopened* —
+there is no "deleted" one. `sendChatAction` is no help either: aimed at a topic that does not
+exist it still answers `ok: true`.
+
+The only response that distinguishes a live topic from a deleted one is a real message:
+
+```
+sendMessage(message_thread_id: <deleted>)
+  → 400  Bad Request: message thread not found
+```
+
+So `sweep` posts a single dot with notifications off and deletes it immediately. Live topics
+may flicker for a moment; nothing is left behind.
+
+Only forum topics are swept — never the group itself or a DM, where that flicker would happen
+in front of everyone. And **an unclear answer is never treated as a deletion**: rate limits,
+network failures and permission errors leave the room alone and are listed in the report.
+Mistaking a dropped connection for a dead topic would delete a room you still use.
 </details>
 
 ### Scheduled tasks (cron)

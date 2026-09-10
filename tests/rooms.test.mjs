@@ -155,4 +155,114 @@ const order = ["-100", "-100:35", "-100:99", "-100:11", "688"];
   ok("도는 방이 범위에 섞여도 통째로 막는다", Object.keys(state.sessions).length === 5);
 }
 
+// ── /rooms sweep — 텔레그램에서 지워진 토픽 찾기 ─────────────────────────
+// 텔레그램은 토픽 삭제를 봇에게 안 알린다. 조회 API 도 없고 sendChatAction 은 없는 토픽에도
+// ok:true 를 준다(실측). 진짜 메시지를 보내는 것만이 정직한 확인이라 보내고 곧바로 지운다.
+// **애매하면 안 지운다** — 잠깐 끊긴 것을 죽은 것으로 오해해 멀쩡한 방을 지우는 게 최악이다.
+const sweepBlock = cut("async function sweepRooms(chatId, l)", "\n// /rooms —");
+
+function buildSweep({ sessions = {}, allowed = ["-100"], reply = () => ({ ok: true, result: { message_id: 7 } }) } = {}) {
+  const sent = [], calls = [];
+  let saved = 0;
+  const state = { sessions: JSON.parse(JSON.stringify(sessions)) };
+  const busy = new Set();
+  const sweep = new Function(
+    "state", "knownRooms", "chatRuntime", "send", "t", "saveState", "tg", "tgTarget", "setTimeout",
+    `${sweepBlock}\nreturn sweepRooms;`,
+  )(
+    state,
+    () => Object.entries(state.sessions || {})
+      .filter(([r, b]) => b?.title && allowed.includes(String(r.split(":")[0])))
+      .map(([room, b]) => ({ room, title: b.title }))
+      .sort((a, b) => a.title.localeCompare(b.title)),
+    { get: (r) => (busy.has(String(r)) ? { busy: true } : undefined) },
+    async (id, text) => { sent.push(text); },
+    (l, k, ...a) => `${k}(${a.join("|")})`,
+    () => { saved++; },
+    async (method, body) => { calls.push({ method, body }); return reply(method, body); },
+    (room) => {
+      const [c, th] = String(room).split(":");
+      return { chat_id: c, ...(th ? { message_thread_id: Number(th) } : {}) };
+    },
+    (fn) => fn(),   // 대기 없이 바로
+  );
+  return { sweep, state, sent, calls, busy, saved: () => saved };
+}
+
+const T = {
+  "-100": { title: "봇유지보수" },                       // 그룹 자체 — 훑지 않는다
+  "-100:11": { title: "봇유지보수 / 살아있음" },
+  "-100:35": { title: "봇유지보수 / 지워짐" },
+};
+const deadFor = (thread) => (method, body) =>
+  method === "sendMessage" && body.message_thread_id === thread
+    ? { ok: false, error_code: 400, description: "Bad Request: message thread not found" }
+    : { ok: true, result: { message_id: 7 } };
+
+{
+  const b = buildSweep({ sessions: T, reply: deadFor(35) });
+  await b.sweep("688", "ko");
+  ok("sweep: 죽은 토픽만 지운다", b.state.sessions["-100:35"] === undefined, JSON.stringify(Object.keys(b.state.sessions)));
+  ok("sweep: 산 토픽은 남는다", b.state.sessions["-100:11"] !== undefined);
+  ok("sweep: 그룹 자체는 안 훑는다", b.state.sessions["-100"] !== undefined
+     && !b.calls.some((c) => c.method === "sendMessage" && c.body.message_thread_id === undefined),
+     JSON.stringify(b.calls.map((c) => c.method + ":" + c.body.message_thread_id)));
+  ok("sweep: 저장한다", b.saved() === 1);
+}
+{
+  const b = buildSweep({ sessions: T, reply: deadFor(35) });
+  await b.sweep("688", "ko");
+  const del = b.calls.filter((c) => c.method === "deleteMessage");
+  ok("sweep: 확인용 메시지를 곧바로 지운다", del.length === 1, JSON.stringify(b.calls.map((c) => c.method)));
+  ok("sweep: 죽은 토픽에는 지울 것도 없다", del[0].body.message_id === 7);
+  const put = b.calls.filter((c) => c.method === "sendMessage");
+  ok("sweep: 알림 없이 보낸다", put.every((c) => c.body.disable_notification === true), JSON.stringify(put[0].body));
+}
+{
+  // ★ 이 스위트의 핵심 — 모르는 응답에는 손대지 않는다
+  const b = buildSweep({ sessions: T, reply: () => ({ ok: false, error_code: 429, description: "Too Many Requests: retry after 30" }) });
+  await b.sweep("688", "ko");
+  ok("★ 플러드 제한은 죽은 게 아니다", Object.keys(b.state.sessions).length === 3, JSON.stringify(Object.keys(b.state.sessions)));
+  ok("모르는 응답이면 저장도 안 한다", b.saved() === 0);
+  ok("확인 못 한 것을 보고한다", b.sent.at(-1).includes("살아있음"), b.sent.at(-1));
+}
+{
+  const b = buildSweep({ sessions: T, reply: () => { throw new Error("fetch failed"); } });
+  await b.sweep("688", "ko");
+  ok("★ 네트워크 실패도 죽은 게 아니다", Object.keys(b.state.sessions).length === 3);
+  ok("네트워크 실패를 문구에 담는다", b.sent.at(-1).includes("fetch failed"), b.sent.at(-1));
+}
+{
+  const b = buildSweep({ sessions: T, reply: () => ({ ok: false, error_code: 400, description: "Bad Request: TOPIC_DELETED" }) });
+  await b.sweep("688", "ko");
+  ok("TOPIC_DELETED 도 죽은 것으로 본다", Object.keys(b.state.sessions).length === 1, JSON.stringify(Object.keys(b.state.sessions)));
+}
+{
+  const b = buildSweep({ sessions: T, reply: deadFor(35) });
+  await b.sweep("-100:11", "ko");   // 지금 방이 살아있음 토픽
+  ok("sweep: 지금 방은 안 훑는다",
+     !b.calls.some((c) => c.method === "sendMessage" && c.body.message_thread_id === 11),
+     JSON.stringify(b.calls.map((c) => c.body.message_thread_id)));
+  ok("sweep: 그래도 죽은 것은 지운다", b.state.sessions["-100:35"] === undefined);
+}
+{
+  const b = buildSweep({ sessions: T, reply: deadFor(35) });
+  b.busy.add("-100:35");
+  await b.sweep("688", "ko");
+  ok("sweep: 도는 방은 안 훑는다", b.state.sessions["-100:35"] !== undefined,
+     JSON.stringify(Object.keys(b.state.sessions)));
+}
+{
+  const b = buildSweep({ sessions: { "-100": { title: "봇유지보수" } } });
+  await b.sweep("688", "ko");
+  ok("훑을 토픽이 없으면 전용 문구", b.sent[0] === "roomsSweepNothing()", b.sent[0]);
+  ok("훑을 게 없으면 API 도 안 부른다", b.calls.length === 0);
+}
+{
+  const b = buildSweep({ sessions: T });
+  await b.sweep("688", "ko");
+  ok("전부 살아 있으면 아무것도 안 지운다", Object.keys(b.state.sessions).length === 3 && b.saved() === 0);
+  ok("시작할 때 몇 개를 볼지 알린다", b.sent[0] === "roomsSweepStart(2)", b.sent[0]);
+}
+
 report();
