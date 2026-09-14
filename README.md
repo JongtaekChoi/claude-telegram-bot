@@ -333,6 +333,12 @@ Core commands:
 > tapping the button sends `SIGTERM` to the session's process group — the same path as pressing
 > `Ctrl-C` in that terminal, so `ctb` releases the lock and still sends its end-of-session handoff.
 > `/stop` offers the same button when no bot task is running. Use `/local kill` to skip the button.
+>
+> **The notice goes away on its own once the session ends** — however it ends: closed in the terminal,
+> ended with the button, or crashed and left a stale lock. The bot checks the lock every 15 seconds and
+> deletes the "this room is held" notice once the room is free. Talking to a held room several times
+> still leaves just one notice. The `/local` status reply and skipped-job notices are kept as a record of
+> what happened — **only their end button is removed.**
 
 > **`/restart`** runs `node --check` on `bot.mjs` first and **aborts the restart if it has a syntax
 > error** (so a bad edit can't crash-loop the bot), then exits — relying on a process supervisor
@@ -421,7 +427,7 @@ The only keys you need to start are `token`, `allowedChatId`, `projectDir`, `cla
 | `ollamaTimeout` | (optional) Milliseconds to wait for an Ollama reply before giving up (default: `360000` — local models can be slow to cold-start) |
 | `autoCompactThreshold` | (optional) Offer to compact when the estimated context size exceeds this value (default: `100000`). Set to `0` to disable. Override at runtime with `/autocompact` (persists in state). |
 | `autoCompactConfirm` | (optional) Ask before compacting instead of doing it silently (default: `true`). Set to `false` to compact automatically as soon as the threshold is crossed. |
-| `ctbNotify` | (optional) Post a handoff message to the resumed room when a local `ctb` session ends (default: `true`). Set to `false` to stay silent. |
+| `ctbNotify` | (optional) Post a handoff message to the resumed room — the forum topic itself, if that is what you resumed — when a local `ctb` session ends (default: `true`). Set to `false` to stay silent. |
 | `ctbNotifyTimeout` | (optional) How long to wait for the handoff answer, in ms (default: `180000`). Large sessions take longer to resume; raise this if `ctb` reports the handoff timed out. |
 
 The same config also drives local interactive sessions. `ctb mybot.json` follows the provider and

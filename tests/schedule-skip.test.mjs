@@ -7,15 +7,15 @@ const block = cut("const jobRooms =", "function buildSchedule") +
               cut("function scheduleTargets(job)", "async function runScheduled");
 
 const factory = new Function(
-  "state", "allowedIds", "console", "t", "send", "localLockInfo", "localKillMarkup", "BOT_LANG", "readLocalLock",
+  "state", "allowedIds", "console", "t", "send", "localLockInfo", "localKillMarkup", "BOT_LANG", "readLocalLock", "trackLocalNotice",
   `${block}\nreturn { scheduleTargets, notifySkipped, skipNoticed };`,
 );
 
-let sent, killMarkupUsed, lockInfo;
+let sent, killMarkupUsed, lockInfo, tracked;
 const realNow = Date.now;
 
 function build({ allowed = ["100", "200"], titles = ["100", "200", "300"] } = {}) {
-  sent = []; killMarkupUsed = 0;
+  sent = []; killMarkupUsed = 0; tracked = [];
   const state = { sessions: {} };
   for (const id of titles) state.sessions[id] = { title: `room${id}` };
   return {
@@ -24,11 +24,12 @@ function build({ allowed = ["100", "200"], titles = ["100", "200", "300"] } = {}
       state, allowed,
       { log() {}, warn() {}, error() {} },
       (lang, key, ...a) => `${key}(${a.join("|")})`,
-      async (id, text, opts) => { sent.push({ id, text }); if (opts?.replyMarkup) killMarkupUsed++; },
+      async (id, text, opts) => { sent.push({ id, text }); if (opts?.replyMarkup) killMarkupUsed++; return 900 + sent.length; },
       () => lockInfo,
       () => ({ inline_keyboard: [[{ text: "kill", callback_data: "local:kill" }]] }),
       "ko",
       () => null,
+      (room, id, kind) => tracked.push({ room, id, kind }),
     ),
   };
 }
@@ -44,6 +45,8 @@ function build({ allowed = ["100", "200"], titles = ["100", "200", "300"] } = {}
   ok("락: pid·경과분·방이름이 실림", sent[0]?.text.includes("42571|155|큐브기획"), sent[0]?.text);
   ok("락: 라벨 사용", sent[0]?.text.includes("저장소 위생 점검"));
   ok("락: 종료 버튼이 붙는다", killMarkupUsed === 1);
+  ok("락: 세션이 끝나면 버튼을 떼도록 추적한다", tracked.length === 1 && tracked[0].kind === "button" && tracked[0].room === "100",
+     JSON.stringify(tracked));
 }
 {
   const { api } = build();
@@ -51,6 +54,7 @@ function build({ allowed = ["100", "200"], titles = ["100", "200", "300"] } = {}
   await api.notifySkipped({ cron: "0 9 * * *", label: "리포트", chat: "100" }, null);
   ok("busy: Busy 문구", sent[0]?.text.startsWith("scheduledSkippedBusy("), sent[0]?.text);
   ok("busy: 버튼 없음", killMarkupUsed === 0);
+  ok("busy: 추적할 버튼도 없다", tracked.length === 0, JSON.stringify(tracked));
 }
 {
   const { api } = build();

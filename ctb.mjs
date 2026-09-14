@@ -585,32 +585,44 @@ async function summarizeSession(provider, sid, lang, cfg, projectDir) {
 async function notifyTelegram(configPath, provider, sessionId, chatId) {
   try {
     const cfg = JSON.parse(readFileSync(configPath, "utf8"));
-    // allowedChatId 는 문자열 또는 배열 모두 허용 (bot.mjs의 allowedIds와 동일 규칙).
-    const chatIds = [].concat(cfg.allowedChatId).filter(Boolean).map(String);
+    let st = {};
+    try { st = JSON.parse(readFileSync(statePathFor(configPath), "utf8")); } catch {}
+    // 화이트리스트는 봇과 같은 세 갈래를 합친다 — config 만 보면 `/allow` 로 연 그룹이 "모르는 방"이
+    // 되어 DM 으로 샜다. (allowedChatId 는 문자열 또는 배열 모두 허용, bot.mjs 의 allowedIds 와 동일)
+    const chatIds = [...new Set([
+      ...[].concat(cfg.allowedChatId),
+      ...(st.allowedChatIds || []),
+      ...(st.adoptedChatIds || []),
+    ].filter(Boolean).map(String))];
     if (!cfg.token || !chatIds.length || cfg.ctbNotify === false) return;
     // 이어받은 그 방에만 보낸다. 전에는 allowedChatId 전부에 뿌려서, DM 세션을 붙잡고 일한
     // 내용이 그룹방에도 그대로 떴다. 방마다 세션이 갈리는데 알림만 안 갈린 셈이다.
+    // **토픽 방은 키가 `그룹:스레드` 라 화이트리스트와 통째로 비교하면 안 맞는다.** 예전엔 그래서
+    // 토픽 세션의 요약이 전부 DM 으로 갔다(2026-09-14). 그룹 부분으로 허용 여부를 보고, 보낼 때는
+    // 스레드까지 실어 그 토픽으로 넣는다.
     // 화이트리스트 밖의 방(--chat 오타 등)이면 첫 방으로 물러선다 — 봇이 서비스하지 않는
     // 방으로 세션 내용을 보내지 않기 위해서다.
-    const target = chatIds.includes(String(chatId)) ? String(chatId) : chatIds[0];
+    const [base, thread] = String(chatId).split(":");
+    const allowed = chatIds.includes(base);
+    const target = allowed ? { chat_id: base, ...(thread ? { message_thread_id: Number(thread) } : {}) }
+                           : { chat_id: chatIds[0] };
     const lang = cfg.lang || process.env.LANG || "";
     process.stderr.write("ctb: preparing handoff...\n");
     // 인수인계 요약도 그 방의 작업 폴더에서 돈다 — 세션을 이어받는 것이므로 cwd 가 갈리면 안 된다.
-    let room;
-    try { room = JSON.parse(readFileSync(statePathFor(configPath), "utf8")).sessions?.[String(chatId)]; } catch {}
+    const room = st.sessions?.[String(chatId)];
     const result = await summarizeSession(provider, sessionId, lang, cfg, projectDirFor(cfg, room));
     // 실패와 "넘길 게 없음"을 갈라서 찍는다 — 둘을 한 문구로 뭉치면 조용히 망가진 걸 못 본다.
     if (result.error) { process.stderr.write(`ctb: handoff failed — ${result.error}\n`); return; }
     if (result.skip) { process.stderr.write("ctb: nothing to hand over (SKIP)\n"); return; }
     const summary = result.text;
-    process.stderr.write(`ctb: sending to Telegram (chat ${target}) — ${summary}\n`);
+    process.stderr.write(`ctb: sending to Telegram (chat ${allowed ? chatId : target.chat_id}) — ${summary}\n`);
     const label = lang.startsWith("ko") ? "[터미널]" : "[local]";
     // 여러 줄이면 꼬리표를 따로 한 줄로 — 본문이 길어지면 한 줄에 붙일 때 읽기 나쁘다.
     const text = `💻 ${label}${summary.includes("\n") ? "\n" : " "}${summary}`;
     const r = await fetch(`https://api.telegram.org/bot${cfg.token}/sendMessage`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: target, text }),
+      body: JSON.stringify({ ...target, text }),
     });
     const json = await r.json();
     if (!json.ok) process.stderr.write(`ctb: Telegram error — ${JSON.stringify(json)}\n`);

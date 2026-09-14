@@ -1362,6 +1362,74 @@ function localLockInfo() {
   const where = lock.room ? state.sessions?.[lock.room]?.title || lock.room : "";
   return { pid: lock.pid, mins, room: lock.room, where };
 }
+// ── 로컬 세션을 가리키는 안내의 수명 ──────────────────────────────────────
+// "이 방을 로컬 ctb 세션이 잡고 있습니다 + [종료]" 는 세션이 끝나도 그대로 남아서 **거짓말이
+// 됐다**(2026-09-14). 봇은 세션이 끝나는 순간을 모른다 — 락은 메시지가 올 때만 봤고 이미 보낸
+// 안내는 추적하지 않았다. 그래서 보낸 안내를 적어두고 락을 주기적으로 본다. ctb 가 정상 종료하든,
+// 종료 버튼으로 죽든, 크래시로 락이 낡든 전부 "락이 그 방을 더는 안 잡는다" 한 신호로 잡힌다.
+// (ctb 가 끝날 때 봇에 알리는 방식은 크래시 때 못 알린다 — 락을 보는 쪽이 빠짐없다.)
+//
+// 두 종류다. busy(잡고 있다는 안내)는 사실 자체가 끝났으니 **지운다.** button(/local 상태 ·
+// 건너뛴 예약 작업 알림)은 그때 무슨 일이 있었는지가 기록으로 남을 가치가 있어 **버튼만 뗀다.**
+// 재시작해도 이어서 치우도록 state 에 둔다 — 여기선 재시작이 잦다.
+const LOCAL_NOTICE_POLL_MS = 15_000;
+const LOCAL_NOTICE_MAX_AGE = 47 * 60 * 60_000; // 봇이 지울 수 있는 건 48시간 전 메시지까지
+let localNoticeTimer;
+
+function localNotices() {
+  if (!Array.isArray(state.localNotices)) state.localNotices = [];
+  return state.localNotices;
+}
+// 안내가 아직 참인가. busy 는 "이 방을" 잡고 있다는 말이라 그 방 기준으로, button 은 종료 버튼이
+// 락 하나를 겨누므로 어느 방이든 락이 살아 있으면 참이다.
+const localNoticeStillTrue = (n) => (n.kind === "busy" ? checkLocalLock(n.room) : !!readLocalLock());
+
+function trackLocalNotice(room, id, kind) {
+  if (!id) return;
+  localNotices().push({ room: String(room), id, kind, at: Date.now() });
+  saveState(state);
+  armLocalNoticeSweep();
+}
+function armLocalNoticeSweep() {
+  if (localNoticeTimer || !localNotices().length) return;
+  localNoticeTimer = setInterval(() => sweepLocalNotices().catch(() => {}), LOCAL_NOTICE_POLL_MS);
+  localNoticeTimer.unref?.();
+}
+async function retireLocalNotice(n) {
+  const chat_id = baseChatId(n.room);
+  // 지우기가 막히면(48시간 초과·권한) 버튼이라도 뗀다 — 눌리는 거짓말보다는 낫다.
+  if (n.kind === "busy") {
+    const r = await tg("deleteMessage", { chat_id, message_id: n.id }).catch(() => null);
+    if (r?.ok) return;
+  }
+  await tg("editMessageReplyMarkup", { chat_id, message_id: n.id, reply_markup: { inline_keyboard: [] } })
+    .catch(() => {});
+}
+async function sweepLocalNotices() {
+  const list = localNotices();
+  const keep = [], done = [];
+  for (const n of list) {
+    if (Date.now() - (n.at || 0) > LOCAL_NOTICE_MAX_AGE) continue; // 너무 오래됐다 — 손 못 댄다, 잊는다
+    (localNoticeStillTrue(n) ? keep : done).push(n);
+  }
+  if (keep.length === list.length) return;
+  state.localNotices = keep;
+  saveState(state);
+  for (const n of done) await retireLocalNotice(n);
+  if (!keep.length) { clearInterval(localNoticeTimer); localNoticeTimer = undefined; }
+}
+// 잡고 있다는 안내를 보낸다. 같은 방에 쌓지 않는다 — 잡힌 동안 말을 여러 번 걸면 같은 안내와
+// 버튼이 줄줄이 붙었다. 새로 보내기 전에 그 방의 이전 것을 지운다.
+async function sendLocalBusy(chatId, l) {
+  const room = String(chatId);
+  const old = localNotices().filter((n) => n.room === room && n.kind === "busy");
+  if (old.length) {
+    state.localNotices = localNotices().filter((n) => !old.includes(n));
+    for (const n of old) retireLocalNotice(n).catch(() => {});
+  }
+  const id = await send(chatId, t(l, "localBusy"), { replyMarkup: localKillMarkup(l) });
+  trackLocalNotice(chatId, id, "busy");
+}
 // 로컬 세션 강제 종료 — 밖에 나와 있는데 데스크탑에 ctb 를 켜둔 채였을 때 텔레그램에서 끝낸다.
 // ctb 는 셸 잡 컨트롤 아래에서 프로세스 그룹 리더라 그룹(-pid)에 신호를 보내야 자식 claude 까지
 // 함께 받는다 — Ctrl-C 와 같은 경로라 ctb 가 lock 정리·세션 요약 알림까지 정상 수행한다.
@@ -2887,7 +2955,11 @@ async function notifySkipped(job, lock) {
     ? t(BOT_LANG, "scheduledSkippedLocal", label, info.pid, info.mins, info.where)
     : t(BOT_LANG, "scheduledSkippedBusy", label);
   // 원인이 로컬 세션이면 그 자리에서 끝낼 수 있게 /local 과 같은 버튼을 붙인다.
-  for (const id of scheduleTargets(job)) await send(id, text, info ? { replyMarkup: localKillMarkup(BOT_LANG) } : {});
+  for (const id of scheduleTargets(job)) {
+    const sent = await send(id, text, info ? { replyMarkup: localKillMarkup(BOT_LANG) } : {});
+    // 건너뛴 사실은 기록으로 남기되, 세션이 끝나면 종료 버튼은 떼어낸다 — 눌러도 할 일이 없다.
+    if (info) trackLocalNotice(id, sent, "button");
+  }
 }
 
 async function runScheduled(job) {
@@ -3293,7 +3365,7 @@ async function runCompact(chatId, l, okKey) {
     return;
   }
   if (checkLocalLock(chatId)) {
-    await send(chatId, t(l, "localBusy"), { replyMarkup: localKillMarkup(l) });
+    await sendLocalBusy(chatId, l);
     return;
   }
   r.busy = true;
@@ -3993,6 +4065,8 @@ async function handleLocal(chatId, arg, l) {
       chatId,
       res.none ? t(l, "localNone") : res.ok ? t(l, "localKilled", res.pid) : t(l, "localKillFail", res.pid),
     );
+    // 끝났으면 기다리지 않고 바로 치운다 — 방금 누른 사람이 옛 안내를 15초 더 볼 이유가 없다.
+    if (res.ok || res.none) await sweepLocalNotices().catch(() => {});
     return;
   }
   const info = localLockInfo();
@@ -4000,7 +4074,7 @@ async function handleLocal(chatId, arg, l) {
     await send(chatId, t(l, "localNone"));
     return;
   }
-  await send(chatId, t(l, "localActive", info.pid, info.mins, info.where), { replyMarkup: localKillMarkup(l) });
+  trackLocalNotice(chatId, await send(chatId, t(l, "localActive", info.pid, info.mins, info.where), { replyMarkup: localKillMarkup(l) }), "button");
 }
 
 async function handleCron(chatId, rest, l) {
@@ -4314,7 +4388,7 @@ async function runApprovedPlan(chatId, l) {
     return;
   }
   if (checkLocalLock(chatId)) {
-    await send(chatId, t(l, "localBusy"), { replyMarkup: localKillMarkup(l) });
+    await sendLocalBusy(chatId, l);
     return;
   }
   r.busy = true;
@@ -4750,7 +4824,7 @@ async function handle(msg) {
       // 봇 작업은 없어도 로컬 ctb 가 물고 있을 수 있다 — 종료 버튼을 같이 준다.
       const info = localLockInfo();
       if (info) {
-        await send(chatId, t(l, "localActive", info.pid, info.mins, info.where), { replyMarkup: localKillMarkup(l) });
+        trackLocalNotice(chatId, await send(chatId, t(l, "localActive", info.pid, info.mins, info.where), { replyMarkup: localKillMarkup(l) }), "button");
         return;
       }
       await send(chatId, t(l, "stopNoop"));
@@ -4857,7 +4931,7 @@ async function handle(msg) {
     return;
   }
   if (checkLocalLock(chatId)) {
-    await send(chatId, t(l, "localBusy"), { replyMarkup: localKillMarkup(l) });
+    await sendLocalBusy(chatId, l);
     return;
   }
   // 여기까지 왔다는 건 지금 당장 실행될 프롬프트라는 뜻이다 — 명령어는 위에서 전부 처리돼 이미
@@ -5188,6 +5262,9 @@ async function main() {
   // 부팅 때 한 번, 그 뒤로는 6시간마다. 만료는 봇이 떠 있는 동안 일어나므로 부팅 검사만으로는
   // 못 잡는다 — 실제로 그렇게 며칠 떠 있다가 조용히 죽었다.
   checkCredentials().catch(() => {});
+  // 재시작 전에 보낸 로컬 세션 안내가 남아 있으면 이어서 치운다 — 세션이 그 사이 끝났을 수 있다.
+  sweepLocalNotices().catch(() => {});
+  armLocalNoticeSweep();
   setInterval(() => checkCredentials().catch(() => {}), CRED_CHECK_MS);
   const sweptScratch = sweepCodexScratch();
   if (sweptScratch) console.log(`Removed ${sweptScratch} stale codex scratch file(s)`);

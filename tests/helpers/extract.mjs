@@ -19,3 +19,14 @@ export function cut(from, to) {
   if (j < 0) throw new Error(`끝 앵커를 못 찾음 (${JSON.stringify(from)} 이후): ${JSON.stringify(to)}`);
   return SRC.slice(i, j);
 }
+
+// ctb.mjs 도 같은 방식으로 뗀다. 같은 규칙(없으면·겹치면 이름을 대고 죽는다)을 그대로 쓴다.
+export const CTB_SRC = readFileSync(join(ROOT, "ctb.mjs"), "utf8");
+export function cutCtb(from, to) {
+  const i = CTB_SRC.indexOf(from);
+  if (i < 0) throw new Error(`ctb.mjs 에서 시작 앵커를 못 찾음: ${JSON.stringify(from)}`);
+  if (CTB_SRC.indexOf(from, i + 1) >= 0) throw new Error(`시작 앵커가 여러 곳에 있음: ${JSON.stringify(from)}`);
+  const j = CTB_SRC.indexOf(to, i + from.length);
+  if (j < 0) throw new Error(`끝 앵커를 못 찾음 (${JSON.stringify(from)} 이후): ${JSON.stringify(to)}`);
+  return CTB_SRC.slice(i, j);
+}
