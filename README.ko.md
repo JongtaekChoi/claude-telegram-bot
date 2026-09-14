@@ -663,7 +663,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.pl
 ## 자주 겪는 문제
 
 - **`launchctl list`에 PID 없이 에러 코드만 보임** — `bot.error.log`를 확인하세요. 보통 node/claude 경로 문제이거나 config 누락입니다.
-- **봇은 응답 안 하는데 터미널에서 `claude` 는 멀쩡함** — 자격증명이 **두 벌로 갈라진** 것입니다. Claude Code 는 자격증명을 macOS 키체인과 `~/.claude/.credentials.json` 양쪽에 둘 수 있는데, **어느 쪽을 읽는지는 프로세스를 어떻게 띄웠는지에 달려 있습니다** — launchd 로 뜬 봇은 **키체인**을 읽고, 터미널은 키체인에 접근하지 못해 **파일**로 폴백합니다. 그래서 터미널에서 로그인하면 파일만 새로 써지고, 로그인이 리프레시 토큰을 회전시키므로 **키체인 사본은 스스로 갱신도 못 합니다.** 봇만 *"OAuth session expired and could not be refreshed"* 로 죽고 터미널 테스트는 계속 통과합니다. 해결: `security delete-generic-password -s "Claude Code-credentials"` 실행 후 봇 재시작. 봇이 부팅 시와 6시간마다 이 상태를 점검해 오너 DM 으로 알리므로, 방에서 터지기 전에 먼저 아실 수 있습니다.
+- **봇은 응답 안 하는데 터미널에서 `claude` 는 멀쩡함** — 봇이 *"OAuth session expired and could not be refreshed"* 로 실패한다면 자격증명 저장소를 의심하세요. Claude Code 는 자격증명을 macOS 키체인과 `~/.claude/.credentials.json` 양쪽에 둘 수 있는데, **어느 쪽을 읽는지는 프로세스를 어떻게 띄웠는지에 달려 있습니다** — launchd 로 뜬 봇은 **키체인**을, 터미널은 키체인에 접근하지 못해 **파일**을 읽습니다. 그래서 터미널 테스트는 통과하는데 봇만 죽는 일이 생깁니다. 해결: `security delete-generic-password -s "Claude Code-credentials"` 실행 후 봇 재시작 — 봇도 파일을 읽게 됩니다. 이 실패가 나면 그 방의 답장에 원인과 이 명령이 같이 나갑니다.
+  **두 벌이 서로 다른 토큰을 갖는 것 자체는 흔하고 대개 무해합니다.** 매일 자동 갱신 때 저장소가 키체인으로 넘어가고 터미널 로그인 때 파일이 새로 써지면서 수시로 갈라지는데, 갈라진 상태에서도 키체인 사본은 스스로 갱신됩니다(나흘간 launchd 에서 직접 확인). 그래서 봇은 갈라졌다는 이유만으로는 알리지 않고, **실제로 인증이 실패할 때** 알립니다.
 - **반대로 봇은 멀쩡한데 터미널 `claude`·`ctb` 가 로그인을 요구함** — 토큰이 **키체인에만** 있고 `~/.claude/.credentials.json` 이 없는 상태입니다. 위 해결책(키체인 삭제)을 쓴 뒤 다른 경로로 다시 로그인하면 저장소가 반대로 뒤집히면서 이렇게 됩니다. 봇은 키체인을 읽으니 계속 잘 돌고, 터미널만 읽을 게 없어집니다. 해결: 터미널에서 `claude` 로 로그인하면 파일이 다시 써집니다 — 다만 그 로그인이 리프레시 토큰을 회전시켜 키체인 사본이 낡으므로, 이어서 `security delete-generic-password -s "Claude Code-credentials"` 까지 하고 봇을 재시작하세요. 이 상태도 봇이 감지해 알립니다.
 - **봇이 응답하지 않음(그 밖의 경우)** — 터미널에서 `node bot.mjs`를 직접 실행해 로그인 상태부터 확인하세요.
 - **맥이 잠자기에 들어가면 폴링도 멈춤** — 시스템 설정 > 배터리/전원에서 절전을 풀어두세요.

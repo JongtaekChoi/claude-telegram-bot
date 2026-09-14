@@ -85,11 +85,20 @@ ok("claudeAiOauth 없이 평면 객체도 읽는다",
 
 // ── checkCredentials ─────────────────────────────────────────────────────
 {
+  // ★ 갈라짐은 알리지 않는다 (2026-09-14). 나흘간 launchd 확인에서 갈라진 상태로도 봇이 매번
+  // 인증을 통과했다 — "곧 실패한다"는 전제가 틀렸고, 매일 반복돼 재시작마다 DM 이 왔다.
   const b = build({ file: cred(2, NOW + 9), keychain: cred(1, NOW + 9) });
   await b.checkCredentials();
   await b.settle();
-  ok("split → 오너 방으로 1건", b.sent.length === 1 && b.sent[0].id === "1", JSON.stringify(b.sent));
-  ok("split 문구 사용", b.sent[0]?.m === "credSplit()", b.sent[0]?.m);
+  ok("★ split → DM 안 보낸다", b.sent.length === 0, JSON.stringify(b.sent));
+  ok("split → 판정 자체는 그대로 (로그로 남는다)", b.credStatus().why === "split");
+}
+{
+  // 알릴 만한 상태는 여전히 오너 방으로 한 번만
+  const b = build({ file: cred(1, NOW - 1, { dead: true }) });
+  await b.checkCredentials();
+  await b.settle();
+  ok("갱신 불가 → 오너 방으로 1건", b.sent.length === 1 && b.sent[0].id === "1", JSON.stringify(b.sent));
   await b.checkCredentials();
   ok("같은 상태 반복 → 도배 안 함", b.sent.length === 1, String(b.sent.length));
 }
@@ -212,15 +221,15 @@ ok("claudeAiOauth 없이 평면 객체도 읽는다",
 
 // ── 흔들리는 판독으로는 안 알린다 ────────────────────────────────────────
 {
-  const b = build({ file: cred(2, NOW + 9), keychain: cred(1, NOW + 9) });
+  const b = build({ file: cred(1, NOW - 1, { dead: true }) });
   await b.checkCredentials();
   ok("한 번 본 걸로는 안 알린다", b.sent.length === 0, JSON.stringify(b.sent));
   ok("대신 확인을 예약한다", b.timers.length === 1, String(b.timers.length));
   await b.settle();
-  ok("두 번째도 같으면 그때 알린다", b.sent.length === 1 && b.sent[0].m === "credSplit()", JSON.stringify(b.sent));
+  ok("두 번째도 같으면 그때 알린다", b.sent.length === 1 && b.sent[0].m === "credExpired(file)", JSON.stringify(b.sent));
 }
 {
-  const stable = build({ file: cred(2, NOW + 9), keychain: cred(1, NOW + 9) });
+  const stable = build({ file: cred(1, NOW - 1, { dead: true }) });
   await stable.checkCredentials();
   await stable.settle();
   ok("안정된 판정은 정확히 1건", stable.sent.length === 1, String(stable.sent.length));
@@ -275,10 +284,10 @@ ok("claudeAiOauth 없이 평면 객체도 읽는다",
   ok("keychainOnly: 같은 날 다시는 안 알린다", b.sent.length === 0, JSON.stringify(b.sent));
 }
 {
-  // split 은 봇이 실제로 죽는 쪽이라 하루 제한을 받지 않는다
-  const b = build({ file: cred(2, NOW + 9), keychain: cred(1, NOW + 9) });
+  // 갱신 불가는 봇이 실제로 죽는 쪽이라 하루 제한을 받지 않는다
+  const b = build({ file: cred(1, NOW - 1, { dead: true }) });
   await b.checkCredentials(); await b.settle();
-  ok("split 은 즉시 알린다", b.sent.length === 1 && b.sent[0].m === "credSplit()", JSON.stringify(b.sent));
+  ok("갱신 불가는 즉시 알린다", b.sent.length === 1 && b.sent[0].m === "credExpired(file)", JSON.stringify(b.sent));
 }
 
 report();

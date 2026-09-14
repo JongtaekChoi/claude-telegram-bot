@@ -923,14 +923,18 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.example.pl
 
 - **`launchctl list` shows an error code with no PID** → check `bot.error.log`. Usually a node/claude
   path issue (`command not found`) or a missing config file (`mybot.json`).
-- **Bot doesn't respond, but `claude` works fine in your terminal** → the credentials have **split in
-  two**. Claude Code can keep them in the macOS keychain *and* in `~/.claude/.credentials.json`, and
-  which one is read depends on how the process was started: a bot under **launchd reads the keychain**,
-  while a **terminal falls back to the file** (it can't reach the keychain). Logging in from a terminal
-  therefore refreshes only the file — and because logging in rotates the refresh token, the keychain
-  copy can no longer renew itself. The bot dies with *"OAuth session expired and could not be
-  refreshed"* while every terminal test passes. Fix:
-  `security delete-generic-password -s "Claude Code-credentials"`, then restart the bot.
+- **Bot doesn't respond, but `claude` works fine in your terminal** → if the bot fails with *"OAuth
+  session expired and could not be refreshed"*, suspect the credential store. Claude Code can keep
+  credentials in the macOS keychain *and* in `~/.claude/.credentials.json`, and which one is read
+  depends on how the process was started: a bot under **launchd reads the keychain**, while a
+  **terminal falls back to the file** (it can't reach the keychain). That is how every terminal test can
+  pass while the bot alone fails. Fix: `security delete-generic-password -s "Claude Code-credentials"`,
+  then restart the bot — it will read the file too. When this failure happens, the reply in that room
+  carries the cause and this command.
+  **The two copies holding different tokens is common and usually harmless.** They drift apart all the
+  time — the nightly auto-renewal moves storage to the keychain, a terminal login writes a fresh file —
+  and the keychain copy still renews itself (checked under launchd four days running). So the bot does
+  not warn just because they differ; it warns when authentication **actually fails**.
 - **The reverse — the bot is fine but `claude`/`ctb` in a terminal asks you to log in** → the token
   now lives **only in the keychain**; `~/.claude/.credentials.json` is gone. Applying the fix above
   and then logging in through another path flips which store is populated. The bot reads the keychain

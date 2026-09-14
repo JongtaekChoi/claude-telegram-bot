@@ -616,12 +616,6 @@ const STR = {
       `🔑 **The Claude login cannot renew itself** (${store}). The refresh token is gone or expired, so this\n` +
       "will not come back on its own — requests will start failing with an auth error.\n" +
       "Log in again with `claude` in a terminal, then restart the bot.",
-    credSplit:
-      "🔑 **Claude credentials have split in two.** The keychain copy and `~/.claude/.credentials.json` hold " +
-      "different tokens.\nThe bot runs under launchd and reads the **keychain**; a terminal reads the **file** — " +
-      "so logging in from a terminal leaves the bot on the old token, and logging in rotates the refresh token so " +
-      "the old copy can no longer renew itself. The bot will start failing auth.\n" +
-      "Fix: `security delete-generic-password -s \"Claude Code-credentials\"`, then restart the bot.",
     credKeychainOnly:
       "🔑 **The terminal is signed out — the bot is fine.** The token now lives only in the keychain; " +
       "`~/.claude/.credentials.json` is gone.\nThe bot reads the **keychain**, so it keeps working. " +
@@ -988,12 +982,6 @@ const STR = {
       `🔑 **Claude 로그인을 스스로 갱신할 수 없습니다** (${store}). 리프레시 토큰이 없거나 만료돼서\n` +
       "저절로 돌아오지 않습니다 — 곧 모든 요청이 인증 오류로 실패합니다.\n" +
       "터미널에서 `claude` 로 다시 로그인한 뒤 봇을 재시작해주세요.",
-    credSplit:
-      "🔑 **Claude 자격증명이 두 벌로 갈라져 있습니다.** 키체인 사본과 `~/.claude/.credentials.json` 의 " +
-      "토큰이 서로 다릅니다.\n봇은 launchd 로 떠서 **키체인**을, 터미널은 **파일**을 읽습니다 — 그래서 " +
-      "터미널에서 로그인해도 봇은 낡은 토큰을 계속 쓰고, 로그인이 리프레시 토큰을 회전시키므로 낡은 쪽은 " +
-      "스스로 갱신도 못 합니다. 곧 인증 오류가 나기 시작합니다.\n" +
-      "해결: `security delete-generic-password -s \"Claude Code-credentials\"` 실행 후 봇 재시작.",
     credKeychainOnly:
       "🔑 **터미널이 로그아웃 상태입니다 — 봇은 정상입니다.** 토큰이 키체인에만 있고 " +
       "`~/.claude/.credentials.json` 은 없습니다.\n봇은 **키체인**을 읽으므로 계속 잘 돕니다. " +
@@ -2444,11 +2432,19 @@ async function checkCredentials() {
   console.error(`Claude credentials: ${why}${store ? ` (${store})` : ""}`);
   // 못 읽는 건 로그까지다. 오너에게 할 말이 없다 — 뭘 해야 하는지 우리도 모른다.
   if (why === "unreadable") return;
+  // **갈라짐도 로그까지다.** 이 경보의 전제는 "터미널 로그인이 리프레시 토큰을 회전시켜 키체인
+  // 사본은 곧 갱신을 못 한다"였는데 **틀렸다.** 2026-09-10 에 갈라진 상태(키체인 access 15:58 만료,
+  // 파일은 12:30 터미널 로그인)에서 launchd 아래 claude -p 를 매일 16시에 돌렸더니 나흘 연속
+  // 통과했다. 키체인 사본은 스스로 갱신했다. 그런데 저장소가 매일 밤 키체인으로 넘어가며 갈라짐이
+  // 반복되므로 재시작할 때마다 DM 이 왔고, 할 일이 없는 경보는 진짜 경보를 무시하게 만든다.
+  // 실제로 인증이 실패하면 그 방에 errClaudeAuth 가 원인과 고치는 명령을 담아 나간다 — 그게
+  // 믿을 수 있는 신호다. (9-02 에 봇 넷이 죽은 건 사실이지만 원인이 갈라짐 자체였는지는 이제
+  // 확신할 수 없다.)
+  if (why === "split") return;
   const lastAt = credNoticedAt.get(why); // 없음 = 아직 한 번도 안 알림 (0 과 구별한다)
   if (why === "keychainOnly" && lastAt !== undefined && Date.now() - lastAt < CRED_NOTICE_GAP) return;
   credNoticedAt.set(why, Date.now());
   const msg = why === "none" ? t(BOT_LANG, "credNone")
-    : why === "split" ? t(BOT_LANG, "credSplit")
     : why === "keychainOnly" ? t(BOT_LANG, "credKeychainOnly")
     : t(BOT_LANG, "credExpired", store);
   await send(allowedIds[0], msg).catch(() => {});
