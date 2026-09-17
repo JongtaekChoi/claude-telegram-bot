@@ -4818,7 +4818,10 @@ async function handle(msg) {
     }
     if (!r.busy || !r.child) {
       // 봇 작업은 없어도 로컬 ctb 가 물고 있을 수 있다 — 종료 버튼을 같이 준다.
-      const info = localLockInfo();
+      // **이 방을 잡은 세션일 때만.** 락은 봇에 하나라, 그냥 읽으면 다른 그룹에서 /stop 을 쳐도
+      // "한자도사 / 클로드 방에서 실행 중 + [종료]" 가 떴다(2026-09-17) — 누르면 남의 방 작업이 죽는다.
+      // 어디서 도는지 보려면 /local 이 있다.
+      const info = checkLocalLock(chatId) && localLockInfo();
       if (info) {
         trackLocalNotice(chatId, await send(chatId, t(l, "localActive", info.pid, info.mins, info.where), { replyMarkup: localKillMarkup(l) }), "button");
         return;
