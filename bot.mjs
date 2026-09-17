@@ -4999,9 +4999,11 @@ async function handle(msg) {
     let attachFailed = false;
     if (msg._mediaGroup?.length) {
       const notes = [];
-      for (const fileId of msg._mediaGroup) {
+      for (const item of msg._mediaGroup) {
         try {
-          const { dest, name } = await downloadAttachment({ fileId, name: null });
+          // 예전엔 file_id 문자열만 담았다 — 재시작 전에 디스크에 남은 대기 메시지도 받아준다.
+          const att = typeof item === "string" ? { fileId: item, name: null } : item;
+          const { dest, name } = await downloadAttachment(att);
           notes.push(`[Attachment] Absolute path: ${dest} (filename: ${name}). Open it with the Read tool if needed.`);
         } catch (e) {
           attachFailed = true;
@@ -5105,10 +5107,10 @@ function drainQueue(chatId) {
     })
     .join("\n");
   // 마지막 메시지 필드만 남기면 앞서 온 메시지의 사진/첨부가 유실되므로, 전체 첨부를 순서대로 모아 둠
-  const fileIds = group.flatMap((item) => {
+  const atts = group.flatMap((item) => {
     if (item.msg._mediaGroup?.length) return item.msg._mediaGroup;
     const att = pickAttachment(item.msg);
-    return att ? [att.fileId] : [];
+    return att ? [att] : [];
   });
   return {
     ...group[group.length - 1].msg,
@@ -5116,7 +5118,7 @@ function drainQueue(chatId) {
     caption: undefined,
     // 줄마다 발신자를 이미 표기했으니 buildMsgMeta의 단일 [From: ] 태그(마지막 발신자 기준)는 중복이라 생략
     _merged: groupChat || undefined,
-    _mediaGroup: fileIds.length ? fileIds : undefined,
+    _mediaGroup: atts.length ? atts : undefined,
     // 전부 승인 실행이어야 plan 고정을 건너뛴다. 사용자 입력이 섞였으면 그건 아직 승인 안 된
     // 요청이라 계획부터 세우는 게 맞다 — 승인 버튼을 다시 누르면 그때는 곧장 실행된다.
     _approvedPlan: group.every((item) => item.msg._approvedPlan) || undefined,
@@ -5206,12 +5208,14 @@ function cancelHold(chatId) {
 }
 
 // 미디어 그룹(여러 장 동시 전송) — 1초 대기 후 일괄 처리
+// 사진만 모으면 안 된다. 텔레그램은 **파일로 보낸 여러 개**(문서 앨범)·동영상 묶음도 미디어 그룹으로
+// 보내는데, 예전엔 photo 만 골라서 나머지는 조용히 사라졌다 — 캡션까지 없으면 빈 메시지로 보고 아예
+// 무시했다(2026-09-17, PNG 두 장을 파일로 보냈더니 답이 없었다). 단건과 같은 pickAttachment 로 고르고,
+// 문서의 원래 파일명도 같이 들고 간다.
 function mergeMediaGroup(msgs) {
   const captions = msgs.map((m) => m.caption || "").filter(Boolean);
-  const fileIds = msgs
-    .filter((m) => m.photo?.length)
-    .map((m) => m.photo[m.photo.length - 1].file_id);
-  return { ...msgs[0], text: captions.join("\n"), caption: undefined, _mediaGroup: fileIds };
+  const atts = msgs.map(pickAttachment).filter(Boolean);
+  return { ...msgs[0], text: captions.join("\n"), caption: undefined, _mediaGroup: atts };
 }
 
 // 일반 그룹에서 '주제(Topics)'를 켜거나 관리자가 슈퍼그룹으로 올리면 텔레그램이 그 방에 채팅 ID 를
