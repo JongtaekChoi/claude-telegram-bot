@@ -1951,11 +1951,21 @@ async function greetUnknownRoom(roomKey, rawChatId, from, l) {
 
 // 봇의 가입·탈퇴(my_chat_member)는 privacy mode 와 무관하게 항상 오는 업데이트다. 초대 직후 여기서
 // 안내하면, privacy mode 가 켜져 있어 일반 대화가 봇에게 아예 닿지 않는 방에서도 chatId 를 알려줄 수 있다.
+//
+// **바로 말하지 않고 잠깐 기다린다.** 허용된 그룹에서 토픽을 켜면 슈퍼그룹으로 승격되며 새 ID 가
+// 생기는데, 새 방의 가입 알림이 승격 메시지(migrate_from_chat_id)보다 **먼저** 온다. 그 자리에서
+// 판단하면 곧 물려받을 방에 "허용 목록에 없습니다 — config 에 넣고 재시작하세요" 를 보낸다
+// (2026-09-19 가계부 봇: 안내가 나갔지만 바로 뒤에 자동 편입돼 있었다). 기다린 뒤 다시 본다.
+const MEMBER_GREET_DELAY_MS = 10_000;
 async function handleMyChatMember(upd) {
   const status = upd.new_chat_member?.status;
   if (status !== "member" && status !== "administrator") return; // 강퇴·탈퇴는 알릴 게 없다
   if (!upd.chat?.id || upd.chat.type === "private") return; // DM 의 차단/해제도 이 업데이트로 온다
   if (allowedIds.includes(String(upd.chat.id))) return; // 이미 허용된 방이면 조용히 들어간다
+  if (upd.chat.type === "supergroup") {
+    await new Promise((r) => setTimeout(r, MEMBER_GREET_DELAY_MS));
+    if (allowedIds.includes(String(upd.chat.id))) return; // 그 사이 승격으로 물려받았다
+  }
   await greetUnknownRoom(String(upd.chat.id), upd.chat.id, upd.from, langOf(upd));
 }
 
