@@ -118,7 +118,7 @@ you already trust.
 - **Session continuity** — conversations resume across restarts (`--resume`); `/new` to reset.
 - **Provider switching** — use Claude or Codex as the main agent and switch with `/provider`.
 - **Fallback handoff** — Codex can take over when Claude hits a limit and leave handoff notes.
-- **Attachments** — send photos/docs/voice/video; they're saved locally and handed to the active provider.
+- **Attachments** — send photos/docs/voice/video (round video messages and GIFs too); they're saved locally and handed to the active provider. Albums come through whole (stickers are skipped). **The agent can only open images, text and PDFs** — video and audio just land as files, so reading them needs `ffmpeg` frames or a transcription step. Telegram's Bot API caps downloads at **20 MB**.
 - **Always-on** — ships with a launchd template for macOS (auto-start, auto-restart).
 
 ## How it compares

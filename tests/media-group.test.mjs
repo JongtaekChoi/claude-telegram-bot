@@ -31,6 +31,15 @@ const doc = (id, name) => ({ document: { file_id: id, file_name: name } });
   eq("사진+동영상 섞인 앨범", m._mediaGroup.map((a) => a.fileId).join(","), "p1,v1");
 }
 {
+  const m = mergeMediaGroup([{ video_note: { file_id: "vn1" } }, { animation: { file_id: "g1", file_name: "a.gif" } }]);
+  eq("원형 영상 메시지도 첨부다", m._mediaGroup[0].fileId, "vn1");
+  eq("GIF 도 첨부다", m._mediaGroup[1].name, "a.gif");
+}
+{
+  const m = mergeMediaGroup([{ sticker: { file_id: "s1" } }]);
+  ok("스티커는 첨부로 보지 않는다", m._mediaGroup.length === 0, JSON.stringify(m._mediaGroup));
+}
+{
   const m = mergeMediaGroup([{ caption: "첨부 없음" }]);
   ok("첨부 없는 조각은 건너뛴다", Array.isArray(m._mediaGroup) && m._mediaGroup.length === 0);
 }

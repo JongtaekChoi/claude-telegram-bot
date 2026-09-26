@@ -4150,6 +4150,11 @@ function pickAttachment(msg) {
   if (msg.voice) return { fileId: msg.voice.file_id, name: null };
   if (msg.audio) return { fileId: msg.audio.file_id, name: msg.audio.file_name || null };
   if (msg.video) return { fileId: msg.video.file_id, name: msg.video.file_name || null };
+  // 동그란 영상 메시지와 GIF. 둘 다 파일로는 평범한 mp4 인데 필드 이름이 달라서 빠져 있었다 —
+  // 첨부만 보냈으면 빈 메시지로 보고 아무 답도 안 했다. (스티커는 일부러 뺀다 — 맞장구로 찍는
+  // 것이라 그때마다 세션을 돌릴 이유가 없다.)
+  if (msg.video_note) return { fileId: msg.video_note.file_id, name: null };
+  if (msg.animation) return { fileId: msg.animation.file_id, name: msg.animation.file_name || null };
   return null;
 }
 
