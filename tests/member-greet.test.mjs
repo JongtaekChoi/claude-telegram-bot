@@ -4,7 +4,7 @@
 import { cut } from "./helpers/extract.mjs";
 import { ok, report } from "./helpers/assert.mjs";
 
-const block = cut("const MEMBER_GREET_DELAY_MS =", "\n// ── 이미지 전송(아웃박스)");
+const block = cut("const MEMBER_GREET_DELAY_MS =", "\n// ── 파일 전송(아웃박스)");
 
 async function run(upd, { allowed = [], adoptDuringWait = false } = {}) {
   const allowedIds = [...allowed];

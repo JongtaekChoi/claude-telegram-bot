@@ -14,7 +14,7 @@
 // 사용자 대상 문구는 영어 기본 + 한국어(STR 테이블). 언어는 텔레그램 from.language_code 로
 // 자동 판별하고, cfg.lang 을 주면 그 언어로 고정함. 콘솔/CLI 출력은 영어 단일.
 
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
 import dns from "node:dns";
@@ -143,7 +143,7 @@ function migrateData() {
         console.error(`Persona dir missing — that room will not run: ${dir}`);
         continue;
       }
-      if (IMAGE_SEND) mkdirSync(join(dir, OUTBOX_NAME), { recursive: true }); // 에이전트가 보낼 이미지
+      if (IMAGE_SEND) mkdirSync(join(dir, OUTBOX_NAME), { recursive: true }); // 에이전트가 보낼 파일
       if (JOBS) mkdirSync(join(dir, JOBS_NAME), { recursive: true }); // 에이전트가 띄운 백그라운드 작업 기록
     }
   } catch (e) {
@@ -166,14 +166,32 @@ if (!["claude", "codex"].includes(DEFAULT_PROVIDER)) {
 }
 console.log({ ...cfg, token: cfg.token ? "<redacted>" : "(none)" });
 const TG = `https://api.telegram.org/bot${cfg.token}`;
-// 이미지 전송(아웃박스): 에이전트가 답변 끝에 [[ctb-image: 파일명 | 캡션]] 마커를 붙이면
-// bot.mjs 가 마커를 떼고 그 파일을 사진으로 전송한다. 파일은 아래 전용 폴더에서만 읽으며(basename만
+// 파일 전송(아웃박스): 에이전트가 답변 끝에 [[ctb-image: 파일명 | 캡션]] 마커를 붙이면
+// bot.mjs 가 마커를 떼고 그 파일을 전송한다. 파일은 아래 전용 폴더에서만 읽으며(basename만
 // 취해 경로탈출 불가), 작업 폴더 안에 둬서 Claude·Codex(workspace-write 샌드박스) 둘 다 쓸 수 있다.
 // 페르소나가 dir 을 가지면 작업 폴더가 방마다 달라지므로 폴더도 방마다다 → outboxDir(), workDirs().
+//
+// 종류가 셋이다. 처음엔 사진만 보냈는데, PDF·로그·녹화를 되돌려 보낼 길이 없어서 "열어보라"며 로컬
+// 경로만 적어주게 됐다 — 폰으로 보는 사람에게는 그 경로가 쓸모없다. 텔레그램이 받는 방식이 달라서
+// (사진은 다시 압축하고 문서는 원본 그대로 둔다) 마커도 종류별로 나눴다. 문서는 확장자를 가리지
+// 않는다 — 가려 봐야 무엇이 쓸모 있는지 미리 알 수 없고, 어차피 그 폴더에 **에이전트가 일부러 둔
+// 것**만 나간다. 상한은 텔레그램이 봇에 허용하는 값이다(사진 10MB, 나머지 50MB).
 const IMAGE_SEND = cfg.sendImages !== false;
 const OUTBOX_NAME = ".ctb-outbox";
-const OUTBOX_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
-const OUTBOX_MAX_BYTES = 10 * 1024 * 1024; // 텔레그램 sendPhoto 상한(대략)
+const OUTBOX_KINDS = {
+  image: { method: "sendPhoto", field: "photo", max: 10 * 1024 * 1024,
+           ext: new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]) },
+  video: { method: "sendVideo", field: "video", max: 50 * 1024 * 1024,
+           ext: new Set([".mp4", ".mov", ".m4v", ".webm"]) },
+  file:  { method: "sendDocument", field: "document", max: 50 * 1024 * 1024, ext: null },
+};
+// 확장자만 보고 종류를 고른다 — `ctb send --file` 처럼 마커 없이 들어오는 길에 쓴다.
+function outboxKindOf(name) {
+  const ext = String(name).slice(String(name).lastIndexOf(".")).toLowerCase();
+  if (OUTBOX_KINDS.image.ext.has(ext)) return "image";
+  if (OUTBOX_KINDS.video.ext.has(ext)) return "video";
+  return "file";
+}
 // 백그라운드 작업(.ctb-jobs): 텔레그램용 에이전트는 메시지마다 새 프로세스로 떴다가 답장과 함께
 // 죽는다. 에이전트가 띄운 백그라운드도 그때 같이 죽으므로, 오래 살아야 할 작업은 nohup 으로 프로세스
 // 그룹 밖에 내보내고 봇은 여기서 **생사만 지켜본다**. 봇이 자식으로 소유하면 /restart 한 번에 전부
@@ -355,6 +373,9 @@ const STR = {
       + "so far belongs to the current role.\n\nSend `/new` to drop that context, then pick again.",
     personaGone: "🎭 That role is no longer in the config.",
     dispatchIncoming: "💻 From a terminal on this machine — running it here:",
+    dispatchFilesIncoming: (n) => `💻 From a terminal on this machine — posting ${n === 1 ? "a file" : `${n} files`} here:`,
+    dispatchFilesAsk: (list) => `💻 A terminal on this machine wants to post this here:\n\n${list}\n\nGo ahead?`,
+    dispatchFilesFailed: (name, why) => `⚠️ Could not send ${name}: ${why}`,
     dispatchAsk: (body) => `💻 A terminal on this machine wants this run here:\n\n${body}\n\nGo ahead?`,
     dispatchRejected: "❌ Ignored. Nothing ran.",
     dispatchExpired: "💻 That terminal request expired without an answer (10 min).",
@@ -916,6 +937,9 @@ const STR = {
       + "말이 전부 현재 역할의 것입니다.\n\n`/new` 로 그 맥락을 버린 뒤에 다시 고르세요.",
     personaGone: "🎭 그 역할은 이제 config 에 없습니다.",
     dispatchIncoming: "💻 이 기계의 터미널에서 온 요청 — 여기서 실행합니다:",
+    dispatchFilesIncoming: (n) => `💻 이 기계의 터미널에서 ${n === 1 ? "파일을" : `파일 ${n}개를`} 보냈습니다:`,
+    dispatchFilesAsk: (list) => `💻 터미널에서 이걸 여기에 올리려고 합니다:\n\n${list}\n\n올릴까요?`,
+    dispatchFilesFailed: (name, why) => `⚠️ ${name} 을 보내지 못했습니다: ${why}`,
     dispatchAsk: (body) => `💻 터미널에서 이걸 여기서 실행하려고 합니다:\n\n${body}\n\n실행할까요?`,
     dispatchRejected: "❌ 무시했습니다. 아무것도 실행하지 않았습니다.",
     dispatchExpired: "💻 터미널 요청이 답 없이 만료됐습니다 (10분).",
@@ -1969,16 +1993,17 @@ async function handleMyChatMember(upd) {
   await greetUnknownRoom(String(upd.chat.id), upd.chat.id, upd.from, langOf(upd));
 }
 
-// ── 이미지 전송(아웃박스) ──────────────────────────────────────────────────
-// multipart/form-data 로 sendPhoto (Node 18+ 내장 FormData/Blob, 의존성 0 유지).
-async function tgSendPhoto(chatId, absPath, caption) {
+// ── 파일 전송(아웃박스) ────────────────────────────────────────────────────
+// multipart/form-data 로 sendPhoto·sendVideo·sendDocument (Node 18+ 내장 FormData/Blob, 의존성 0 유지).
+async function tgSendOutbox(chatId, kind, absPath, caption) {
+  const spec = OUTBOX_KINDS[kind] || OUTBOX_KINDS.file;
   const fd = new FormData();
   const target = tgTarget(chatId);
   fd.append("chat_id", String(target.chat_id));
   if (target.message_thread_id) fd.append("message_thread_id", String(target.message_thread_id));
   if (caption) fd.append("caption", caption.slice(0, 1024));
-  fd.append("photo", new Blob([readFileSync(absPath)]), basename(absPath));
-  const r = await fetch(`${TG}/sendPhoto`, { method: "POST", body: fd });
+  fd.append(spec.field, new Blob([readFileSync(absPath)]), basename(absPath));
+  const r = await fetch(`${TG}/${spec.method}`, { method: "POST", body: fd });
   return r.json();
 }
 
@@ -1986,23 +2011,27 @@ async function tgSendPhoto(chatId, absPath, caption) {
 // 안의 실제 파일이며 허용 확장자·크기여야 한다. 실패 시 null(전송 안 함).
 // 폴더를 방에서 받는 게 핵심이다 — 페르소나가 dir 을 가지면 에이전트가 이미지를 놓는 자리도
 // 그 폴더 안이라, 전역 한 곳만 보면 "저장했는데 안 온다"가 된다.
-function validateOutboxImage(dir, rawName, rawCap) {
+function validateOutboxItem(dir, kind, rawName, rawCap) {
   try {
+    const spec = OUTBOX_KINDS[kind];
+    if (!spec) return null;
     const name = basename(String(rawName).trim());
     if (!name || name.startsWith(".")) return null;
     const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
-    if (!OUTBOX_EXT.has(ext)) { console.warn(`Outbox: unsupported type ${name}`); return null; }
+    // 문서(file)는 확장자를 안 가린다. 사진·영상은 텔레그램이 받는 것만 — 엉뚱한 걸 사진으로
+    // 밀어 넣으면 거절당하고, 그때는 왜 안 왔는지 로그에만 남아 사람은 모른다.
+    if (spec.ext && !spec.ext.has(ext)) { console.warn(`Outbox: unsupported type ${name} (${kind})`); return null; }
     const abs = join(dir, name);
     if (!existsSync(abs)) { console.warn(`Outbox: file not found ${name} (${dir})`); return null; }
     const st = statSync(abs);
     if (!st.isFile()) return null;
-    if (st.size > OUTBOX_MAX_BYTES) { console.warn(`Outbox: too large ${name} (${st.size}B)`); return null; }
+    if (st.size > spec.max) { console.warn(`Outbox: too large ${name} (${st.size}B)`); return null; }
     // 심볼릭 링크로 폴더 밖을 가리키는 경우 차단
     const realOut = realpathSync(dir);
     const real = realpathSync(abs);
     if (real !== realOut && !real.startsWith(realOut + sep)) { console.warn(`Outbox: escapes dir ${name}`); return null; }
     const caption = rawCap ? String(rawCap).trim().slice(0, 1024) || undefined : undefined;
-    return { name, abs: real, caption };
+    return { kind, name, abs: real, caption };
   } catch (e) {
     console.warn("Outbox validate error:", e.message);
     return null;
@@ -2010,19 +2039,21 @@ function validateOutboxImage(dir, rawName, rawCap) {
 }
 
 // 답변 텍스트에서 [[ctb-image: 파일명 | 캡션]] 마커를 뽑아내고, 마커는 텍스트에서 제거한다.
-const OUTBOX_MARKER = /\[\[ctb-image:\s*([^\]|]+?)\s*(?:\|\s*([^\]]*?))?\s*\]\]/g;
-function extractOutboxImages(text, chatId) {
-  const images = [];
-  if (!IMAGE_SEND || !text || !text.includes("[[ctb-image:")) return { text: text || "", images };
+// image·video·file 셋 다 같은 모양이라 정규식 하나로 받고, 나온 순서대로 보낸다 — 에이전트가
+// "먼저 그림, 그다음 원본 CSV" 라고 쓴 순서가 방에서 뒤집히면 설명과 어긋난다.
+const OUTBOX_MARKER = /\[\[ctb-(image|video|file):\s*([^\]|]+?)\s*(?:\|\s*([^\]]*?))?\s*\]\]/g;
+function extractOutboxItems(text, chatId) {
+  const items = [];
+  if (!IMAGE_SEND || !text || !text.includes("[[ctb-")) return { text: text || "", items };
   const clean = String(text)
-    .replace(OUTBOX_MARKER, (_m, name, cap) => {
-      const img = validateOutboxImage(outboxDir(chatId), name, cap);
-      if (img) images.push(img);
+    .replace(OUTBOX_MARKER, (_m, kind, name, cap) => {
+      const item = validateOutboxItem(outboxDir(chatId), kind, name, cap);
+      if (item) items.push(item);
       return ""; // 유효하든 아니든 마커 자체는 사용자에게 노출하지 않는다
     })
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  return { text: clean, images };
+  return { text: clean, items };
 }
 
 // 에이전트 답변을 사용자에게 전달한다. 이미지 마커가 있으면 텍스트(마커 제거)를 먼저,
@@ -2030,17 +2061,17 @@ function extractOutboxImages(text, chatId) {
 async function deliver(chatId, text, opts = {}) {
   // 옆방 전달 마커를 먼저 떼고 이미지 마커를 뗀다 — 둘 다 사용자에게 보이면 안 되는 지시문이다.
   const { text: relayClean, tells } = extractRelayTells(text);
-  const { text: clean, images } = extractOutboxImages(relayClean, chatId);
+  const { text: clean, items } = extractOutboxItems(relayClean, chatId);
   let lastId = null;
-  // 텍스트가 남아 있거나(정상) 보낼 이미지가 없으면 텍스트를 보낸다.
-  // 이미지만 있고 본문이 빈 경우엔 "(empty response)" 버블을 만들지 않도록 텍스트 전송을 건너뛴다.
-  if (clean.trim() || images.length === 0) lastId = await send(chatId, clean, opts);
-  for (const img of images) {
+  // 텍스트가 남아 있거나(정상) 보낼 파일이 없으면 텍스트를 보낸다.
+  // 파일만 있고 본문이 빈 경우엔 "(empty response)" 버블을 만들지 않도록 텍스트 전송을 건너뛴다.
+  if (clean.trim() || items.length === 0) lastId = await send(chatId, clean, opts);
+  for (const item of items) {
     try {
-      const r = await tgSendPhoto(chatId, img.abs, img.caption);
-      if (!r?.ok) console.error(`sendPhoto failed (${img.name}):`, r?.description);
+      const r = await tgSendOutbox(chatId, item.kind, item.abs, item.caption);
+      if (!r?.ok) console.error(`${item.kind} send failed (${item.name}):`, r?.description);
     } catch (e) {
-      console.error(`sendPhoto error (${img.name}):`, e.message);
+      console.error(`${item.kind} send error (${item.name}):`, e.message);
     }
   }
   // 전달은 답을 다 보낸 뒤에 건다 — 대상 방에 물음이 먼저 뜨고 정작 이 방의 답이 나중에 오면
@@ -2056,13 +2087,16 @@ async function deliver(chatId, text, opts = {}) {
 }
 
 // 에이전트에게 이미지 전송법을 알려주는 시스템 프롬프트 조각.
-function imageSendInstruction(chatId) {
-  return `To send an image to this Telegram chat: save the image file into the folder ${outboxDir(chatId)} `
+function outboxInstruction(chatId) {
+  return `To send a file to this Telegram chat: save it into the folder ${outboxDir(chatId)} `
     + `(bare filename, no subfolders), then add a line at the very END of your reply in this exact form:\n`
-    + `[[ctb-image: FILENAME | optional caption]]\n`
-    + `Use only the filename (e.g. chart.png), not a path. Repeat the line for multiple images. `
-    + `Supported: png, jpg, jpeg, gif, webp, up to 10 MB each. The marker line is stripped from your `
-    + `visible reply and the file is delivered as a Telegram photo. Only do this when the user wants an image.`;
+    + `[[ctb-image: FILENAME | optional caption]]   photo — png, jpg, jpeg, gif, webp, up to 10 MB\n`
+    + `[[ctb-video: FILENAME | optional caption]]   video — mp4, mov, m4v, webm, up to 50 MB\n`
+    + `[[ctb-file: FILENAME | optional caption]]    any other file, up to 50 MB (sent as a document, `
+    + `not recompressed — use this for a PDF, a log, a zip, or an image whose exact pixels matter)\n`
+    + `Use only the filename (e.g. chart.png), not a path. Repeat the line for multiple files; they are `
+    + `sent in the order the lines appear. The marker line is stripped from your visible reply. `
+    + `Only do this when the user wants the file itself — do not attach one just to illustrate a point.`;
 }
 
 // 작업 기록에 "어느 방으로 알릴지"를 적으려면 에이전트가 방 번호를 알아야 한다. 시스템 프롬프트에
@@ -2556,7 +2590,7 @@ function runClaude(prompt, sessionId, opts = {}) {
     const handoffBlock = handoff
       ? `## CODEX FALLBACK HANDOFF\nClaude and Codex sessions are separate. The notes below summarize work Codex handled while Claude was unavailable; use them as context, not as your own prior messages.\n${handoff}`
       : null;
-    const imageHint = IMAGE_SEND ? imageSendInstruction(opts.chatId) : null;
+    const imageHint = IMAGE_SEND ? outboxInstruction(opts.chatId) : null;
     const jobHint = JOBS ? jobInstruction(opts.chatId) : null;
     // 넘길 방이 없으면 null 이라 방 하나짜리 봇은 이 토큰을 내지 않는다.
     const tellHint = ROOM_RELAY ? tellInstruction(opts.chatId) : null;
@@ -2677,7 +2711,7 @@ function runCodex(prompt, lang = "en", opts = {}) {
       const mem = loadMemory(opts.chatId);
       const context = resumeSessionId
         ? (mem ? `## RULES (must follow before anything else)\n${mem}` : "")
-        : [mem, personaPrompt(opts.chatId), cfg.appendSystemPrompt, IMAGE_SEND ? imageSendInstruction(opts.chatId) : null, JOBS ? jobInstruction(opts.chatId) : null,
+        : [mem, personaPrompt(opts.chatId), cfg.appendSystemPrompt, IMAGE_SEND ? outboxInstruction(opts.chatId) : null, JOBS ? jobInstruction(opts.chatId) : null,
            ROOM_RELAY ? tellInstruction(opts.chatId) : null].filter(Boolean).join("\n\n");
       if (context) codexPrompt = `Project instructions and persistent context:\n${context}\n\nUser request:\n${prompt}`;
     }
@@ -3693,6 +3727,7 @@ async function sendPersonaMenu(chatId, l, key) {
 // → docs/design/cli-dispatch.md
 const PENDING_DISPATCH_TTL = 10 * 60_000; // 승인 대기 상한 — 터미널이 영영 매달리지 않게 한다
 const PENDING_DISPATCH_MAX = 20; // 승인 요청이 방을 도배하지 않게 (pendingTells 와 같은 상한)
+const DISPATCH_FILES_MAX = 10; // 한 번에 올릴 파일 수 — 텔레그램 앨범 상한과 같다
 const pendingDispatch = new Map(); // id → { room, text, reply, timer }
 // 버튼 id 에 부팅 난수를 섞는다. 순번만 쓰면 재시작 뒤 같은 번호가 다시 나와서, 방에 남아 있던
 // **옛 요청의 버튼이 새 요청을 실행한다** — 사람은 A 를 읽고 B 를 승인하게 된다.
@@ -3755,6 +3790,76 @@ async function dispatchNow(room, text, reply) {
   await runDispatch(room, text, reply);
 }
 
+// `ctb send --file` — 터미널이 준 **절대 경로**를 그 방에 올린다. 에이전트를 돌리지 않는다.
+// 아웃박스 마커와 다른 점이 둘 있다. 폴더가 정해져 있지 않고(터미널이 쥔 파일은 어디에나 있다),
+// 세션도 돌지 않는다 — 스크린샷 한 장 올리자고 턴과 토큰을 쓰는 건 낭비다.
+// 경로 제한을 안 두는 근거는 cli-dispatch.md 와 같다: 소켓에 붙을 수 있는 쪽은 이미 config 도
+// 고치고 claude 도 직접 돌릴 수 있는 **신뢰 경계 안**이라, 여기서 막아도 옆으로 돌아간다.
+// 대신 승인과 "터미널에서 왔다" 표시는 글자 요청과 똑같이 받는다.
+function checkDispatchFiles(paths) {
+  const files = [];
+  for (const raw of paths) {
+    const abs = String(raw || "").trim();
+    if (!abs) return { error: "empty file path" };
+    if (!isAbsolute(abs)) return { error: `file path must be absolute: ${abs}` };
+    let st;
+    try { st = statSync(abs); } catch { return { error: `no such file: ${abs}` }; }
+    if (!st.isFile()) return { error: `not a file: ${abs}` };
+    const kind = outboxKindOf(abs);
+    const max = OUTBOX_KINDS[kind].max;
+    if (st.size > max) return { error: `too large (${Math.round(st.size / 1048576)}MB > ${max / 1048576}MB): ${abs}` };
+    files.push({ abs, kind, name: basename(abs), size: st.size });
+  }
+  return { files };
+}
+
+// 보낸 결과를 터미널에 그대로 돌려준다 — 하나라도 실패하면 어느 것이 왜 실패했는지까지.
+// 방에도 같이 알린다: 올라간 줄 알았는데 안 올라간 것이 가장 나쁘다.
+async function postDispatchFiles(room, files, caption, reply) {
+  const failed = [];
+  for (const [i, f] of files.entries()) {
+    // 캡션은 첫 파일에만 — 매 장마다 같은 줄이 붙으면 읽기 싫어진다.
+    const cap = i === 0 ? caption : undefined;
+    try {
+      const r = await tgSendOutbox(room, f.kind, f.abs, cap);
+      if (!r?.ok) failed.push({ name: f.name, why: r?.description || "unknown error" });
+    } catch (e) {
+      failed.push({ name: f.name, why: e.message });
+    }
+  }
+  for (const f of failed) await send(room, t(BOT_LANG, "dispatchFilesFailed", f.name, f.why)).catch(() => {});
+  const sent = files.length - failed.length;
+  if (failed.length) reply({ ok: false, error: `sent ${sent}/${files.length}; ${failed.map((f) => `${f.name}: ${f.why}`).join("; ")}` });
+  else reply({ ok: true, text: `sent ${sent} file${sent === 1 ? "" : "s"} to ${room}` });
+}
+
+async function dispatchFilesNow(room, files, caption, reply) {
+  await send(room, t(BOT_LANG, "dispatchFilesIncoming", files.length));
+  await postDispatchFiles(room, files, caption, reply);
+}
+
+const fileLine = (f) => `• ${f.name} (${Math.max(1, Math.round(f.size / 1024))}KB)`;
+
+async function askDispatchFiles(room, files, caption, reply) {
+  const id = `${DISPATCH_BOOT}.${++dispatchSeq}`;
+  const timer = setTimeout(() => {
+    if (!pendingDispatch.delete(id)) return;
+    reply({ ok: false, error: "approval timed out" });
+    send(room, t(BOT_LANG, "dispatchExpired")).catch(() => {});
+  }, PENDING_DISPATCH_TTL);
+  timer.unref?.();
+  pendingDispatch.set(id, { room, files, caption, reply, timer });
+  const list = [...files.map(fileLine), ...(caption ? ["", caption] : [])].join("\n");
+  await send(room, t(BOT_LANG, "dispatchFilesAsk", list), {
+    replyMarkup: {
+      inline_keyboard: [[
+        { text: t(BOT_LANG, "tellApprove"), callback_data: `dp:y:${id}` },
+        { text: t(BOT_LANG, "tellReject"), callback_data: `dp:n:${id}` },
+      ]],
+    },
+  });
+}
+
 async function askDispatch(room, text, reply) {
   const id = `${DISPATCH_BOOT}.${++dispatchSeq}`;
   const timer = setTimeout(() => {
@@ -3780,6 +3885,25 @@ async function handleDispatch(req, emit) {
   if (!room) return emit({ ok: false, error: "no room given" });
   if (!allowedIds.includes(String(baseChatId(room))))
     return emit({ ok: false, error: `room ${room} is not in allowedChatId` });
+  const paths = Array.isArray(req.files) ? req.files : null;
+  // 파일만 올리는 길은 세션을 안 거친다 — 뮤트·로컬 락·승인 대기 한도는 "그 방에서 실행하는 것"에
+  // 걸린 제한이라 여기 해당하지 않는다. 뮤트된 방에도 사람이 /tell 로 글은 보낼 수 있는 것과 같다.
+  if (paths) {
+    if (!paths.length) return emit({ ok: false, error: "no files given" });
+    if (paths.length > DISPATCH_FILES_MAX) return emit({ ok: false, error: `too many files (max ${DISPATCH_FILES_MAX})` });
+    const checked = checkDispatchFiles(paths);
+    if (checked.error) return emit({ ok: false, error: checked.error });
+    const caption = String(req.text || "").trim() || undefined;
+    const reply = (final) => emit(final);
+    if (req.now) {
+      emit({ status: "sending" });
+      await dispatchFilesNow(room, checked.files, caption, reply);
+    } else {
+      emit({ status: "awaiting-approval" });
+      await askDispatchFiles(room, checked.files, caption, reply);
+    }
+    return;
+  }
   if (!String(req.text || "").trim()) return emit({ ok: false, error: "empty message" });
   // 터미널이 쥔 방으로는 못 보낸다 — 봇이 그 방을 미루므로 세션이 끝날 때까지 큐에서 안 나온다.
   // 뮤트는 "지금 이 방은 아무것도 실행하지 마라"는 뜻이라 전달도 예외가 아니다(/tell 과 같은 규칙).
@@ -4528,6 +4652,8 @@ async function handleCallback(cq) {
     if (cq.data.startsWith("dp:n:")) {
       pending.reply({ ok: false, error: "rejected in the room" });
       await send(chatId, t(l, "dispatchRejected"));
+    } else if (pending.files) {
+      await postDispatchFiles(pending.room, pending.files, pending.caption, pending.reply);
     } else {
       await runDispatch(pending.room, pending.text, pending.reply);
     }

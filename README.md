@@ -412,7 +412,7 @@ The only keys you need to start are `token`, `allowedChatId`, `projectDir`, `cla
 | `mergeWindowMs` | (optional) Wait this long for a follow-up message and answer both at once (default: `1000`; `0` runs each message immediately). Override at runtime with `/mergewindow` (persists in state). |
 | `schedule` | (optional) Cron jobs that run a prompt on a timer — see [Scheduled tasks](#scheduled-tasks-cron) |
 | `commands` | (optional) Custom `/commands` that run shell scripts — see [Custom commands](#custom-commands) |
-| `sendImages` | (optional) Let the agent send images back to the chat via `.ctb-outbox/` (default: `true`). Set to `false` to turn the whole feature off. |
+| `sendImages` | (optional) Let the agent send files back to the chat via `.ctb-outbox/` — photos, video and documents (default: `true`). Set to `false` to turn the whole feature off. (The key keeps its old name.) |
 | `backgroundJobs` | (optional) Watch detached jobs registered in `.ctb-jobs/` and report them via `/jobs` (default: `true`). Set to `false` to turn the whole feature off. |
 | `roomRelay` | (optional) Let `/tell` and the agent hand a message to another room this bot runs (default: `true`). Set to `false` to turn the whole feature off. |
 | `cliDispatch` | (optional) Listen on a local unix socket (`.claude-bot/ctb.sock`, mode 0600) so `ctb send` can hand the running bot a message (default: `true`). Set to `false` to not open it. |
@@ -484,6 +484,17 @@ so a script can use it.
 ctb send --chat planning "draft the release note for 0.5.0"
 ```
 
+**Posting a file from the terminal.** `--file` puts a file in the room as-is, with no agent run and
+no session — a screenshot, a PDF, a recording:
+
+```sh
+ctb send --chat planning --file ~/shots/flow.png --now "the new onboarding"
+```
+
+Up to 10 files per call (repeat `--file`); photos ≤10 MB, anything else ≤50 MB; the kind is chosen by
+extension and leftover words become the caption on the first file. Approval works exactly as it does
+for a message, and a failure is reported both in the room and on stderr.
+
 The room can be its key or any distinctive part of its name. By default the target room is asked to
 approve with ✅/❌ first — the caller may well be an agent, and a process cannot tell a human-typed
 `ctb` from one a model invoked, so the safe default applies to both; `--now` skips it for unattended
@@ -540,13 +551,20 @@ and trim each side with `/memory rm`.
   HTML. If conversion ever produces invalid HTML, the message is automatically resent as plain text.
 - **Attachments**: send a photo/document/voice/video and it's downloaded into `.claude-bot/attachments/`; the
   absolute path is handed to the active provider (caption included as the message).
-- **Sending images (outgoing)**: the agent can send an image *back* to the chat. It saves the file
-  into `.ctb-outbox/` (under `projectDir`) and adds a line at the end of its reply in the form
-  `[[ctb-image: filename.png | optional caption]]`. The bot strips the marker from the visible text
-  and delivers the file as a Telegram photo (repeat the line for several images). Only bare filenames
-  inside that folder are accepted — `png/jpg/jpeg/gif/webp`, ≤10 MB; path traversal, symlinks escaping
-  the folder, and other file types are rejected. The provider learns this convention automatically via
-  the system prompt. Disable the whole feature with `"sendImages": false`.
+- **Sending files (outgoing)**: the agent can send a file *back* to the chat. It saves the file into
+  `.ctb-outbox/` (under `projectDir`) and adds a line at the end of its reply:
+
+  | Marker | Sent as | Accepts |
+  |---|---|---|
+  | `[[ctb-image: chart.png \| caption]]` | photo | png, jpg, jpeg, gif, webp — ≤10 MB |
+  | `[[ctb-video: demo.mp4 \| caption]]` | video | mp4, mov, m4v, webm — ≤50 MB |
+  | `[[ctb-file: report.pdf \| caption]]` | document | anything — ≤50 MB |
+
+  The bot strips the marker from the visible text and sends the files in the order the lines appear.
+  Use `ctb-file` when the bytes matter: a photo is recompressed by Telegram, a document is not. Only
+  bare filenames inside that folder are accepted; path traversal and symlinks escaping the folder are
+  rejected. The provider learns this convention automatically via the system prompt. Disable the whole
+  feature with `"sendImages": false`.
 - **Background jobs**: the agent runs as a fresh process per message and exits when its reply is sent —
   anything it launched in the background dies with it. So work that must outlive the reply (dev servers,
   long builds, watchers) is detached with `nohup … & disown` and registered in `.ctb-jobs/` as a

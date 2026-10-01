@@ -212,7 +212,9 @@ function dispatchInstruction(configPath, st, ownRoom) {
   return "## Handing work to this project's Telegram bot\n"
     + "The bot is running right now. From this terminal you can give it a message and it will run it\n"
     + "**in that room** — that room's own session, role and settings — and print the answer back here:\n\n"
-    + '  ctb send --chat <room> "<message>"\n\n'
+    + '  ctb send --chat <room> "<message>"\n'
+    + "You can also post a file there as-is, with no agent run and no session:\n\n"
+    + '  ctb send --chat <room> --file /abs/path.png "optional caption"\n\n'
     + "Use it to ask another room (often another role) for something you should not do yourself here.\n"
     + "It is not a way to talk to yourself: this terminal's own room is not in the list below.\n"
     + "The target room is asked to approve first — add `--now` only when the person told you to skip it.\n"
@@ -242,16 +244,32 @@ async function sendToBot(rest) {
   const configPath = resolveConfig(looksLikeConfig ? rest[0] : undefined);
   const rest2 = looksLikeConfig ? rest.slice(1) : rest;
   let room, now = false;
-  const words = [];
+  const words = [], files = [];
   for (let i = 0; i < rest2.length; i++) {
     const arg = rest2[i];
     if (arg === "--chat") room = rest2[++i];
     else if (arg.startsWith("--chat=")) room = arg.slice("--chat=".length);
+    else if (arg === "--file") files.push(rest2[++i]);
+    else if (arg.startsWith("--file=")) files.push(arg.slice("--file=".length));
     else if (arg === "--now") now = true;
     else words.push(arg);
   }
   const text = words.join(" ").trim();
-  if (!text) { process.stderr.write("ctb send: no message given\n"); process.exit(2); }
+  // `--file` 은 **그 방에 파일을 올린다.** 글자와 달리 세션을 돌리지 않는다 — 스크린샷 한 장
+  // 올리자고 턴과 토큰을 쓸 이유가 없다. 남은 말은 캡션이 된다. → docs/design/cli-dispatch.md
+  if (files.length) {
+    for (let i = 0; i < files.length; i++) {
+      const raw = files[i];
+      if (!raw) { process.stderr.write("ctb send: --file needs a path\n"); process.exit(2); }
+      const abs = resolve(raw);
+      // 여기서 먼저 보는 이유는 메시지다 — 봇이 거절해도 그 방에만 뜨고 터미널엔 경로가 안 남는다.
+      if (!existsSync(abs)) { process.stderr.write(`ctb send: no such file: ${abs}\n`); process.exit(2); }
+      files[i] = abs;
+    }
+  } else if (!text) {
+    process.stderr.write("ctb send: no message given\n");
+    process.exit(2);
+  }
 
   let st = {};
   try { st = JSON.parse(readFileSync(statePathFor(configPath), "utf8")); } catch {}
@@ -287,7 +305,7 @@ async function sendToBot(rest) {
     // error 로 이미 알린 뒤에도 close 가 뒤따라 온다 — 한 번 끝냈으면 두 번 말하지 않는다.
     let settled = false;
     const finish = (c) => { if (!settled) { settled = true; resolve(c); } };
-    conn.on("connect", () => conn.write(`${JSON.stringify({ room, text, now })}\n`));
+    conn.on("connect", () => conn.write(`${JSON.stringify({ room, text, now, ...(files.length ? { files } : {}) })}\n`));
     conn.on("data", (d) => {
       buf += d;
       let nl;
@@ -334,6 +352,9 @@ async function main() {
       `                                Hand a message to the RUNNING bot — it runs in that room,\n` +
       `                                with typing and the answer posted there. Needs \`ctb bot\` up.\n` +
       `                                Asks for approval in that room unless --now.\n` +
+      `  ctb send --chat <room> --file <path> [--file <path>] [--now] [caption]\n` +
+      `                                Post files to that room as-is — no agent, no session.\n` +
+      `                                Photos up to 10MB, anything else up to 50MB, 10 per call.\n` +
       `  ctb bot [config.json]         Start the Telegram bot daemon\n` +
       `  ctb init [dir]                Create a config.json template\n` +
       `  ctb --help | --version\n\n` +
@@ -348,6 +369,7 @@ async function main() {
       `  ctb planner.json --provider codex  Interactive Codex with its Telegram session\n` +
       `  ctb --chat -1002233445566:11  Resume that forum topic's session instead of the DM\n` +
       `  ctb send --chat 플랜 "테스트 돌려줘"   Ask the bot to run it in the 플랜 room\n` +
+      `  ctb send --chat 플랜 --file shot.png --now "방금 화면"  Post a file to that room\n` +
       `  ctb bot                       Start the bot with default config\n` +
       `  ctb bot planner.json          Start the bot with planner config`,
     );
