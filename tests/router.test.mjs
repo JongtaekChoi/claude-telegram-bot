@@ -7,16 +7,16 @@ import { ok, report } from "./helpers/assert.mjs";
 
 const block = cut("const ROUTE_QUIET_MS =", "// 에이전트에게 옆방에 메시지 넘기는 법을");
 
-let sent, handled, NOW, busyRooms;
+let sent, handled, NOW, busyRooms, menus, saved;
 
 function build({ sessions = {}, allowed = ["-100"], lastRunAt = {} } = {}) {
-  sent = []; handled = []; busyRooms = new Set();
+  sent = []; handled = []; busyRooms = new Set(); menus = []; saved = 0;
   const state = { sessions };
   const chatRuntime = new Map();
   const api = new Function(
     "state", "allowedIds", "knownRooms", "baseChatId", "tgTarget", "rt", "chatRuntime",
-    "send", "t", "handle", "Date",
-    `${block}\nreturn { routerSiblings, routeShortLabel, routePreview, askRoute, runRoute, routeInFlow, pendingRoutes, ROUTE_QUIET_MS };`,
+    "send", "t", "handle", "Date", "chatBucket", "saveState", "sendMenu",
+    `${block}\nreturn { routerSiblings, routerDesk, routerOff, routeShouldAsk, handleRouter, deskGuardInstruction, routeShortLabel, routePreview, askRoute, runRoute, routeInFlow, pendingRoutes, ROUTE_QUIET_MS };`,
   )(
     state, allowed,
     () => Object.entries(sessions)
@@ -34,6 +34,9 @@ function build({ sessions = {}, allowed = ["-100"], lastRunAt = {} } = {}) {
     (l, k, ...a) => `${k}(${a.join("|")})`,
     async (msg) => { handled.push(msg); },
     { now: () => NOW },
+    (room) => (sessions[String(room)] ||= {}),
+    () => { saved++; },
+    async (id, text, markup) => { menus.push({ id, text, markup }); },
   );
   return api;
 }
@@ -118,10 +121,14 @@ const FORUM = {
   await a.askRoute("-100", { text: "이거 고쳐줘" }, "ko", a.routerSiblings("-100"));
   ok("버튼: 1건만 보낸다", sent.length === 1, String(sent.length));
   const rows = sent[0].markup.inline_keyboard;
-  ok("버튼: 토픽 2개씩 줄바꿈 + 마지막 줄", rows.length === 3, JSON.stringify(rows.map((r) => r.length)));
-  const last = rows[rows.length - 1];
+  ok("버튼: 토픽 2개씩 줄바꿈 + 마지막 두 줄", rows.length === 4, JSON.stringify(rows.map((r) => r.length)));
+  const last = rows[rows.length - 2];
   ok("버튼: [여기서 실행]·[안 보냄]", last.length === 2
     && last[0].callback_data.endsWith(":here") && last[1].callback_data.endsWith(":x"), JSON.stringify(last));
+  // 끄는 길은 이 질문에서만 알 수 있다 — 안내 문구 대신 버튼으로 준다.
+  const off = rows[rows.length - 1];
+  ok("버튼: [그만 묻기] 가 자기 줄에 붙는다", off.length === 1 && off[0].callback_data === "rr:off",
+     JSON.stringify(off));
   const cbs = rows.slice(0, 2).flat().map((b) => b.callback_data);
   ok("버튼: 목적지가 방 키를 싣는다",
     cbs.every((c) => /^rt:\d+:-100:\d+$/.test(c)), JSON.stringify(cbs));
@@ -182,6 +189,111 @@ const FORUM = {
   ok("보류는 20개까지만 쌓인다", a.pendingRoutes.size <= 20, String(a.pendingRoutes.size));
   ok("오래된 것부터 밀려난다", !a.pendingRoutes.has("1"));
   ok("최근 것은 남는다", a.pendingRoutes.has("25"));
+}
+
+// ── 묻는 방인가 (routerDesk) ─────────────────────────────────────────────
+{
+  const a = build({ sessions: FORUM });
+  ok("접수처: 포럼 상위 토픽", a.routerDesk("-100"));
+  ok("접수처 아님: 토픽 방", !a.routerDesk("-100:35"));
+  ok("접수처 아님: 포럼이 아닌 그룹", !a.routerDesk("-200"));
+  ok("접수처 아님: DM", !a.routerDesk("688"));
+}
+
+// ── 끄는 스위치 (routerOff) ──────────────────────────────────────────────
+{
+  ok("기본은 켜짐", !build({ sessions: FORUM }).routerOff("-100"));
+  ok('"off" 면 꺼진다', build({ sessions: { "-100": { ...FORUM["-100"], router: "off" } } }).routerOff("-100"));
+  // 모르는 값은 **묻는 쪽**으로 실패해야 한다 — state.json 손편집이 보호를 조용히 없애면 안 된다.
+  for (const bad of ["on", "OFF", true, 1, "", null]) {
+    ok(`${JSON.stringify(bad)} 는 끄지 않는다`,
+       !build({ sessions: { "-100": { ...FORUM["-100"], router: bad } } }).routerOff("-100"));
+  }
+}
+
+// ── 물어야 하나 (routeShouldAsk) — 예전엔 게이트 안에 있어 테스트가 없던 자리 ──
+{
+  const a = build({ sessions: FORUM });
+  NOW = 2_000_000_000_000;
+  ok("평소엔 묻는다", a.routeShouldAsk("-100", { text: "x" }));
+  ok("되넣은 말은 안 묻는다 (_router)", !a.routeShouldAsk("-100", { _router: true }));
+  ok("주소가 정해져 온 말은 안 묻는다 (_relay)", !a.routeShouldAsk("-100", { _relay: "-100:35" }));
+}
+{
+  NOW = 2_000_000_000_000;
+  const a = build({ sessions: FORUM, lastRunAt: { "-100": NOW - 60_000 } });
+  ok("조용한 창 안이면 안 묻는다", !a.routeShouldAsk("-100", { text: "x" }));
+}
+{
+  NOW = 2_000_000_000_000;
+  const a = build({ sessions: { "-100": { ...FORUM["-100"], router: "off" }, "-100:35": FORUM["-100:35"] } });
+  ok("꺼진 방은 안 묻는다", !a.routeShouldAsk("-100", { text: "x" }));
+  ok("꺼져도 형제 목록은 그대로 — /router 가 보여줘야 한다", a.routerSiblings("-100").length === 1);
+}
+
+// ── /router ──────────────────────────────────────────────────────────────
+{
+  const sessions = structuredClone(FORUM);
+  const a = build({ sessions });
+  await a.handleRouter("-100", "off", "ko");
+  ok("off: state 에 적는다", sessions["-100"].router === "off");
+  ok("off: 저장한다", saved === 1, String(saved));
+  ok("off: 방에 알린다", sent.length === 1 && sent[0].text === "routerTurnedOff()", JSON.stringify(sent));
+  await a.handleRouter("-100", "on", "ko");
+  ok("on: 필드를 지운다 (false 로 남기지 않는다)", sessions["-100"].router === undefined);
+  ok("on: 방에 알린다", sent[1].text === "routerTurnedOn()");
+}
+{
+  const sessions = structuredClone(FORUM);
+  const a = build({ sessions });
+  await a.handleRouter("-100", "", "ko");
+  ok("인자 없음: 메뉴로 상태를 보여준다", menus.length === 1, JSON.stringify(menus));
+  ok("인자 없음: 버튼은 하나 (반대 상태로)", menus[0].markup.inline_keyboard[0].length === 1);
+  ok("인자 없음: 켜져 있으면 끄는 버튼", menus[0].markup.inline_keyboard[0][0].callback_data === "rr:off");
+  ok("인자 없음: 형제 토픽을 같이 보여준다", menus[0].text.includes("기획"), menus[0].text);
+  ok("인자 없음: state 를 안 건드린다", saved === 0 && sessions["-100"].router === undefined);
+}
+{
+  const sessions = { "-100": { ...FORUM["-100"], router: "off" }, "-100:35": FORUM["-100:35"] };
+  const a = build({ sessions });
+  await a.handleRouter("-100", "", "ko");
+  ok("꺼져 있으면 켜는 버튼", menus[0].markup.inline_keyboard[0][0].callback_data === "rr:on");
+}
+{
+  const sessions = structuredClone(FORUM);
+  const a = build({ sessions });
+  await a.handleRouter("-100:35", "off", "ko");
+  await a.handleRouter("688", "off", "ko");
+  ok("접수처가 아닌 방: 거절", sent.every((s) => s.text === "routerNotDesk()"), JSON.stringify(sent));
+  ok("접수처가 아닌 방: state 를 안 건드린다", saved === 0 && sessions["-100:35"].router === undefined);
+}
+{
+  // 토픽이 아직 없는 상위 방에서도 미리 꺼둘 수 있다 — 나중에 토픽이 생기면 그대로 적용된다.
+  const sessions = { "-100": { title: "봇유지보수", forum: true } };
+  const a = build({ sessions });
+  await a.handleRouter("-100", "off", "ko");
+  ok("형제가 없어도 끌 수 있다", sessions["-100"].router === "off" && saved === 1);
+}
+
+// ── 꺼진 방에 붙는 시스템 프롬프트 ───────────────────────────────────────
+{
+  const a = build({ sessions: FORUM });
+  ok("켜진 방에는 안 붙는다 (버튼으로 이미 묻는다)", a.deskGuardInstruction("-100") === null);
+}
+{
+  const a = build({ sessions: { "-100": { ...FORUM["-100"], router: "off" }, "-100:35": FORUM["-100:35"] } });
+  const g = a.deskGuardInstruction("-100");
+  ok("꺼진 방에는 붙는다", typeof g === "string" && g.length > 0);
+  ok("도구를 쓰기 전에 판단하라고 시킨다", /Before you do anything/.test(g), String(g).slice(0, 80));
+  ok("넘기는 길까지 알려준다", /ctb-tell/.test(g));
+}
+{
+  const a = build({ sessions: { "-100": { title: "봇유지보수", forum: true, router: "off" } } });
+  ok("형제가 없으면 안 붙는다 (헷갈릴 방이 없다)", a.deskGuardInstruction("-100") === null);
+}
+{
+  const a = build({ sessions: { "-100:35": { ...FORUM["-100:35"], router: "off" } } });
+  ok("토픽 방에는 안 붙는다", a.deskGuardInstruction("-100:35") === null);
 }
 
 report();

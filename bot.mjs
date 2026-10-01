@@ -285,6 +285,7 @@ const STR = {
       "• /persona — the role this room runs as, and the prompt behind it · change it at /new\n" +
       "• /tell <room> <message> — hand a message to another room this bot runs · /tell alone lists them\n" +
       "• /rooms — rooms this bot knows · rm <n> drops ones you no longer use · sweep finds topics deleted in Telegram\n" +
+      "• /router — forum parent topic: asks which room a message is for · off stops asking there\n" +
       "• /compact — compress context to free up space (keeps the session)\n" +
       "• /plan <request> — plan only (no edits), then approve/cancel to run for real\n" +
       "• /plan on|off — pin plan mode to this room until you turn it off\n" +
@@ -468,6 +469,21 @@ const STR = {
     routeCanceled: "❌ Dropped — nothing ran.",
     routeExpired: "That prompt is gone (the bot restarted). Send it again.",
     routeMuted: (room) => `📨 ${room} is muted (\`/*\`). Nothing was sent — unmute it there with \`*/\` first.`,
+    routerOffBtn: "🔕 Stop asking here",
+    routerOnBtn: "📮 Ask again here",
+    routerStatus: (off, siblings) =>
+      (off
+        ? "🔕 This parent topic does **not** ask — messages run here.\nThe agent is told to check first and ask if something looks like another topic's business.\n"
+        : "📮 This parent topic asks which room a message is for.\nIt stays quiet for 10 minutes after each run, so a conversation in progress is not interrupted.\n")
+      + (siblings.length ? `\nTopics it offers: ${siblings.join(" · ")}` : "\nNo sibling topics yet, so nothing would be asked today."),
+    routerTurnedOff:
+      "🔕 This room will stop asking. Messages typed here now run here.\n" +
+      "The agent is told to check the context first and ask before acting when something looks like another topic's business — " +
+      "but a request that fits any room (\"run the tests\") will just run. `/router on` puts the buttons back.",
+    routerTurnedOn: "📮 Asking is back on — this room will ask which topic a message is for.",
+    routerNotDesk:
+      "`/router` only does something in a forum group's **parent topic** — that is the only room where a message " +
+      "meant for somewhere else lands by accident. This room is already a destination.",
     allowHeader: "🔐 Chats allowed to use this bot",
     allowFooter:
       "Add: /allow <chatId> · Remove: /allow rm <chatId>\n" +
@@ -534,6 +550,7 @@ const STR = {
       `• Model: ${i.model}\n` +
       `• Fallback: ${i.fallback}\n` +
       (i.persona ? `• Role: ${i.persona}\n` : "") +
+      (i.routerOff ? "• Parent-topic desk: off (not asking here)\n" : "") +
       `• Session: ${i.hasSession ? "active" : "none (fresh)"}\n` +
       `• Scheduled jobs: ${i.jobs}\n` +
       `• Project: ${i.projectDir}\n` +
@@ -660,6 +677,7 @@ const STR = {
       "• /persona — 이 방이 어떤 역할로 도는지와 그 프롬프트 본문 · 바꾸는 건 /new 에서\n" +
       "• /tell <방> <메시지> — 이 봇이 맡은 다른 방으로 메시지 넘기기 · /tell 만 보내면 방 목록\n" +
       "• /rooms — 이 봇이 아는 방 목록 · rm <번호> 로 정리 · sweep 은 텔레그램에서 지운 토픽을 찾아 뺍니다\n" +
+      "• /router — 포럼 상위 토픽에서 어디로 보낼지 묻습니다 · off 로 그만 묻게 합니다\n" +
       "• /compact — 컨텍스트 압축 (세션 유지, 공간 확보)\n" +
       "• /plan <요청> — 계획만 세우기 (편집 없음) → 승인/취소로 실제 실행\n" +
       "• /plan on|off — 끌 때까지 이 방을 plan 모드로 고정\n" +
@@ -729,6 +747,21 @@ const STR = {
     routeCanceled: "❌ 보내지 않았습니다 — 아무것도 실행되지 않았습니다.",
     routeExpired: "그 메시지는 사라졌습니다 (봇이 재시작했습니다). 다시 보내주세요.",
     routeMuted: (room) => `📨 ${room} 은 뮤트 상태입니다 (\`/*\`). 아무것도 보내지 않았습니다 — 그 방에서 \`*/\` 로 먼저 푸세요.`,
+    routerOffBtn: "🔕 이 방에선 그만 묻기",
+    routerOnBtn: "📮 다시 묻게 하기",
+    routerStatus: (off, siblings) =>
+      (off
+        ? "🔕 이 상위 토픽은 **묻지 않습니다** — 여기서 그대로 실행됩니다.\n대신 에이전트가 먼저 맥락을 보고, 다른 토픽 얘기 같으면 실행 전에 되묻습니다.\n"
+        : "📮 이 상위 토픽은 어느 방으로 보낼지 묻습니다.\n한 번 실행한 뒤 10분 동안은 묻지 않습니다 — 이어지는 대화를 끊지 않으려고요.\n")
+      + (siblings.length ? `\n목적지로 내주는 토픽: ${siblings.join(" · ")}` : "\n아직 형제 토픽이 없어서 지금은 물을 일도 없습니다."),
+    routerTurnedOff:
+      "🔕 이 방은 이제 묻지 않습니다. 여기서 친 말은 여기서 실행됩니다.\n" +
+      "대신 에이전트가 먼저 맥락을 보고 다른 토픽 얘기 같으면 되묻도록 해뒀습니다 — 다만 \"테스트 돌려줘\" 처럼 " +
+      "어느 방에서나 말이 되는 요청은 그냥 실행됩니다. 되돌리려면 `/router on`.",
+    routerTurnedOn: "📮 다시 묻습니다 — 이 방에서 친 말은 어느 토픽으로 보낼지 물어봅니다.",
+    routerNotDesk:
+      "`/router` 는 포럼 그룹의 **상위 토픽**에서만 쓸모가 있습니다 — 다른 방에 갈 말이 실수로 떨어지는 자리가 거기뿐입니다. " +
+      "이 방은 그 자체가 목적지입니다.",
     allowHeader: "🔐 이 봇을 쓸 수 있는 방",
     allowFooter:
       "추가: /allow <chatId> · 삭제: /allow rm <chatId>\n" +
@@ -794,6 +827,7 @@ const STR = {
       `• 모델: ${i.model}\n` +
       `• 폴백: ${i.fallback}\n` +
       (i.persona ? `• 역할: ${i.persona}\n` : "") +
+      (i.routerOff ? "• 접수처: 꺼짐 (이 방에선 안 물어봄)\n" : "") +
       `• 세션: ${i.hasSession ? "이어가는 중" : "없음 (새 세션)"}\n` +
       `• 예약 작업: ${i.jobs}개\n` +
       `• 작업 폴더: ${i.projectDir}\n` +
@@ -1289,6 +1323,7 @@ const COMMANDS = {
     { command: "persona", description: "The role this room runs as, and the prompt behind it" },
     { command: "tell", description: "Hand a message to another room this bot runs · lists rooms if used alone" },
     { command: "rooms", description: "Rooms this bot knows · rm <n> drops them · sweep finds deleted topics" },
+    { command: "router", description: "Forum parent topic: ask which room a message is for · off stops asking" },
     { command: "compact", description: "Compress context to free up space (keeps session)" },
     { command: "plan", description: "Plan only (no edits) · on|off to pin plan mode to this room" },
     { command: "ollama", description: "Toggle Ollama chat mode (bypass Claude, use local LLM)" },
@@ -1317,6 +1352,7 @@ const COMMANDS = {
     { command: "persona", description: "이 방이 어떤 역할로 도는지와 그 프롬프트 본문" },
     { command: "tell", description: "이 봇이 맡은 다른 방으로 메시지 넘기기 · 인자 없으면 방 목록" },
     { command: "rooms", description: "이 봇이 아는 방 목록 · rm <번호>로 정리 · sweep으로 지운 토픽 청소" },
+    { command: "router", description: "포럼 상위 토픽에서 어디로 보낼지 묻기 · off 로 그만 묻기" },
     { command: "compact", description: "컨텍스트 압축 (세션 유지, 공간 확보)" },
     { command: "plan", description: "계획만 세우기 (편집 없음) · on|off 로 이 방에 고정" },
     { command: "ollama", description: "Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM)" },
@@ -2272,12 +2308,29 @@ const ROUTE_QUIET_MS = 10 * 60 * 1000;
 // 재시작은 대화가 끊긴 자리다.
 const routeInFlow = (chatId) => Date.now() - (rt(chatId).lastRunAt || 0) < ROUTE_QUIET_MS;
 
+// 접수처가 될 수 있는 방인가 — 포럼 그룹의 상위 토픽. 형제가 있는지와는 별개다(`/router` 는
+// 토픽이 아직 없는 상위 방에서도 미리 꺼둘 수 있어야 한다).
+function routerDesk(chatId) {
+  const key = String(chatId);
+  if (!state.sessions?.[key]?.forum) return false; // 포럼이 아니면 상위/토픽 구분 자체가 없다
+  return key === String(baseChatId(key)); // 토픽 방은 그 자체가 목적지다
+}
+
 function routerSiblings(chatId) {
   const key = String(chatId);
-  if (!state.sessions?.[key]?.forum) return []; // 포럼이 아니면 상위/토픽 구분 자체가 없다
-  if (key !== String(baseChatId(key))) return []; // 토픽 방은 그 자체가 목적지다
+  if (!routerDesk(key)) return [];
   return knownRooms().filter((r) => r.room !== key && String(baseChatId(r.room)) === key);
 }
+
+// 방별 스위치. 기본이 "묻는다"라 **끈 방에만** 필드가 생긴다(planLock 과 같은 모양).
+// 정확히 "off" 일 때만 끈다 — state.json 을 손으로 고치다 생긴 엉뚱한 값이 보호를 조용히
+// 없애면 안 된다. 모르는 값은 "묻는 쪽"으로 실패하는 게 맞다.
+const routerOff = (chatId) => state.sessions?.[String(chatId)]?.router === "off";
+
+// 게이트가 묻는 건 "형제가 있나"가 아니라 "물어야 하나"다. 네 조건을 한자리에 모아 둬야
+// 테스트가 덮는다 — 게이트 자리(handle 안)는 하네스가 떼어낼 수 없다.
+const routeShouldAsk = (chatId, msg) =>
+  !msg._router && !msg._relay && !routeInFlow(chatId) && !routerOff(chatId);
 
 // 버튼에는 그룹 이름을 뗀 토픽 이름만 남긴다 — 「봇유지보수 / 구현」 이 넷이면 앞부분이 전부 같아서
 // 정작 구별해야 할 뒷부분이 잘린다.
@@ -2312,9 +2365,42 @@ async function askRoute(chatId, msg, l, rooms) {
     { text: t(l, "routeHereBtn"), callback_data: `rt:${id}:here` },
     { text: t(l, "routeCancelBtn"), callback_data: `rt:${id}:x` },
   ]);
+  // 끄는 길은 **여기서만** 알 수 있다. 안내 문구를 한 줄 더 붙이면 모든 질문마다 읽히고 평생 한 번
+  // 쓰이는데, 버튼은 성가심을 느끼는 바로 그 자리에 있고 누르는 것이 곧 그 동작이다.
+  rows.push([{ text: t(l, "routerOffBtn"), callback_data: "rr:off" }]);
   // sendMenu 가 아니라 send 다. 뒤이어 또 말을 걸면 dropLiveMenu 가 이 버튼을 걷어가는데,
   // 그러면 붙잡아 둔 말이 손댈 방법 없이 사라진다 — 조용히 잃는 것이 이 기능이 막으려는 바로 그것이다.
   await send(chatId, t(l, "routeAsk", routePreview(msg, l)), { replyMarkup: { inline_keyboard: rows } });
+}
+
+// `/router` — 이 방에서 접수처를 켜고 끈다. 설계는 명령 없이 자동 판정만 두었는데(그래야 켜는 걸
+// 잊어 사고가 나는 일이 없다), **끄는 쪽**은 상위 토픽에서 일부러 일하는 사람에게 매번 탭을
+// 물리는 값이 실제로 커서 열어 준다. 기본은 그대로 자동이다. → docs/design/room-router.md
+async function handleRouter(chatId, arg, l) {
+  if (!routerDesk(chatId)) {
+    // 조용한 무시는 폰에서 죽은 봇과 구분이 안 된다. 왜 여기선 쓸 일이 없는지 말해 준다.
+    await send(chatId, t(l, "routerNotDesk"));
+    return;
+  }
+  const parent = state.sessions?.[String(chatId)]?.title;
+  const siblings = routerSiblings(chatId).map((r) => routeShortLabel(r.title, parent));
+  if (!arg) {
+    const off = routerOff(chatId);
+    await sendMenu(chatId, t(l, "routerStatus", off, siblings), {
+      inline_keyboard: [[
+        off
+          ? { text: t(l, "routerOnBtn"), callback_data: "rr:on" }
+          : { text: t(l, "routerOffBtn"), callback_data: "rr:off" },
+      ]],
+    });
+    return;
+  }
+  const off = arg === "off";
+  chatBucket(chatId).router = off ? "off" : undefined;
+  saveState(state);
+  // 끈 사실은 방에 남겨야 한다. 보호가 사라진 걸 나중에 이 방에 온 사람도 알아야 하고,
+  // 되돌리는 법을 같이 적어야 잘못 누른 사람이 한 번에 돌아온다.
+  await send(chatId, t(l, off ? "routerTurnedOff" : "routerTurnedOn"));
 }
 
 // 주소만 고쳐 그 방에 넣는다. `/tell` 과 달리 머리말도 `_relay` 도 붙이지 않는다 — 전달이 아니라
@@ -2334,6 +2420,29 @@ async function runRoute(msg, to) {
     _drained: true,  // 병합 창에 다시 붙잡히지 않게
   };
   await handle(moved);
+}
+
+// 접수처를 끈 상위 토픽에만 붙는 시스템 프롬프트 조각.
+//
+// 버튼으로 묻는 걸 끄면 그 방은 **맨몸**이 된다 — 토픽에 갈 말이 상위 세션에서 조용히 실행되는,
+// 접수처가 막으려던 원래 사고가 그대로 돌아온다. 그래서 끈 방에는 약한 그물이라도 남긴다:
+// 사람에게 탭을 물리는 대신 **에이전트에게 먼저 확인하라고** 시킨다.
+//
+// 시스템 프롬프트는 턴이 시작될 때 읽히므로, 이 검사는 **도구를 쓰기 전에** 온다 — 파일을 고친
+// 뒤에 "이 방 얘기가 아니네요" 하는 것과는 다르다. 다만 강제가 아니라 지시라서 100% 는 아니고,
+// "테스트 돌려줘" 처럼 **어느 방에서나 말이 되는 요청**은 애초에 걸러지지 않는다. 그건 버튼을
+// 끄기로 한 대가다. 넘길 방 이름은 tellInstruction 이 이미 싣고 있어 여기서 또 싣지 않는다.
+//
+// 켜 둔 방에는 안 붙인다. 버튼으로 이미 묻는데 에이전트까지 되물으면 한 말에 두 번 걸린다.
+function deskGuardInstruction(chatId) {
+  if (!routerDesk(chatId) || !routerOff(chatId)) return null;
+  if (!routerSiblings(chatId).length) return null; // 형제가 없으면 헷갈릴 방도 없다
+  return `This room is a forum group's parent topic ("All" view). People land here by default, so a `
+    + `message typed here is often meant for one of the sibling topics listed above, not for this room.\n`
+    + `Before you do anything — before reading files, running commands, or editing — judge whether the `
+    + `request plainly belongs to this room's own ongoing context. If it does not, do NOT act on it: say `
+    + `which room it looks like it belongs to and ask. If the person confirms, hand it over with the `
+    + `[[ctb-tell: ROOM | MESSAGE]] marker above. When the request clearly fits this room, just proceed.`;
 }
 
 // 에이전트에게 옆방에 메시지 넘기는 법을 알려주는 시스템 프롬프트 조각.
@@ -2594,7 +2703,9 @@ function runClaude(prompt, sessionId, opts = {}) {
     const jobHint = JOBS ? jobInstruction(opts.chatId) : null;
     // 넘길 방이 없으면 null 이라 방 하나짜리 봇은 이 토큰을 내지 않는다.
     const tellHint = ROOM_RELAY ? tellInstruction(opts.chatId) : null;
-    const appendSys = [memoryBlock, handoffBlock, personaPrompt(opts.chatId), brevity, modelHint, imageHint, jobHint, tellHint].filter(Boolean).join("\n\n");
+    // 접수처를 끈 상위 토픽에만 — 넘길 방 목록(tellHint) **뒤**라야 "위에 적힌 방" 이 가리킬 게 있다.
+    const deskHint = ROOM_RELAY ? deskGuardInstruction(opts.chatId) : null;
+    const appendSys = [memoryBlock, handoffBlock, personaPrompt(opts.chatId), brevity, modelHint, imageHint, jobHint, tellHint, deskHint].filter(Boolean).join("\n\n");
     if (appendSys) args.push("--append-system-prompt", appendSys);
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
@@ -2712,7 +2823,7 @@ function runCodex(prompt, lang = "en", opts = {}) {
       const context = resumeSessionId
         ? (mem ? `## RULES (must follow before anything else)\n${mem}` : "")
         : [mem, personaPrompt(opts.chatId), cfg.appendSystemPrompt, IMAGE_SEND ? outboxInstruction(opts.chatId) : null, JOBS ? jobInstruction(opts.chatId) : null,
-           ROOM_RELAY ? tellInstruction(opts.chatId) : null].filter(Boolean).join("\n\n");
+           ROOM_RELAY ? tellInstruction(opts.chatId) : null, ROOM_RELAY ? deskGuardInstruction(opts.chatId) : null].filter(Boolean).join("\n\n");
       if (context) codexPrompt = `Project instructions and persistent context:\n${context}\n\nUser request:\n${prompt}`;
     }
 
@@ -4570,7 +4681,11 @@ async function handleCallback(cq) {
   }
   // 세션 목록은 확인 버튼이 아니라 메뉴다 — 하나 골랐다고 끝이 아니라 되돌아가서 또 고른다.
   // 그래서 1회용 잠금과 버튼 제거에서 빼둔다. 세션 전환은 몇 번을 눌러도 결과가 같아 안전하다.
-  const menu = cq.data?.startsWith("ss:");
+  //
+  // `rr:`(접수처 켜고 끄기)도 같이 뺀다. 이 버튼은 접수처 질문과 **한 키보드에 있어서**, 잠그면
+  // 붙잡아 둔 말의 목적지 버튼까지 같이 걷힌다 — 그 말은 손댈 방법 없이 사라진다. 조용히 잃는
+  // 것이 접수처가 막으려는 바로 그것이라, 여기서 그걸 만들면 안 된다. 두 번 눌러도 결과는 같다.
+  const menu = cq.data?.startsWith("ss:") || cq.data?.startsWith("rr:");
   const kbKey = `${chatId}:${cq.message.message_id}`;
   if (!menu) {
     if (handledKeyboards.has(kbKey)) {
@@ -4613,6 +4728,8 @@ async function handleCallback(cq) {
     await handleProvider(chatId, cq.data.slice(3), l);
   } else if (cq.data?.startsWith("pl:")) {
     await handlePlanLock(chatId, cq.data.slice(3), l);
+  } else if (cq.data?.startsWith("rr:")) {
+    await handleRouter(chatId, cq.data.slice(3), l);
   } else if (cq.data?.startsWith("md:")) {
     const sep = cq.data.indexOf(":", 3);
     await handleModel(chatId, cq.data.slice(sep + 1), l, cq.data.slice(3, sep));
@@ -4794,6 +4911,8 @@ async function handle(msg) {
         name: cfg.name || "claude-telegram-bot",
         // 페르소나를 안 쓰는 봇에는 줄 자체가 안 붙는다 — /status 는 이미 길다.
         persona: roomPersona(chatId)?.name,
+        // 끄고 잊는 걸 막는 유일한 자리다 — 나중에 이 방에 온 사람도 보호가 꺼진 걸 본다.
+        routerOff: routerDesk(chatId) && routerOff(chatId),
         model: currentModel(chatId) || (currentProvider(chatId) === "codex" ? cfg.codexModel : cfg.model)
           || (l === "ko" ? "(기본값)" : "(default)"),
         fallback: currentProvider(chatId) === "codex"
@@ -4851,6 +4970,11 @@ async function handle(msg) {
   }
   if (text === "/rooms" || text.startsWith("/rooms ")) {
     await handleRooms(chatId, text.slice("/rooms".length).trim(), l);
+    return;
+  }
+  // 게이트보다 위라 접수처에서도 즉시 동작한다 — 묻는 메시지를 기다리지 않고 끌 수 있어야 한다.
+  if (text === "/router" || text.startsWith("/router ")) {
+    await handleRouter(chatId, text.slice("/router".length).trim().toLowerCase(), l);
     return;
   }
   if (text === "/tell" || text.startsWith("/tell ")) {
@@ -5087,7 +5211,7 @@ async function handle(msg) {
   // `_relay` 는 건너뛴다 — /tell 과 `ctb send` 는 이미 사람이 주소를 정해서 들어온 말이다.
   // (문서는 `_drained` 메시지에만 걸라고 적었지만, 그러면 병합 창을 끈 방에서 게이트가 통째로
   //  안 걸린다. 자리는 문서대로 창 뒤에 두되 조건에서 `_drained` 는 뺐다.)
-  if (!msg._router && !msg._relay && !routeInFlow(chatId)) {
+  if (routeShouldAsk(chatId, msg)) {
     const siblings = routerSiblings(chatId);
     if (siblings.length) {
       await askRoute(chatId, msg, l, siblings);
