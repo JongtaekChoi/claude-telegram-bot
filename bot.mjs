@@ -5220,6 +5220,10 @@ async function handle(msg) {
     r.typing = null;
     r.stopping = false;
     r.busy = false;
+    // 접수처의 조용한 창은 **끝에도** 찍어야 한다. 위 시작 스탬프만 있으면 10분 넘게 걸린 작업이
+    // 끝나자마자 이어 말할 때 "시작한 지 20분"이라 창 밖이 되어, 대화가 한창인데 또 묻는다.
+    // 주석과 설계 문서는 처음부터 양쪽에 찍는다고 적었는데 이 한 줄이 빠져 있었다(2026-10-01).
+    r.lastRunAt = Date.now();
     if (r.queue.length > 0 && !roomRateLimited(chatId)) setImmediate(() => handle(drainQueue(chatId)));
   }
 }
