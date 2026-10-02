@@ -277,6 +277,7 @@ Core commands:
 | `/jobs` | Background jobs that outlive replies — ▶ running, ✅ finished |
 | `/persona` | The role this room runs as, and the prompt behind it (view only — you change it from the buttons at `/new`) |
 | `/persona set` | In a **group**: which roles that group may use. Every topic in it picks from this set and the first one is the default; a room already running as a role keeps it. Tap to add or drop |
+| `/persona add\|edit\|rm` | **Owner, in a DM**: write a role's prompt without touching `config.json`. First line the id, then the display name, then the prompt. Takes effect with no restart |
 | `/tell [room] [message]` | Hand a message to another room this bot runs — it executes there, with that room's session. Sent bare, it lists the rooms |
 | `/rooms` | Rooms this bot knows · `rm <n>` drops them · `sweep` clears out deleted topics → [details below](#tidying-the-room-list-rooms) |
 | `/router [on\|off]` | Only in a forum's **parent topic**: show whether it asks which room a message is for · `off` stops asking there (anyone in the room can flip it; the room is told) |
@@ -803,6 +804,16 @@ Picking applies that role's prompt **and its own `/remember` memory** (`memory.d
 
 `/status` shows the room's role in one line; `/persona` shows the prompt behind it. Neither changes
 it. With no `personas` key nothing changes at all — `persona` keeps working exactly as before.
+
+**You can write a role from your phone.** `/persona add` in a direct chat with the bot (owner only)
+saves it to `.claude-bot/personas/<id>.md` — first line the display name, the rest the prompt — and it
+shows up with no restart. The bot never writes `config.json`: a broken config has no guard at boot, so
+it would crash-loop with SSH as the only way back, and that is the one thing a feature meant for remote
+management must not create. A broken role *file* just drops that one role. So the two halves live apart:
+the **definition** (id, name, prompt) is content the bot owns, while the **permissions** (`dir`,
+`permissionMode`) stay in `config.json` where only you can set them — a role invented in chat never
+widens what the bot may touch. `config` and the folder are merged at boot, and on an id clash config
+wins, so a role you wrote by hand can always be fixed by hand.
 
 **A group can narrow the list.** `/persona set` in a group picks which roles that group may use;
 every topic inside it then picks from that set, and the set's first role is that group's default.

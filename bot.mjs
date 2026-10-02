@@ -216,12 +216,42 @@ const SOCK_PATH = join(BOT_DIR, stateBase === "config" ? "ctb.sock" : `${stateBa
 // 완전히 같이 동작한다** — 이 레포는 공개 배포물이고 대다수 사용자는 페르소나를 안 쓴다.
 // id 는 메모리 파일명과 state 키가 되므로 부팅 때 걸러 내고, 왜 뺐는지 로그에 남긴다.
 // → docs/design/room-personas.md
-const PERSONAS = (() => {
-  const list = cfg.personas;
-  if (list === undefined) return [];
-  if (!Array.isArray(list)) { console.error("config.personas must be an array — ignoring it"); return []; }
+//
+// 목록은 **config 배열 + 봇 폴더 스캔의 합집합**이다. 채팅에서 만든 역할은 `.claude-bot/personas/`
+// 에 파일로 앉는다 — 봇은 `config.json` 을 쓰지 않는다. 부팅 JSON.parse 에 보호가 없어서 config 가
+// 깨지면 크래시 루프에 빠지고 복구 수단이 SSH 뿐인데, 원격 관리를 하려고 만든 기능이 실패할 때
+// SSH 를 강제하면 없느니만 못하다. 파일은 깨져도 그 역할 하나가 빠질 뿐 봇은 산다.
+// **id 가 겹치면 config 가 이긴다** — 사람이 쓴 쪽을 봇이 덮으면 잘못 만든 역할을 손으로 고칠
+// 길이 없어진다. → docs/design/room-personas.md, owner-admin.md
+const PERSONA_DIR = join(BOT_DIR, "personas");
+// 파일 형식: **첫 줄이 이름, 나머지가 프롬프트.** 손으로도 읽고 고칠 수 있어야 한다.
+function parsePersonaFile(id, raw) {
+  const nl = raw.indexOf("\n");
+  const name = (nl < 0 ? raw : raw.slice(0, nl)).trim();
+  const prompt = (nl < 0 ? "" : raw.slice(nl + 1)).trim();
+  if (!prompt) { console.error(`Persona file skipped — no prompt body: ${id}`); return null; }
+  return { id, name: name || id, prompt };
+}
+function personaFiles() {
+  let names;
+  try { names = readdirSync(PERSONA_DIR); } catch { return []; } // 폴더가 없으면 조용히 빈 목록
+  const out = [];
+  for (const f of names.sort()) {
+    if (!f.endsWith(".md")) continue;
+    const id = f.slice(0, -3);
+    if (!PERSONA_ID_RE.test(id)) { console.error(`Persona file skipped — id must be [a-z0-9-]: ${f}`); continue; }
+    try {
+      const p = parsePersonaFile(id, readFileSync(join(PERSONA_DIR, f), "utf8"));
+      if (p) out.push(p);
+    } catch (e) { console.error(`Persona file skipped — ${f}: ${e.message}`); }
+  }
+  return out;
+}
+function buildPersonas() {
   const out = [], seen = new Set();
-  for (const p of list) {
+  const list = cfg.personas;
+  if (list !== undefined && !Array.isArray(list)) console.error("config.personas must be an array — ignoring it");
+  for (const p of Array.isArray(list) ? list : []) {
     const id = typeof p?.id === "string" ? p.id.trim() : "";
     if (!PERSONA_ID_RE.test(id)) { console.error(`Persona skipped — id must be [a-z0-9-]: ${JSON.stringify(p?.id)}`); continue; }
     if (seen.has(id)) { console.error(`Persona skipped — duplicate id: ${id}`); continue; }
@@ -229,8 +259,19 @@ const PERSONAS = (() => {
     seen.add(id);
     out.push({ ...p, id, name: typeof p.name === "string" && p.name.trim() ? p.name.trim() : id });
   }
+  for (const p of personaFiles()) {
+    if (seen.has(p.id)) { console.warn(`Persona file ignored — config wins for id: ${p.id}`); continue; }
+    seen.add(p.id);
+    // `fromFile` 은 **권한 경계의 표시**다: 채팅에서 고칠 수 있는 건 이쪽뿐이고, config 출신은
+    // 채팅에서 못 건드린다. dir·permissionMode 가 config 에만 사는 이유와 같은 규칙이다.
+    out.push({ ...p, fromFile: true });
+  }
   return out;
-})();
+}
+// 채팅에서 역할을 만들면 **재시작 없이** 목록이 늘어야 한다 — 폰에서 쓰자고 만든 기능인데 추가만
+// SSH 에 묶이면 반만 푸는 것이다. 그래서 const 가 아니라 let 이고, 쓰는 자리마다 다시 읽는다.
+let PERSONAS = buildPersonas();
+const reloadPersonas = () => { PERSONAS = buildPersonas(); return PERSONAS; };
 // 사람은 한 생각을 여러 메시지로 쪼개 보낸다 — "아까 그 버그 말인데" / "테스트부터 돌려봐" / "아 로그도".
 // 첫 줄에 즉시 반응하면 나머지는 이미 시작된 작업 뒤에 줄을 서고(`⏳ 대기열에 추가됐습니다`), 반쪽짜리
 // 맥락으로 돌린 그 실행은 답까지 따로 와서 통째로 버려진다. 그래서 잠깐 기다렸다 합쳐 한 번만 돈다.
@@ -284,6 +325,7 @@ const STR = {
       "• /jobs — background jobs that outlive replies · you get a message when one ends\n" +
       "• /persona — the role this room runs as, and the prompt behind it · change it at /new\n" +
       "• /persona set — in a group: which roles that group may use (its topics pick from this set)\n" +
+      "• /persona add|edit|rm — owner, in a DM: write a role's prompt (lives in .claude-bot/personas/)\n" +
       "• /tell <room> <message> — hand a message to another room this bot runs · /tell alone lists them\n" +
       "• /rooms — rooms this bot knows · rm <n> drops ones you no longer use · sweep finds topics deleted in Telegram\n" +
       "• /router — forum parent topic: asks which room a message is for · off stops asking there\n" +
@@ -373,6 +415,27 @@ const STR = {
     personaSetNote: (n, total) => `_This group uses ${n} of ${total} roles (\`/persona set\`)._`,
     personaSetEmpty: "At least one role has to stay — a group with none has nothing to run as.",
     personaSetDm: "Role sets are per **group**. This is a direct chat, so every role is available here.",
+    personaAddUsage:
+      "Usage — the id on the first line, then the display name, then the prompt:\n\n" +
+      "`/persona add scroll-dev`\n`Scroll Stitch dev`\n`You are the developer for Scroll Stitch. …`\n\n" +
+      "`/persona edit <id>` rewrites one · `/persona rm <id>` deletes one. Ids are `a-z 0-9 -`.",
+    personaEditDm: "Roles are created in a direct chat with me, not in a group.",
+    personaFromConfig: (id) =>
+      `\`${id}\` is defined in \`config.json\`, which I don't write to — edit it there and \`/restart\`.\n` +
+      "(Roles made here live in `.claude-bot/personas/`, so a broken one can never take the bot down with it.)",
+    personaExists: (id) => `\`${id}\` already exists — use \`/persona edit ${id}\` to rewrite it.`,
+    personaNoSuch: (id) => `No role called \`${id}\`.`,
+    personaInUse: (id, rooms) =>
+      `\`${id}\` is still what these rooms run as: ${rooms}\n` +
+      "Switch them to another role first — dropping it would silently change their identity, memory file and `/sessions` filter at once.",
+    personaTooLong: (n, max) => `That prompt is ${n} characters; the limit is ${max}. It ships with every single turn.`,
+    personaWriteFail: (why) => `⚠️ Could not write the role file: ${why}`,
+    personaAdded: (name, id, total) =>
+      `🎭 **${name}** (\`${id}\`) is ready — ${total} roles now, no restart needed.\n` +
+      "It runs with the bot's own working directory and permission mode; `dir` and `permissionMode` stay in `config.json`.\n" +
+      "A group only offers it once you add it there with `/persona set`.",
+    personaEdited: (name, id, total) => `🎭 **${name}** (\`${id}\`) updated — ${total} roles. Rooms already running as it pick the new prompt up on their next session.`,
+    personaRemoved: (id) => `🎭 \`${id}\` deleted.`,
     personaNotHere: (name) =>
       `🎭 **${name}** is not one of this group's roles. Add it with \`/persona set\`, or pick another.`,
     personaFirst: (cur) =>
@@ -690,6 +753,7 @@ const STR = {
       "• /jobs — 답장 후에도 살아 있는 백그라운드 작업 · 끝나면 먼저 알려줌\n" +
       "• /persona — 이 방이 어떤 역할로 도는지와 그 프롬프트 본문 · 바꾸는 건 /new 에서\n" +
       "• /persona set — 그룹에서: 그 그룹이 쓸 역할 고르기 (그 안의 토픽들이 이 집합에서 고릅니다)\n" +
+      "• /persona add|edit|rm — 오너가 DM 에서: 역할 프롬프트 만들기 (.claude-bot/personas/ 에 저장)\n" +
       "• /tell <방> <메시지> — 이 봇이 맡은 다른 방으로 메시지 넘기기 · /tell 만 보내면 방 목록\n" +
       "• /rooms — 이 봇이 아는 방 목록 · rm <번호> 로 정리 · sweep 은 텔레그램에서 지운 토픽을 찾아 뺍니다\n" +
       "• /router — 포럼 상위 토픽에서 어디로 보낼지 묻습니다 · off 로 그만 묻게 합니다\n" +
@@ -989,6 +1053,27 @@ const STR = {
     personaSetNote: (n, total) => `_이 그룹은 ${total}개 중 ${n}개만 씁니다 (\`/persona set\`)._`,
     personaSetEmpty: "하나는 남아야 합니다 — 고를 역할이 없는 그룹은 돌 수가 없습니다.",
     personaSetDm: "역할 집합은 **그룹** 단위입니다. 여기는 1:1 대화라 모든 역할을 쓸 수 있습니다.",
+    personaAddUsage:
+      "사용법 — 첫 줄에 id, 둘째 줄에 이름, 그다음부터 프롬프트:\n\n" +
+      "`/persona add scroll-dev`\n`스크롤스티치 개발`\n`너는 Scroll Stitch 개발을 맡는다. …`\n\n" +
+      "`/persona edit <id>` 로 고치고 `/persona rm <id>` 로 지웁니다. id 는 `a-z 0-9 -` 입니다.",
+    personaEditDm: "역할은 그룹이 아니라 저와의 1:1 대화에서 만듭니다.",
+    personaFromConfig: (id) =>
+      `\`${id}\` 은 \`config.json\` 에 있는 역할입니다. 봇은 config 를 쓰지 않으니 파일을 고치고 \`/restart\` 하세요.\n` +
+      "(여기서 만든 역할은 `.claude-bot/personas/` 에 있어서, 깨져도 봇이 같이 죽지 않습니다.)",
+    personaExists: (id) => `\`${id}\` 은 이미 있습니다 — 고치려면 \`/persona edit ${id}\`.`,
+    personaNoSuch: (id) => `\`${id}\` 이라는 역할이 없습니다.`,
+    personaInUse: (id, rooms) =>
+      `\`${id}\` 로 도는 방이 아직 있습니다: ${rooms}\n` +
+      "그 방들을 다른 역할로 옮기고 지우세요 — 그냥 지우면 정체성·메모리 파일·`/sessions` 기준이 한꺼번에 조용히 갈아탑니다.",
+    personaTooLong: (n, max) => `프롬프트가 ${n}자입니다. 상한은 ${max}자예요 — 매 턴 시스템 프롬프트에 통째로 실립니다.`,
+    personaWriteFail: (why) => `⚠️ 역할 파일을 못 썼습니다: ${why}`,
+    personaAdded: (name, id, total) =>
+      `🎭 **${name}** (\`${id}\`) 준비됐습니다 — 이제 ${total}개, 재시작 필요 없습니다.\n` +
+      "봇의 작업 폴더와 권한으로 돕니다. `dir` 과 `permissionMode` 는 `config.json` 에만 둘 수 있습니다.\n" +
+      "그룹에서 쓰려면 그 그룹에서 `/persona set` 으로 넣어야 합니다.",
+    personaEdited: (name, id, total) => `🎭 **${name}** (\`${id}\`) 고쳤습니다 — 이제 ${total}개. 이미 그 역할로 도는 방은 다음 세션부터 새 프롬프트로 돕니다.`,
+    personaRemoved: (id) => `🎭 \`${id}\` 지웠습니다.`,
     personaNotHere: (name) =>
       `🎭 **${name}** 은 이 그룹이 쓰는 역할이 아닙니다. \`/persona set\` 으로 넣거나 다른 역할을 고르세요.`,
     personaFirst: (cur) =>
@@ -1348,7 +1433,7 @@ const COMMANDS = {
     { command: "sessions", description: "List past sessions · pick one to carry on from" },
     { command: "name", description: "Name the current session" },
     { command: "jobs", description: "Background jobs still running (survive replies)" },
-    { command: "persona", description: "The role this room runs as · set picks which roles a group may use" },
+    { command: "persona", description: "The role this room runs as · set per group · add/edit/rm in owner DM" },
     { command: "tell", description: "Hand a message to another room this bot runs · lists rooms if used alone" },
     { command: "rooms", description: "Rooms this bot knows · rm <n> drops them · sweep finds deleted topics" },
     { command: "router", description: "Forum parent topic: ask which room a message is for · off stops asking" },
@@ -1377,7 +1462,7 @@ const COMMANDS = {
     { command: "sessions", description: "지난 세션 목록 · 골라서 이어가기" },
     { command: "name", description: "지금 세션에 이름 붙이기" },
     { command: "jobs", description: "백그라운드 작업 목록 (답장 후에도 살아 있는 것)" },
-    { command: "persona", description: "이 방이 어떤 역할로 도는지 · set 으로 그룹이 쓸 역할 고르기" },
+    { command: "persona", description: "이 방이 어떤 역할로 도는지 · set 으로 그룹 집합 · 오너 DM 에서 add/edit/rm" },
     { command: "tell", description: "이 봇이 맡은 다른 방으로 메시지 넘기기 · 인자 없으면 방 목록" },
     { command: "rooms", description: "이 봇이 아는 방 목록 · rm <번호>로 정리 · sweep으로 지운 토픽 청소" },
     { command: "router", description: "포럼 상위 토픽에서 어디로 보낼지 묻기 · off 로 그만 묻기" },
@@ -3932,6 +4017,48 @@ async function handlePersona(chatId, l) {
 // 그룹 버킷에 앉고, 그 안의 토픽들은 전부 이 집합에서 고른다. config 키를 새로 만들지 않는 이유는
 // "목록은 config, 선택 결과는 방별 state" 를 어기면 진실이 둘로 갈리기 때문이다(버튼으로 고른
 // 값이 재시작 때 되돌아간다). → docs/design/room-personas.md
+// `/persona add|edit|rm` — 역할 **정의**를 채팅에서 만들고 고친다.
+//
+// 정의(id·name·prompt)는 콘텐츠라 봇이 파일로 소유한다. 권한(`dir`·`permissionMode`)은 config 에
+// 남겨 사람만 정한다 — 채팅에서 만든 역할이 폴더와 권한까지 스스로 정하면 "권한은 사람 것" 이
+// 통째로 무의미해진다. 규칙 한 줄: **권한이 넓어지는 방향의 변경은 전부 사람 손을 거친다.**
+// → docs/design/room-personas.md "페르소나를 채팅에서 만든다"
+const PERSONA_PROMPT_MAX = 8000; // 시스템 프롬프트에 매 턴 실린다 — 길면 토큰이 매번 샌다
+async function handlePersonaEdit(chatId, verb, rest, l) {
+  const [idRaw, ...bodyLines] = rest.split("\n");
+  const id = idRaw.trim().toLowerCase();
+  if (!PERSONA_ID_RE.test(id)) { await send(chatId, t(l, "personaAddUsage")); return; }
+  const existing = PERSONAS.find((p) => p.id === id);
+  // config 출신은 채팅에서 못 고친다. 봇이 사람이 쓴 정의를 덮으면 잘못 만든 역할을 손으로 고칠
+  // 길이 없어진다(합집합에서 config 가 이기는 것과 같은 이유다).
+  if (existing && !existing.fromFile) { await send(chatId, t(l, "personaFromConfig", id)); return; }
+  if (verb === "rm") {
+    if (!existing) { await send(chatId, t(l, "personaNoSuch", id)); return; }
+    // 쓰고 있는 방이 있으면 지우지 않는다 — 지우면 그 방이 조용히 기본값으로 떨어져서
+    // 정체성·메모리 파일·/sessions 기준이 한꺼번에 갈아탄다.
+    const inUse = Object.entries(state.sessions || {})
+      .filter(([, b]) => b?.persona === id).map(([room, b]) => b.title || room);
+    if (inUse.length) { await send(chatId, t(l, "personaInUse", id, inUse.join(" · "))); return; }
+    try { unlinkSync(join(PERSONA_DIR, `${id}.md`)); } catch (e) { await send(chatId, t(l, "personaWriteFail", e.message)); return; }
+    reloadPersonas();
+    await send(chatId, t(l, "personaRemoved", id));
+    return;
+  }
+  if (verb === "add" && existing) { await send(chatId, t(l, "personaExists", id)); return; }
+  if (verb === "edit" && !existing) { await send(chatId, t(l, "personaNoSuch", id)); return; }
+  const name = (bodyLines[0] || "").trim();
+  const prompt = bodyLines.slice(1).join("\n").trim();
+  if (!name || !prompt) { await send(chatId, t(l, "personaAddUsage")); return; }
+  if (prompt.length > PERSONA_PROMPT_MAX) { await send(chatId, t(l, "personaTooLong", prompt.length, PERSONA_PROMPT_MAX)); return; }
+  try {
+    mkdirSync(PERSONA_DIR, { recursive: true });
+    writeFileSync(join(PERSONA_DIR, `${id}.md`), `${name}\n${prompt}\n`);
+  } catch (e) { await send(chatId, t(l, "personaWriteFail", e.message)); return; }
+  const list = reloadPersonas();
+  // 만들었다고 어느 방이 쓰게 되는 건 아니다 — 쓰려면 그 그룹 집합에 넣고 방에서 골라야 한다.
+  await send(chatId, t(l, verb === "add" ? "personaAdded" : "personaEdited", name, id, list.length));
+}
+
 async function handlePersonaSet(chatId, toggleId, l) {
   if (!PERSONAS.length) {
     await send(chatId, t(l, "personaOff"));
@@ -5121,6 +5248,22 @@ async function handle(msg) {
   if (text === "/persona set" || text === "/personaset") {
     await handlePersonaSet(chatId, "", l);
     return;
+  }
+  // `/persona add|edit|rm` — 역할 정의를 만들고 고친다. 파일을 쓰는 일이라 **오너만**, 그리고
+  // DM 에서만 받는다. 오너가 아니면 `/allow` 와 같은 규칙으로 **존재 자체를 알리지 않는다** —
+  // 거절 문구를 보내면 그게 곧 "이런 명령이 있다"는 안내가 되고, 에이전트에게 넘기면
+  // "역할 하나 만들어줘" 가 그대로 프롬프트가 된다.
+  {
+    const m = text.match(/^\/persona (add|edit|rm)\b([\s\S]*)$/);
+    if (m) {
+      if (!isOwner(msg.from)) {
+        console.warn(`/persona ${m[1]} ignored — not the owner (from ${msg.from?.id}, room ${chatId})`);
+        return;
+      }
+      if (isGroupChat(msg.chat)) { await send(chatId, t(l, "personaEditDm")); return; }
+      await handlePersonaEdit(chatId, m[1], m[2].replace(/^[ \t]+/, ""), l);
+      return;
+    }
   }
   if (text === "/rooms" || text.startsWith("/rooms ")) {
     await handleRooms(chatId, text.slice("/rooms".length).trim(), l);
