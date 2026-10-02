@@ -15,7 +15,7 @@ function build({ sessions = {}, allowed = ["-100"], lastRunAt = {} } = {}) {
   const chatRuntime = new Map();
   const api = new Function(
     "state", "allowedIds", "knownRooms", "baseChatId", "tgTarget", "rt", "chatRuntime",
-    "send", "t", "handle", "Date", "chatBucket", "saveState", "sendMenu",
+    "send", "t", "handle", "Date", "chatBucket", "saveState", "sendMenu", "roomLabel", "BOT_LANG",
     `${block}\nreturn { routerSiblings, routerDesk, routerOff, routeShouldAsk, handleRouter, deskGuardInstruction, routeShortLabel, routePreview, askRoute, runRoute, routeInFlow, pendingRoutes, ROUTE_QUIET_MS };`,
   )(
     state, allowed,
@@ -37,6 +37,8 @@ function build({ sessions = {}, allowed = ["-100"], lastRunAt = {} } = {}) {
     (room) => (sessions[String(room)] ||= {}),
     () => { saved++; },
     async (id, text, markup) => { menus.push({ id, text, markup }); },
+    (room) => sessions[String(room)]?.title || String(room),
+    "ko",
   );
   return api;
 }
@@ -162,7 +164,7 @@ const FORUM = {
     text: "이거 고쳐줘", message_id: 991, chat: { id: -100, type: "supergroup" },
     photo: [{ file_id: "AAA" }], caption: "로그", from: { id: 688 },
   };
-  await a.runRoute(orig, "-100:35");
+  await a.runRoute(orig, "-100:35", "-100");
   ok("옮기기: handle 1회", handled.length === 1);
   const m = handled[0];
   ok("옮기기: 방 키가 바뀐다", String(m.chat.id) === "-100" && m.message_thread_id === 35,
@@ -177,7 +179,7 @@ const FORUM = {
 }
 {
   const a = build({ sessions: FORUM });
-  await a.runRoute({ text: "x", chat: { id: -100 } }, "-100");
+  await a.runRoute({ text: "x", chat: { id: -100 } }, "-100", "-100");
   ok("옮기기: 상위 방(스레드 없음)이면 thread 도 없다", handled[0].message_thread_id === undefined);
   ok("옮기기: is_topic_message 도 안 붙는다", handled[0].is_topic_message === undefined);
 }
@@ -294,6 +296,52 @@ const FORUM = {
 {
   const a = build({ sessions: { "-100:35": { ...FORUM["-100:35"], router: "off" } } });
   ok("토픽 방에는 안 붙는다", a.deskGuardInstruction("-100:35") === null);
+}
+
+// ── 넘어간 토픽에 질문도 남긴다 ─────────────────────────────────────────
+// 안 남기면 그 토픽에는 답만 떠서, 거기만 보는 사람에게는 질문 없는 답이 된다.
+{
+  const a = build({ sessions: FORUM });
+  await a.runRoute({ text: "이거 고쳐줘", chat: { id: -100 } }, "-100:35", "-100");
+  ok("안내를 목적지 토픽으로 보낸다", sent.length === 1 && sent[0].id === "-100:35", JSON.stringify(sent));
+  ok("출처 방 이름을 싣는다", sent[0].text.startsWith("routeIncoming(봇유지보수)"), sent[0].text);
+  ok("원문을 인용으로 싣는다", sent[0].text.includes("> 이거 고쳐줘"), sent[0].text);
+}
+{
+  // 질문이 답보다 **먼저** 떠야 한다 — 순서가 뒤집히면 고아 답 문제가 그대로다.
+  const a = build({ sessions: FORUM });
+  const order = [];
+  await a.runRoute({ text: "x", chat: { id: -100 } }, "-100:35", "-100");
+  order.push(...sent.map(() => "notice"), ...handled.map(() => "handled"));
+  ok("안내 → 실행 순서", order.join() === "notice,handled", order.join());
+}
+{
+  const a = build({ sessions: FORUM });
+  await a.runRoute({ photo: [{ file_id: "p" }], chat: { id: -100 } }, "-100:35", "-100");
+  ok("첨부만: 상위 방에 있다고 적는다", sent[0].text.includes("routeAttachLeft"), sent[0].text);
+}
+{
+  const a = build({ sessions: FORUM });
+  await a.runRoute({ text: "가".repeat(400), chat: { id: -100 } }, "-100:35", "-100");
+  const quoted = sent[0].text.split("> ")[1];
+  ok("긴 글은 300자에서 자른다", quoted.length === 300 && quoted.endsWith("…"), String(quoted.length));
+}
+{
+  // 출처를 모르면(옛 보류 항목 등) 안내 없이 말만 간다 — 틀린 출처를 적느니 안 적는다.
+  const a = build({ sessions: FORUM });
+  await a.runRoute({ text: "x", chat: { id: -100 } }, "-100:35");
+  ok("출처가 없으면 안내를 안 보낸다", sent.length === 0 && handled.length === 1);
+}
+{
+  const a = build({ sessions: FORUM });
+  await a.askRoute("-100", { text: "x" }, "ko", a.routerSiblings("-100"));
+  const pending = a.pendingRoutes.get("1");
+  ok("출처는 붙잡아 둔 말에 묶인다", pending.from === "-100", JSON.stringify(pending?.from));
+  ok("물어본 시각도 같이 적어 둔다", typeof pending.at === "number");
+}
+{
+  const a = build({ sessions: FORUM });
+  ok("미리보기 기본 길이는 그대로 80", a.routePreview({ text: "가".repeat(200) }, "ko").length === 80);
 }
 
 report();

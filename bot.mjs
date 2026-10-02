@@ -480,6 +480,8 @@ const STR = {
     routeCanceled: "❌ Dropped — nothing ran.",
     routeExpired: "That prompt is gone (the bot restarted). Send it again.",
     routeMuted: (room) => `📨 ${room} is muted (\`/*\`). Nothing was sent — unmute it there with \`*/\` first.`,
+    routeIncoming: (room) => `📮 Sent here from ${room}:`,
+    routeAttachLeft: "(attachment — it stayed in the parent topic)",
     routerOffBtn: "🔕 Stop asking here",
     routerOnBtn: "📮 Ask again here",
     routerStatus: (off, siblings) =>
@@ -761,6 +763,8 @@ const STR = {
     routeCanceled: "❌ 보내지 않았습니다 — 아무것도 실행되지 않았습니다.",
     routeExpired: "그 메시지는 사라졌습니다 (봇이 재시작했습니다). 다시 보내주세요.",
     routeMuted: (room) => `📨 ${room} 은 뮤트 상태입니다 (\`/*\`). 아무것도 보내지 않았습니다 — 그 방에서 \`*/\` 로 먼저 푸세요.`,
+    routeIncoming: (room) => `📮 ${room} 에서 넘어온 말입니다:`,
+    routeAttachLeft: "(첨부 — 상위 방에 있습니다)",
     routerOffBtn: "🔕 이 방에선 그만 묻기",
     routerOnBtn: "📮 다시 묻게 하기",
     routerStatus: (off, siblings) =>
@@ -2386,10 +2390,11 @@ const routeShortLabel = (title, parent) =>
   parent && title.startsWith(`${parent} / `) ? title.slice(parent.length + 3) : title;
 
 // 어느 말의 버튼인지 알아볼 한 줄. 여러 개가 밀려 있을 수 있다.
-function routePreview(msg, l) {
+// 목적지 토픽에 남기는 안내도 같은 함수를 쓴다(길이만 늘려서) — 자르는 규칙이 둘이면 갈린다.
+function routePreview(msg, l, max = 80) {
   const body = (msg.text || msg.caption || "").replace(/\s+/g, " ").trim();
   if (!body) return t(l, "routeAttachOnly");
-  return body.length > 80 ? `${body.slice(0, 79)}…` : body;
+  return body.length > max ? `${body.slice(0, max - 1)}…` : body;
 }
 
 // 계획 승인·/tell 과 같은 성질이라 메모리에만 둔다 — 재시작하면 사라지고 그 뒤에 누르면 만료
@@ -2400,7 +2405,9 @@ let routeSeq = 0;
 
 async function askRoute(chatId, msg, l, rooms) {
   const id = String(++routeSeq);
-  pendingRoutes.set(id, { msg });
+  // 출처는 **붙잡아 둔 말**에 묶는다 — 버튼이 눌린 자리가 아니라. 둘은 지금 같지만, 묶어 두면
+  // 나중에 어디서 눌리든 "어느 방에서 온 말인지"가 흔들리지 않는다.
+  pendingRoutes.set(id, { msg, from: String(chatId), at: Date.now() });
   if (pendingRoutes.size > PENDING_ROUTE_MAX) pendingRoutes.delete(pendingRoutes.keys().next().value);
   const parent = state.sessions?.[String(chatId)]?.title;
   const rows = [];
@@ -2456,7 +2463,21 @@ async function handleRouter(chatId, arg, l) {
 // 원본 msg 를 그대로 들고 방 키만 바꾸는 게 요점이다: 첨부·캡션·미디어 그룹·발신자가 전부 딸려온다.
 // 로그나 스크린샷을 붙여 보내다 방을 틀리는 경우가 오히려 흔해서, 첨부를 흘리면 절반만 쓸모 있다.
 // message_id 만 뗀다 — 메시지 ID 는 방마다 별개라, 그대로 두면 목적지에서 엉뚱한 메시지에 반응한다.
-async function runRoute(msg, to) {
+// 넘어간 토픽에는 **질문도 같이 남긴다.** 안 남기면 그 토픽에는 답만 떠서, 거기만 보는 사람에게는
+// 질문 없는 답이 된다 — 원문은 상위 토픽에 있기 때문이다. `/tell`(tellIncoming)과 `ctb send`
+// (dispatchIncoming)는 둘 다 이미 대상 방에 "무엇이 넘어왔는지" 를 먼저 보여주는데, 접수처만
+// 빠져 있었다. **에이전트가 받는 프롬프트는 그대로다** — "머리말을 붙이지 않는다"는 결정은
+// 모델이 받는 것에 대한 얘기였고, 사람이 보는 화면에까지 적용한 게 과했다.
+async function runRoute(msg, to, from) {
+  if (from !== undefined) {
+    // 첨부만 온 경우는 정직하게 적는다 — 봇은 첨부를 처리하지만 **텔레그램에 다시 올리지는
+    // 않는다.** 그냥 "(첨부)" 라고만 하면 그 토픽 사람은 보이지도 않는 그림 얘기를 읽게 된다.
+    const body = (msg.text || msg.caption || "").trim()
+      ? `> ${routePreview(msg, BOT_LANG, 300)}`
+      : t(BOT_LANG, "routeAttachLeft");
+    await send(to, `${t(BOT_LANG, "routeIncoming", roomLabel(from))}\n\n${body}`)
+      .catch(() => {}); // 안내가 막혀도 말은 가야 한다
+  }
   const target = tgTarget(to);
   const moved = {
     ...msg,
@@ -4859,7 +4880,7 @@ async function handleCallback(cq) {
       await send(chatId, t(l, "routeMuted", roomLabel(dest)));
     } else {
       await send(chatId, t(l, "routeSent", roomLabel(dest)));
-      runRoute(pending.msg, dest).catch((e) => console.error("Route run error:", e.message));
+      runRoute(pending.msg, dest, pending.from).catch((e) => console.error("Route run error:", e.message));
     }
   } else if (cq.data?.startsWith("dp:")) {
     const id = cq.data.slice(5);
