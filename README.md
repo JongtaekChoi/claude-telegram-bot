@@ -276,6 +276,7 @@ Core commands:
 | `/name <name>` | Name the current session so it stands out in `/sessions` (`/name -` removes it) |
 | `/jobs` | Background jobs that outlive replies — ▶ running, ✅ finished |
 | `/persona` | The role this room runs as, and the prompt behind it (view only — you change it from the buttons at `/new`) |
+| `/persona set` | In a **group**: which roles that group may use. Every topic in it picks from this set and the first one is the default; a room already running as a role keeps it. Tap to add or drop |
 | `/tell [room] [message]` | Hand a message to another room this bot runs — it executes there, with that room's session. Sent bare, it lists the rooms |
 | `/rooms` | Rooms this bot knows · `rm <n>` drops them · `sweep` clears out deleted topics → [details below](#tidying-the-room-list-rooms) |
 | `/router [on\|off]` | Only in a forum's **parent topic**: show whether it asks which room a message is for · `off` stops asking there (anyone in the room can flip it; the room is told) |
@@ -802,6 +803,17 @@ Picking applies that role's prompt **and its own `/remember` memory** (`memory.d
 
 `/status` shows the room's role in one line; `/persona` shows the prompt behind it. Neither changes
 it. With no `personas` key nothing changes at all — `persona` keeps working exactly as before.
+
+**A group can narrow the list.** `/persona set` in a group picks which roles that group may use;
+every topic inside it then picks from that set, and the set's first role is that group's default.
+This is what makes "one group per project" work on a bot that carries several: the group for one
+project never offers — or silently falls back to — another project's role, and since a role carries
+its own working directory and memory, the set is a boundary rather than a tidier menu. The set lives
+on the group, so the pick is remembered across restarts; a room **already** running as a role keeps
+it even if you drop that role from the set (switching it mid-session would change the live session's
+identity and its memory file at once), and the boot log says so. Memory is **not** split by group:
+the `dev` role in two groups shares one `memory.dev.md` — give them different ids if you need them
+apart.
 
 `/sessions` respects roles too. Its list comes from session files on disk, scanned per project, so
 without this it would offer **every room's** sessions — carrying a planning session into a dev room

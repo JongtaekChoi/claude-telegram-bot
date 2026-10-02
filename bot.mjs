@@ -283,6 +283,7 @@ const STR = {
       "• /name — name the current session so it stands out in /sessions\n" +
       "• /jobs — background jobs that outlive replies · you get a message when one ends\n" +
       "• /persona — the role this room runs as, and the prompt behind it · change it at /new\n" +
+      "• /persona set — in a group: which roles that group may use (its topics pick from this set)\n" +
       "• /tell <room> <message> — hand a message to another room this bot runs · /tell alone lists them\n" +
       "• /rooms — rooms this bot knows · rm <n> drops ones you no longer use · sweep finds topics deleted in Telegram\n" +
       "• /router — forum parent topic: asks which room a message is for · off stops asking there\n" +
@@ -365,6 +366,15 @@ const STR = {
       + (others ? `Other roles: ${others}\n` : "")
       + "A role is fixed for the life of a session — send `/new` to pick again.",
     personaPick: (cur) => `🎭 Role for this room — now **${cur}**. Tap to change it:`,
+    personaSetShow: (n, total) =>
+      `🎭 Roles this group can use — **${n} of ${total}**.\n` +
+      "Tap to add or drop one. Every topic in this group picks from this set, and the first one is the default.\n" +
+      "A room that already runs as a role keeps it even if you drop it here.",
+    personaSetNote: (n, total) => `_This group uses ${n} of ${total} roles (\`/persona set\`)._`,
+    personaSetEmpty: "At least one role has to stay — a group with none has nothing to run as.",
+    personaSetDm: "Role sets are per **group**. This is a direct chat, so every role is available here.",
+    personaNotHere: (name) =>
+      `🎭 **${name}** is not one of this group's roles. Add it with \`/persona set\`, or pick another.`,
     personaFirst: (cur) =>
       `🎭 New room. It runs as **${cur}** unless you pick another — just carry on if that's right:`,
     personaSet: (name) => `🎭 This room now runs as **${name}**. Its memory and rules are its own.`,
@@ -676,6 +686,7 @@ const STR = {
       "• /name — 지금 세션에 이름 붙이기 · /sessions 에서 바로 찾기\n" +
       "• /jobs — 답장 후에도 살아 있는 백그라운드 작업 · 끝나면 먼저 알려줌\n" +
       "• /persona — 이 방이 어떤 역할로 도는지와 그 프롬프트 본문 · 바꾸는 건 /new 에서\n" +
+      "• /persona set — 그룹에서: 그 그룹이 쓸 역할 고르기 (그 안의 토픽들이 이 집합에서 고릅니다)\n" +
       "• /tell <방> <메시지> — 이 봇이 맡은 다른 방으로 메시지 넘기기 · /tell 만 보내면 방 목록\n" +
       "• /rooms — 이 봇이 아는 방 목록 · rm <번호> 로 정리 · sweep 은 텔레그램에서 지운 토픽을 찾아 뺍니다\n" +
       "• /router — 포럼 상위 토픽에서 어디로 보낼지 묻습니다 · off 로 그만 묻게 합니다\n" +
@@ -965,6 +976,15 @@ const STR = {
       + (others ? `다른 역할: ${others}\n` : "")
       + "역할은 세션이 사는 동안 고정입니다 — `/new` 를 보내면 다시 고를 수 있습니다.",
     personaPick: (cur) => `🎭 이 방의 역할 — 지금은 **${cur}** 입니다. 눌러서 바꾸세요:`,
+    personaSetShow: (n, total) =>
+      `🎭 이 그룹이 쓸 역할 — **${total}개 중 ${n}개**.\n` +
+      "눌러서 넣고 뺍니다. 이 그룹의 모든 토픽이 이 안에서 고르고, 맨 앞이 기본값입니다.\n" +
+      "이미 그 역할로 도는 방은 여기서 빼도 그대로 둡니다.",
+    personaSetNote: (n, total) => `_이 그룹은 ${total}개 중 ${n}개만 씁니다 (\`/persona set\`)._`,
+    personaSetEmpty: "하나는 남아야 합니다 — 고를 역할이 없는 그룹은 돌 수가 없습니다.",
+    personaSetDm: "역할 집합은 **그룹** 단위입니다. 여기는 1:1 대화라 모든 역할을 쓸 수 있습니다.",
+    personaNotHere: (name) =>
+      `🎭 **${name}** 은 이 그룹이 쓰는 역할이 아닙니다. \`/persona set\` 으로 넣거나 다른 역할을 고르세요.`,
     personaFirst: (cur) =>
       `🎭 처음 보는 방이네요. 따로 안 고르면 **${cur}** 로 돕니다 — 맞으면 그냥 이어가세요:`,
     personaSet: (name) => `🎭 이 방은 이제 **${name}** 로 돕니다. 메모리와 규칙도 이 역할 것을 씁니다.`,
@@ -1322,7 +1342,7 @@ const COMMANDS = {
     { command: "sessions", description: "List past sessions · pick one to carry on from" },
     { command: "name", description: "Name the current session" },
     { command: "jobs", description: "Background jobs still running (survive replies)" },
-    { command: "persona", description: "The role this room runs as, and the prompt behind it" },
+    { command: "persona", description: "The role this room runs as · set picks which roles a group may use" },
     { command: "tell", description: "Hand a message to another room this bot runs · lists rooms if used alone" },
     { command: "rooms", description: "Rooms this bot knows · rm <n> drops them · sweep finds deleted topics" },
     { command: "router", description: "Forum parent topic: ask which room a message is for · off stops asking" },
@@ -1351,7 +1371,7 @@ const COMMANDS = {
     { command: "sessions", description: "지난 세션 목록 · 골라서 이어가기" },
     { command: "name", description: "지금 세션에 이름 붙이기" },
     { command: "jobs", description: "백그라운드 작업 목록 (답장 후에도 살아 있는 것)" },
-    { command: "persona", description: "이 방이 어떤 역할로 도는지와 그 프롬프트 본문" },
+    { command: "persona", description: "이 방이 어떤 역할로 도는지 · set 으로 그룹이 쓸 역할 고르기" },
     { command: "tell", description: "이 봇이 맡은 다른 방으로 메시지 넘기기 · 인자 없으면 방 목록" },
     { command: "rooms", description: "이 봇이 아는 방 목록 · rm <번호>로 정리 · sweep으로 지운 토픽 청소" },
     { command: "router", description: "포럼 상위 토픽에서 어디로 보낼지 묻기 · off 로 그만 묻기" },
@@ -1558,10 +1578,35 @@ async function checkForUpdate() {
 // 주입도 예전 그대로다. 없는 id(config 에서 지운 뒤)도 기본값으로 떨어진다.
 // chatBucket 이 아니라 state 를 직접 읽는다 — 경로 하나 고르려고 빈 방 버킷을 만들 이유가 없다.
 // chatId 가 없는 호출(cron)도 기본값이다. → docs/design/room-personas.md
+// 그룹이 쓸 역할 집합. 그룹 = 프로젝트 = 페르소나 집합이 1:1 로 떨어지는 배치를 위한 것이라,
+// 집합은 **그룹 버킷**에 두고 그 안의 토픽은 `baseChatId()` 로 올려다본다 — 부모→자식 계층을
+// state 에 새로 만들지 않는다. General 토픽의 방 키가 곧 그룹 ID 라 같은 버킷에 앉지만 필드가
+// 달라 충돌하지 않는다(`forum` 플래그가 이미 같은 자리를 같은 방식으로 쓴다).
+// 집합이 없으면 전부다 — 안 쓰는 봇은 값이 예전과 완전히 같다. → docs/design/room-personas.md
+function personasFor(chatId) {
+  if (!PERSONAS.length || chatId == null) return PERSONAS;
+  const set = state.sessions?.[String(baseChatId(chatId))]?.personaSet;
+  if (!Array.isArray(set) || !set.length) return PERSONAS;
+  // config 에서 지워진 id 가 집합에 남아 있을 수 있다. 걸러낸 뒤 **아무것도 안 남으면** 집합을
+  // 없는 셈 친다 — 고를 수 있는 역할이 0 인 방은 기본값조차 없어서 통째로 멈춘다.
+  const out = PERSONAS.filter((p) => set.includes(p.id));
+  return out.length ? out : PERSONAS;
+}
+
+// 방이 가리키는 페르소나. **고르지 않은 방은 기본값으로 돈다** — 프롬프트와 메모리가 같은
+// 페르소나를 가리켜야 하므로 그 판단을 여기 한 곳에서 한다. 목록이 없으면 null 이라 경로도
+// 주입도 예전 그대로다. 없는 id(config 에서 지운 뒤)도 기본값으로 떨어진다.
+// chatBucket 이 아니라 state 를 직접 읽는다 — 경로 하나 고르려고 빈 방 버킷을 만들 이유가 없다.
+// chatId 가 없는 호출(cron)도 기본값이다.
+//
+// **이미 고른 역할이 집합에서 빠져도 그대로 둔다(grandfather).** 기본값으로 스냅하면 셋이 한꺼번에
+// 깨진다 — 살아 있는 세션의 정체성이 도중에 바뀌고, 메모리가 다른 파일로 갈아타고, `/sessions`
+// 필터 기준이 바뀌어 그 방의 과거 세션이 목록에서 사라진다. 제약은 **고르는 자리에서만** 건다.
+// config 에서 **지워진** id 와는 구별된다 — 지워진 id 는 실행할 프롬프트가 아예 없다.
 function roomPersona(chatId) {
   if (!PERSONAS.length) return null;
   const id = chatId == null ? null : state.sessions?.[String(chatId)]?.persona;
-  return (id && PERSONAS.find((p) => p.id === id)) || PERSONAS[0];
+  return (id && PERSONAS.find((p) => p.id === id)) || personasFor(chatId)[0];
 }
 // 시스템 프롬프트에 실릴 역할 본문. 페르소나를 안 쓰면 예전처럼 cfg.persona 다.
 const personaPrompt = (chatId) => roomPersona(chatId)?.prompt ?? cfg.persona;
@@ -3835,8 +3880,50 @@ async function handlePersona(chatId, l) {
   const body = cur.prompt.length > PERSONA_BODY_MAX
     ? `${cur.prompt.slice(0, PERSONA_BODY_MAX).trimEnd()}…`
     : cur.prompt;
-  const others = PERSONAS.filter((p) => p.id !== cur.id).map((p) => p.name).join(" · ");
-  await send(chatId, t(l, "personaShow", cur.name, cur.id, body, others));
+  // 이 그룹이 고를 수 있는 것만 센다 — 못 고르는 역할을 나열하면 "왜 버튼에 안 뜨지"가 된다.
+  const allowed = personasFor(chatId);
+  const others = allowed.filter((p) => p.id !== cur.id).map((p) => p.name).join(" · ");
+  await send(chatId, t(l, "personaShow", cur.name, cur.id, body, others)
+    + (allowed.length < PERSONAS.length ? `\n\n${t(l, "personaSetNote", allowed.length, PERSONAS.length)}` : ""));
+}
+
+// `/persona set` — 이 **그룹**이 쓸 역할 집합. 그룹 = 프로젝트로 쓰는 배치를 위한 것이라 집합도
+// 그룹 버킷에 앉고, 그 안의 토픽들은 전부 이 집합에서 고른다. config 키를 새로 만들지 않는 이유는
+// "목록은 config, 선택 결과는 방별 state" 를 어기면 진실이 둘로 갈리기 때문이다(버튼으로 고른
+// 값이 재시작 때 되돌아간다). → docs/design/room-personas.md
+async function handlePersonaSet(chatId, toggleId, l) {
+  if (!PERSONAS.length) {
+    await send(chatId, t(l, "personaOff"));
+    return;
+  }
+  const group = String(baseChatId(chatId));
+  // DM 은 방이 하나뿐이라 집합이 곧 전체다 — 고를 게 없다.
+  if (!String(chatId).startsWith("-")) {
+    await send(chatId, t(l, "personaSetDm"));
+    return;
+  }
+  const bucket = chatBucket(group);
+  if (toggleId) {
+    if (!PERSONAS.some((p) => p.id === toggleId)) { await send(chatId, t(l, "personaGone")); return; }
+    const cur = Array.isArray(bucket.personaSet) && bucket.personaSet.length
+      ? bucket.personaSet.filter((id) => PERSONAS.some((p) => p.id === id))
+      : PERSONAS.map((p) => p.id);
+    const next = cur.includes(toggleId) ? cur.filter((id) => id !== toggleId) : [...cur, toggleId];
+    // 전부 끄면 그 그룹은 고를 역할이 없어진다. 마지막 하나는 못 끄게 막는다.
+    if (!next.length) { await send(chatId, t(l, "personaSetEmpty")); return; }
+    // 전부면 집합을 **지운다** — "제한 없음"을 전체 목록으로 적어두면 config 에 역할을 추가할 때마다
+    // 그룹마다 손으로 넣어 줘야 한다. 없는 게 곧 "전부"다.
+    bucket.personaSet = next.length === PERSONAS.length ? undefined : next;
+    saveState(state);
+  }
+  const allowed = personasFor(group).map((p) => p.id);
+  const rows = [];
+  for (let i = 0; i < PERSONAS.length; i += 2)
+    rows.push(PERSONAS.slice(i, i + 2).map((p) => ({
+      text: `${allowed.includes(p.id) ? "✅" : "⬜"} ${p.name}`,
+      callback_data: `ps:${p.id}`,
+    })));
+  await sendMenu(chatId, t(l, "personaSetShow", allowed.length, PERSONAS.length), { inline_keyboard: rows });
 }
 
 // 역할 선택 버튼. 지금 역할에 ● 를 붙인다. 취소 버튼은 없다 — 안 고르고 그냥 말을 걸면 기본
@@ -3846,12 +3933,16 @@ async function sendPersonaMenu(chatId, l, key) {
   // 물어봤다는 표시는 여기서 남긴다 — 세 지점 중 어디로 띄웠든 "이 방엔 한 번 물었다"는 같다.
   // /newchat 으로 판 방이 생성 때 한 번, 그 방 첫 메시지에서 또 한 번 받던 걸 막는다.
   // /new 는 이 표시와 무관하게 매번 띄운다 — 사람이 맥락을 버리겠다고 친 자리라서다.
+  // 이 그룹이 쓰기로 한 역할만 내준다. 하나뿐이면 메뉴를 띄우지 않는다 — 버튼 한 개짜리 선택은
+  // 소음이고, 안 고르면 어차피 그 하나로 돈다.
+  const allowed = personasFor(chatId);
+  if (allowed.length < 2) return false;
   chatBucket(chatId).personaAsked = true;
   saveState(state);
   const cur = roomPersona(chatId);
   const rows = [];
-  for (let i = 0; i < PERSONAS.length; i += 2)
-    rows.push(PERSONAS.slice(i, i + 2).map((p) => ({
+  for (let i = 0; i < allowed.length; i += 2)
+    rows.push(allowed.slice(i, i + 2).map((p) => ({
       text: p.id === cur.id ? `● ${p.name}` : p.name,
       callback_data: `pa:${p.id}`,
     })));
@@ -4693,7 +4784,9 @@ async function handleCallback(cq) {
   // `rr:`(접수처 켜고 끄기)도 같이 뺀다. 이 버튼은 접수처 질문과 **한 키보드에 있어서**, 잠그면
   // 붙잡아 둔 말의 목적지 버튼까지 같이 걷힌다 — 그 말은 손댈 방법 없이 사라진다. 조용히 잃는
   // 것이 접수처가 막으려는 바로 그것이라, 여기서 그걸 만들면 안 된다. 두 번 눌러도 결과는 같다.
-  const menu = cq.data?.startsWith("ss:") || cq.data?.startsWith("rr:");
+  // `ps:`(역할 집합)도 메뉴다 — 여러 개를 연달아 켜고 끄는 자리라, 1회용으로 잠그면 한 번 누르고
+  // 키보드가 죽어 나머지를 못 고른다. 같은 값을 두 번 눌러도 토글이라 결과가 예측 가능하다.
+  const menu = cq.data?.startsWith("ss:") || cq.data?.startsWith("rr:") || cq.data?.startsWith("ps:");
   const kbKey = `${chatId}:${cq.message.message_id}`;
   if (!menu) {
     if (handledKeyboards.has(kbKey)) {
@@ -4784,7 +4877,13 @@ async function handleCallback(cq) {
     const persona = PERSONAS.find((p) => p.id === cq.data.slice(3));
     // config 에서 사라진 역할의 버튼이 남아 있을 수 있다 — 재시작 전에 띄운 것.
     if (!persona) await send(chatId, t(l, "personaGone"));
+    // 집합을 좁히기 **전에** 띄운 버튼도 같은 처지다. 정의는 멀쩡하지만 이 그룹에선 못 고른다 —
+    // 여기서 안 막으면 옛 버튼 하나로 금지된 역할이 방에 박힌다.
+    else if (!personasFor(chatId).some((p) => p.id === persona.id))
+      await send(chatId, t(l, "personaNotHere", persona.name));
     else await applyPersona(chatId, persona, l);
+  } else if (cq.data?.startsWith("ps:")) {
+    await handlePersonaSet(chatId, cq.data.slice(3), l);
   } else if (cq.data === "local:kill") {
     await handleLocal(chatId, "kill", l);
   }
@@ -4972,6 +5071,11 @@ async function handle(msg) {
   }
   if (text === "/persona") {
     await handlePersona(chatId, l);
+    return;
+  }
+  // `/persona set` — 이 그룹이 쓸 역할 집합. 켜고 끄는 건 버튼이고 명령은 그 메뉴를 여는 자리다.
+  if (text === "/persona set" || text === "/personaset") {
+    await handlePersonaSet(chatId, "", l);
     return;
   }
   if (text === "/rooms" || text.startsWith("/rooms ")) {
@@ -5546,6 +5650,13 @@ async function main() {
   setInterval(() => checkCredentials().catch(() => {}), CRED_CHECK_MS);
   const sweptScratch = sweepCodexScratch();
   if (sweptScratch) console.log(`Removed ${sweptScratch} stale codex scratch file(s)`);
+  // 집합 밖 역할로 도는 방은 **그대로 둔다**(grandfather) — 도중에 바꾸면 살아 있는 세션의 정체성과
+  // 메모리 파일이 같이 갈아탄다. 대신 한 줄 남긴다: 안 남기면 "왜 이 방만 다른 역할이지"가 미궁이 된다.
+  for (const [room, b] of Object.entries(state.sessions || {})) {
+    if (!b?.persona || !PERSONAS.some((p) => p.id === b.persona)) continue;
+    if (personasFor(room).some((p) => p.id === b.persona)) continue;
+    console.log(`Persona outside this group's set (kept): ${b.persona} in ${b.title || room}`);
+  }
   // /restart 로 재시작했으면 완료 알림 1회 (플래그는 즉시 비움)
   if (state.restartNotify) {
     const to = state.restartNotify;

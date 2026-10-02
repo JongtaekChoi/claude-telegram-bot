@@ -75,19 +75,27 @@ function statePathFor(configPath) {
   return join(dirname(configPath), ".claude-bot", base === "config" ? "state.json" : `${base}.state.json`);
 }
 // 방이 가리키는 페르소나 — bot.mjs 의 roomPersona 와 **같은 규칙이어야 한다.** 고르지 않은 방은
-// 기본값(personas[0]). 여기가 어긋나면 터미널과 봇이 서로 다른 역할·다른 메모리로 돈다.
-function personaFor(cfg, room) {
+// 기본값. 여기가 어긋나면 터미널과 봇이 서로 다른 역할·다른 메모리로 돈다.
+//
+// 기본값은 그냥 `personas[0]` 이 아니라 **그 그룹이 쓰기로 한 집합의 첫 번째**다(`personaSet`,
+// 그룹 버킷에 있다). 이미 고른 역할은 집합에서 빠져도 그대로 쓴다(grandfather) — 봇과 같은 규칙.
+// group 을 안 넘기면 집합이 없는 것으로 보고 예전과 똑같이 돈다. → docs/design/room-personas.md
+function personaFor(cfg, room, group) {
   const ok = (p) => p && typeof p.id === "string" && /^[a-z0-9][a-z0-9-]*$/i.test(p.id.trim())
     && typeof p.prompt === "string" && p.prompt.trim();
   const list = Array.isArray(cfg.personas) ? cfg.personas.filter(ok) : [];
   if (!list.length) return null;
-  return list.find((p) => p.id.trim() === room?.persona) || list[0];
+  const chosen = list.find((p) => p.id.trim() === room?.persona);
+  if (chosen) return chosen;
+  const set = group?.personaSet;
+  const allowed = Array.isArray(set) && set.length ? list.filter((p) => set.includes(p.id.trim())) : [];
+  return allowed[0] || list[0];
 }
 // 방의 작업 폴더 — bot.mjs 의 roomDir 과 **같은 규칙이어야 한다.** 역할이 dir 을 가지면 터미널도
 // 그 폴더에서 열려야 한다. 여기가 어긋나면 `ctb --chat 기획` 이 개발 폴더에서 뜨고, 그 폴더의
 // CLAUDE.md 를 읽고, 이어받은 세션과 cwd 가 달라진다. → docs/design/room-personas.md
-function projectDirFor(cfg, room) {
-  const dir = personaFor(cfg, room)?.dir;
+function projectDirFor(cfg, room, group) {
+  const dir = personaFor(cfg, room, group)?.dir;
   return dir ? resolve(cfg.projectDir || ".", dir) : cfg.projectDir;
 }
 // 메모리도 같은 규칙으로 가른다 — bot.mjs 의 memoryPathFor 와 짝이어야 한다. 여기가 어긋나면
@@ -524,7 +532,9 @@ async function main() {
     ? String(chatOverride)
     : [].concat(cfg.allowedChatId).filter(Boolean).map(String)[0];
   const room = primaryChatId ? st.sessions?.[primaryChatId] : undefined;
-  const projectDir = projectDirFor(cfg, room); // 역할이 dir 을 가지면 터미널도 그 폴더에서 연다
+  // 역할 집합은 그룹 버킷에 있다 — 토픽 방(`-100…:12`)이면 그룹(`-100…`)을 올려다본다.
+  const group = primaryChatId ? st.sessions?.[String(primaryChatId).split(":")[0]] : undefined;
+  const projectDir = projectDirFor(cfg, room, group); // 역할이 dir 을 가지면 터미널도 그 폴더에서 연다
   // Telegram 의 /provider·/model override 는 방별이다. --chat 이 고른 방의 설정을 그대로 따른다.
   // 최상위 키는 0.4.13 이하 state 파일을 bot이 아직 마이그레이션하지 않은 경우의 호환 폴백이다.
   const stateProvider = room?.provider || st.provider;
@@ -584,7 +594,7 @@ async function main() {
   const sysArgs = [];
   if (provider === "claude" && !forwardedArgs.includes("--append-system-prompt")) {
     let memory = "";
-    const persona = personaFor(cfg, room);
+    const persona = personaFor(cfg, room, group);
     try { memory = readFileSync(memoryPathFor(configPath, persona?.id), "utf8").trim(); } catch {}
     // 메모리를 persona 앞에 두고 헤더를 세게 다는 것까지 bot.mjs 와 같게 — persona 가 덮어쓰지 않게.
     const appendSys = [
@@ -717,7 +727,9 @@ async function notifyTelegram(configPath, provider, sessionId, chatId) {
     process.stderr.write("ctb: preparing handoff...\n");
     // 인수인계 요약도 그 방의 작업 폴더에서 돈다 — 세션을 이어받는 것이므로 cwd 가 갈리면 안 된다.
     const room = st.sessions?.[String(chatId)];
-    const result = await summarizeSession(provider, sessionId, lang, cfg, projectDirFor(cfg, room));
+    // 역할 집합은 그룹 버킷에 있다 — 토픽 방이면 그룹을 올려다본다(bot.mjs 의 personasFor 와 같은 규칙).
+    const roomGroup = st.sessions?.[base];
+    const result = await summarizeSession(provider, sessionId, lang, cfg, projectDirFor(cfg, room, roomGroup));
     // 실패와 "넘길 게 없음"을 갈라서 찍는다 — 둘을 한 문구로 뭉치면 조용히 망가진 걸 못 본다.
     if (result.error) { process.stderr.write(`ctb: handoff failed — ${result.error}\n`); return; }
     if (result.skip) { process.stderr.write("ctb: nothing to hand over (SKIP)\n"); return; }
