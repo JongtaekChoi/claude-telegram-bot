@@ -66,4 +66,32 @@ function build({ sendOk = true, description } = {}) {
   ok("터미널엔 이유까지", replies[0]?.ok === false && replies[0].error.includes("file is too big"));
 }
 
+// ── 입구: 파일은 승인을 묻지 않는다 (0.7.0 에선 'run it' 을 물었고 ssh 쪽에선 아무도 못 눌러 만료됐다)
+{
+  const hd = cut("async function handleDispatch(req, emit) {", "\nfunction startDispatchServer");
+  const calls = [];
+  const mk = () => new Function(
+    "allowedIds", "baseChatId", "DISPATCH_FILES_MAX", "checkDispatchFiles", "dispatchFilesNow", "state",
+    "readLocalLock", "pendingDispatch", "PENDING_DISPATCH_MAX", "PENDING_DISPATCH_TTL", "dispatchNow",
+    "askDispatch", "roomLabel",
+    `${hd}\nreturn handleDispatch;`,
+  )(
+    ["-100"], (r) => String(r).split(":")[0], 10,
+    (paths) => ({ files: paths.map((abs) => ({ abs })) }),
+    async (room, files) => calls.push(["now", room, files.length]),
+    { sessions: { "-100:5": { muted: true } } }, () => ({ room: "-100:5" }), new Map(), 20, 600_000,
+    async () => calls.push(["run"]), async () => calls.push(["ask"]), (r) => `방(${r})`,
+  );
+  const out = [];
+  await mk()({ room: "-100:5", files: [png] }, (o) => out.push(o));
+  eq("--now 없이도 바로 올린다", calls[0]?.[0], "now");
+  ok("승인 대기 상태를 내지 않는다", !out.some((o) => o.status === "awaiting-approval"));
+  ok("뮤트·로컬 락 방에도 올린다", calls.length === 1);
+  calls.length = 0; out.length = 0;
+  await mk()({ room: "-100:6", text: "hi" }, (o) => out.push(o));
+  eq("글자는 여전히 승인을 묻는다", calls[0]?.[0], "ask");
+  ok("대기 상태가 어디서 눌러야 하는지 말한다",
+    out[0]?.status === "awaiting-approval" && out[0].hint.includes("방(-100:6)") && out[0].hint.includes("10 min"));
+}
+
 report();

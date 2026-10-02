@@ -375,7 +375,6 @@ const STR = {
     personaGone: "🎭 That role is no longer in the config.",
     dispatchIncoming: "💻 From a terminal on this machine — running it here:",
     dispatchFilesIncoming: (n) => `💻 From a terminal on this machine — posting ${n === 1 ? "a file" : `${n} files`} here:`,
-    dispatchFilesAsk: (list) => `💻 A terminal on this machine wants to post this here:\n\n${list}\n\nGo ahead?`,
     dispatchFilesFailed: (name, why) => `⚠️ Could not send ${name}: ${why}`,
     dispatchAsk: (body) => `💻 A terminal on this machine wants this run here:\n\n${body}\n\nGo ahead?`,
     dispatchRejected: "❌ Ignored. Nothing ran.",
@@ -972,7 +971,6 @@ const STR = {
     personaGone: "🎭 그 역할은 이제 config 에 없습니다.",
     dispatchIncoming: "💻 이 기계의 터미널에서 온 요청 — 여기서 실행합니다:",
     dispatchFilesIncoming: (n) => `💻 이 기계의 터미널에서 ${n === 1 ? "파일을" : `파일 ${n}개를`} 보냈습니다:`,
-    dispatchFilesAsk: (list) => `💻 터미널에서 이걸 여기에 올리려고 합니다:\n\n${list}\n\n올릴까요?`,
     dispatchFilesFailed: (name, why) => `⚠️ ${name} 을 보내지 못했습니다: ${why}`,
     dispatchAsk: (body) => `💻 터미널에서 이걸 여기서 실행하려고 합니다:\n\n${body}\n\n실행할까요?`,
     dispatchRejected: "❌ 무시했습니다. 아무것도 실행하지 않았습니다.",
@@ -2137,11 +2135,12 @@ function outboxInstruction(chatId) {
 
 // 작업 기록에 "어느 방으로 알릴지"를 적으려면 에이전트가 방 번호를 알아야 한다. 시스템 프롬프트에
 // 실으면 매 턴 토큰을 먹으니 env 로 넘긴다. 방이 없는 경로(예약 작업)엔 넣지 않고, 그 경우 감시자가
-// allowedIds[0] 로 폴백한다.
+// allowedIds[0] 로 폴백한다. 작업 감시가 꺼져 있어도 넣는다 — `ctb send --file` 이 이 값을 기본 방으로
+// 쓴다(자기 방에 파일을 올릴 때 방 번호를 얻을 다른 길이 없다).
 const jobEnv = (chatId) => ({
   ...process.env,
   ...(cfg.env || {}),
-  ...(JOBS && chatId ? { CTB_CHAT_ID: String(chatId) } : {}),
+  ...(chatId ? { CTB_CHAT_ID: String(chatId) } : {}),
 });
 
 // 에이전트에게 오래 걸리는 작업 띄우는 법을 알려주는 시스템 프롬프트 조각.
@@ -3906,7 +3905,8 @@ async function dispatchNow(room, text, reply) {
 // 세션도 돌지 않는다 — 스크린샷 한 장 올리자고 턴과 토큰을 쓰는 건 낭비다.
 // 경로 제한을 안 두는 근거는 cli-dispatch.md 와 같다: 소켓에 붙을 수 있는 쪽은 이미 config 도
 // 고치고 claude 도 직접 돌릴 수 있는 **신뢰 경계 안**이라, 여기서 막아도 옆으로 돌아간다.
-// 대신 승인과 "터미널에서 왔다" 표시는 글자 요청과 똑같이 받는다.
+// "터미널에서 왔다" 표시는 매번 붙인다. 승인은 **받지 않는다**(0.7.1) — 돌아갈 게 없는데 "실행할까요"를
+// 묻는 꼴이었고, 보내는 쪽이 ssh 터미널에 있으면 아무도 못 눌러 조용히 만료됐다. → cli-dispatch.md
 function checkDispatchFiles(paths) {
   const files = [];
   for (const raw of paths) {
@@ -3949,33 +3949,11 @@ async function dispatchFilesNow(room, files, caption, reply) {
   await postDispatchFiles(room, files, caption, reply);
 }
 
-const fileLine = (f) => `• ${f.name} (${Math.max(1, Math.round(f.size / 1024))}KB)`;
-
-async function askDispatchFiles(room, files, caption, reply) {
-  const id = `${DISPATCH_BOOT}.${++dispatchSeq}`;
-  const timer = setTimeout(() => {
-    if (!pendingDispatch.delete(id)) return;
-    reply({ ok: false, error: "approval timed out" });
-    send(room, t(BOT_LANG, "dispatchExpired")).catch(() => {});
-  }, PENDING_DISPATCH_TTL);
-  timer.unref?.();
-  pendingDispatch.set(id, { room, files, caption, reply, timer });
-  const list = [...files.map(fileLine), ...(caption ? ["", caption] : [])].join("\n");
-  await send(room, t(BOT_LANG, "dispatchFilesAsk", list), {
-    replyMarkup: {
-      inline_keyboard: [[
-        { text: t(BOT_LANG, "tellApprove"), callback_data: `dp:y:${id}` },
-        { text: t(BOT_LANG, "tellReject"), callback_data: `dp:n:${id}` },
-      ]],
-    },
-  });
-}
-
 async function askDispatch(room, text, reply) {
   const id = `${DISPATCH_BOOT}.${++dispatchSeq}`;
   const timer = setTimeout(() => {
     if (!pendingDispatch.delete(id)) return;
-    reply({ ok: false, error: "approval timed out" });
+    reply({ ok: false, error: `approval timed out — nobody tapped ✅ in ${roomLabel(room)} within ${PENDING_DISPATCH_TTL / 60_000} min. Nothing ran.` });
     send(room, t(BOT_LANG, "dispatchExpired")).catch(() => {});
   }, PENDING_DISPATCH_TTL);
   timer.unref?.();
@@ -3997,22 +3975,17 @@ async function handleDispatch(req, emit) {
   if (!allowedIds.includes(String(baseChatId(room))))
     return emit({ ok: false, error: `room ${room} is not in allowedChatId` });
   const paths = Array.isArray(req.files) ? req.files : null;
-  // 파일만 올리는 길은 세션을 안 거친다 — 뮤트·로컬 락·승인 대기 한도는 "그 방에서 실행하는 것"에
-  // 걸린 제한이라 여기 해당하지 않는다. 뮤트된 방에도 사람이 /tell 로 글은 보낼 수 있는 것과 같다.
+  // 파일만 올리는 길은 세션을 안 거친다 — 뮤트·로컬 락·승인은 "그 방에서 실행하는 것"에 걸린
+  // 제한이라 여기 해당하지 않는다. 뮤트된 방에도 사람이 /tell 로 글은 보낼 수 있는 것과 같다.
+  // `now` 는 예전 호출과의 호환으로 받기만 한다.
   if (paths) {
     if (!paths.length) return emit({ ok: false, error: "no files given" });
     if (paths.length > DISPATCH_FILES_MAX) return emit({ ok: false, error: `too many files (max ${DISPATCH_FILES_MAX})` });
     const checked = checkDispatchFiles(paths);
     if (checked.error) return emit({ ok: false, error: checked.error });
     const caption = String(req.text || "").trim() || undefined;
-    const reply = (final) => emit(final);
-    if (req.now) {
-      emit({ status: "sending" });
-      await dispatchFilesNow(room, checked.files, caption, reply);
-    } else {
-      emit({ status: "awaiting-approval" });
-      await askDispatchFiles(room, checked.files, caption, reply);
-    }
+    emit({ status: "sending" });
+    await dispatchFilesNow(room, checked.files, caption, (final) => emit(final));
     return;
   }
   if (!String(req.text || "").trim()) return emit({ ok: false, error: "empty message" });
@@ -4032,7 +4005,12 @@ async function handleDispatch(req, emit) {
     emit({ status: "running" });
     await dispatchNow(room, text, reply);
   } else {
-    emit({ status: "awaiting-approval" });
+    // 상태 줄은 터미널 사람이 그대로 읽는다 — 폰을 안 보고 있으면 10분 뒤 만료로 끝나므로
+    // **어디서 무엇을 눌러야 하는지**를 지금 말해 준다.
+    emit({
+      status: "awaiting-approval",
+      hint: `waiting for ✅ in ${roomLabel(room)} on Telegram — expires in ${PENDING_DISPATCH_TTL / 60_000} min (--now skips approval)`,
+    });
     await askDispatch(room, text, reply);
   }
 }
@@ -4769,8 +4747,6 @@ async function handleCallback(cq) {
     if (cq.data.startsWith("dp:n:")) {
       pending.reply({ ok: false, error: "rejected in the room" });
       await send(chatId, t(l, "dispatchRejected"));
-    } else if (pending.files) {
-      await postDispatchFiles(pending.room, pending.files, pending.caption, pending.reply);
     } else {
       await runDispatch(pending.room, pending.text, pending.reply);
     }

@@ -489,15 +489,24 @@ ctb send --chat planning "draft the release note for 0.5.0"
 no session — a screenshot, a PDF, a recording:
 
 ```sh
-ctb send --chat planning --file ~/shots/flow.png --now "the new onboarding"
+ctb send --chat planning --file ~/shots/flow.png "the new onboarding"
+ctb send --file ./shot.png          # no --chat → $CTB_CHAT_ID, the calling session's room
 ```
 
 Up to 10 files per call (repeat `--file`); photos ≤10 MB, anything else ≤50 MB; the kind is chosen by
-extension and leftover words become the caption on the first file. Approval works exactly as it does
-for a message, and a failure is reported both in the room and on stderr.
+extension and leftover words become the caption on the first file. Nothing runs, so there is **no
+approval step** (the room is told it came from a terminal), and a failure is reported both in the room
+and on stderr. Without `--chat` it goes to `$CTB_CHAT_ID` — agents running in a bot room and `ctb`
+terminal sessions both get their own room key in that variable.
 
-The room can be its key or any distinctive part of its name. By default the target room is asked to
-approve with ✅/❌ first — the caller may well be an agent, and a process cannot tell a human-typed
+`ctb rooms` lists the room keys; `ctb send --help` lists every option. `ctb` picks its config from the
+**directory you run it in** — `$BOT_CONFIG`, then `mybot.json` / `config.json` in the current
+directory, then the package directory — so from another project, run it in the bot's config folder
+or pass the config path as the first argument. An unknown subcommand (`ctb roomz`) is refused rather
+than waking a session; to start a session with a one-word prompt, use `ctb -- <word>`.
+
+The room can be its key or any distinctive part of its name. By default a message waits for the
+target room to approve with ✅/❌ (the terminal is told which room to tap in and when it expires) — the caller may well be an agent, and a process cannot tell a human-typed
 `ctb` from one a model invoked, so the safe default applies to both; `--now` skips it for unattended
 scripts and the room is told either way. It refuses to target the room your own `ctb` session is
 holding (the bot defers that room, so the message would sit in the queue until you quit), and a

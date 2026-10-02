@@ -5,12 +5,16 @@
 //                                      Resume the provider's Telegram session. With no arguments
 //                                      it asks which room to continue (skipped when there is only
 //                                      one, or when stdin is not a TTY); --chat picks it outright.
+// ctb send [config.json] --chat <room> [--file <path>] [--now] <message>
+//                                      Hand a message (or files) to the RUNNING bot for that room
+// ctb rooms [config.json]              List the rooms this bot knows, with the key --chat takes
 // ctb bot [config.json]                Start the Telegram bot daemon (delegates to bot.mjs)
 // ctb init [dir]                       Create a config.json template
 // ctb --help | --version
 //
-// config.json is optional. A bare name like "planner.json" resolves relative to the
-// package directory (where bot configs typically live alongside bot.mjs).
+// config.json is optional. Without it: $BOT_CONFIG, then mybot.json / config.json in the current
+// directory, then the same names in the package directory. A bare name like "planner.json" resolves
+// relative to the current directory first, then the package directory.
 // Absolute or explicitly relative paths (/ or ./) resolve as-is.
 //
 // While a provider runs, .claude-bot/local.lock records the PID and the room being held, so the
@@ -203,23 +207,34 @@ async function pickRoom(rows) {
 // 알게 된다. **소켓이 실제로 있을 때만** 붙인다 — 봇 없이 터미널만 쓰는 사람은 토큰을 안 낸다.
 // 방에서 도는 에이전트에게는 안 준다: 옆방에 넘기는 건 거기선 `[[ctb-tell:]]` 마커의 몫이고,
 // 길이 둘이면 모델이 갈린다. → docs/design/cli-dispatch.md
+//
+// 자기 방은 **글자 요청** 목록에서만 뺀다. 파일 올리기는 실행이 아니라서 자기 방으로도 정상이고, 실제로
+// 그 방 ID 를 얻을 길이 없어 엉뚱한 DM 에 올린 일이 있었다(0.7.0) — 그래서 자기 방 키를 따로 적어 준다.
 function dispatchInstruction(configPath, st, ownRoom) {
   if (!existsSync(sockPathFor(configPath))) return null;
   const rooms = Object.entries(st.sessions || {})
     .filter(([room, b]) => b?.title && room !== String(ownRoom))
     .map(([room, b]) => `  ${room}  — ${b.title}`);
-  if (!rooms.length) return null; // 넘길 방이 없으면 아무것도 안 붙인다
-  return "## Handing work to this project's Telegram bot\n"
-    + "The bot is running right now. From this terminal you can give it a message and it will run it\n"
-    + "**in that room** — that room's own session, role and settings — and print the answer back here:\n\n"
-    + '  ctb send --chat <room> "<message>"\n'
-    + "You can also post a file there as-is, with no agent run and no session:\n\n"
-    + '  ctb send --chat <room> --file /abs/path.png "optional caption"\n\n'
-    + "Use it to ask another room (often another role) for something you should not do yourself here.\n"
-    + "It is not a way to talk to yourself: this terminal's own room is not in the list below.\n"
-    + "The target room is asked to approve first — add `--now` only when the person told you to skip it.\n"
-    + "It waits for the answer, so that room's queue is your wait. Rooms:\n"
-    + rooms.join("\n");
+  const own = ownRoom ? String(ownRoom) : null;
+  if (!rooms.length && !own) return null; // 넘길 방도 올릴 방도 없으면 아무것도 안 붙인다
+  const lines = ["## Handing work to this project's Telegram bot",
+    "The bot is running right now."];
+  if (own) lines.push(
+    `This terminal is attached to room ${own}${st.sessions?.[own]?.title ? ` (${st.sessions[own].title})` : ""}`
+      + " — also in $CTB_CHAT_ID. To post a file (screenshot, PDF, recording) into it as-is,",
+    "with no agent run and no approval:\n",
+    '  ctb send --file /abs/path.png "optional caption"     (defaults to $CTB_CHAT_ID)\n');
+  if (rooms.length) lines.push(
+    "From this terminal you can also give another room a message and it will run it **in that room** —",
+    "that room's own session, role and settings — and print the answer back here:\n",
+    '  ctb send --chat <room> "<message>"',
+    '  ctb send --chat <room> --file /abs/path.png "caption"   (post a file there, no agent run)\n',
+    "Use it to ask another room (often another role) for something you should not do yourself here.",
+    "A message cannot go to this terminal's own room (it is held by this session).",
+    "A message waits for ✅ in the target room — add `--now` only when the person told you to skip it.",
+    "It waits for the answer, so that room's queue is your wait. Rooms:",
+    rooms.join("\n"));
+  return lines.join("\n");
 }
 
 // `ctb send` — 프롬프트를 **돌고 있는 봇에** 넘긴다. 봇이 그 방에서 처리하므로 typing 이 돌고
@@ -237,7 +252,21 @@ function resolveRoomToken(token, sessions) {
   return { rooms };
 }
 
+const SEND_HELP =
+  `Usage: ctb send [config.json] [--chat <room>] [--now] <message>\n` +
+  `       ctb send [config.json] [--chat <room>] --file <path> [--file <path>] [caption]\n\n` +
+  `Hands a message to the RUNNING bot (\`ctb bot\`). It runs in that room — typing, that room's\n` +
+  `session and settings, the answer posted there — and the answer is printed on stdout.\n\n` +
+  `  --chat <room>   Room key (see \`ctb rooms\`) or any distinctive part of its name.\n` +
+  `                  Optional when the bot knows only one room. With --file it defaults to\n` +
+  `                  $CTB_CHAT_ID — the room of the session you are calling from.\n` +
+  `  --now           Run a message without waiting for ✅ in the room (the room is told anyway).\n` +
+  `  --file <path>   Post the file as-is: no agent run, no session, no approval. Repeatable,\n` +
+  `                  up to 10. Photos ≤10MB, anything else ≤50MB. Leftover words = caption.\n` +
+  `  -h, --help      This help.\n`;
+
 async function sendToBot(rest) {
+  if (rest.some((x) => x === "-h" || x === "--help")) { process.stdout.write(SEND_HELP); return; }
   // `ctb send "bump package.json" --chat dev` 처럼 **본문**이 .json 으로 끝날 수 있다. 공백이
   // 들어간 건 파일 이름이 아니라 문장으로 본다 — 여기 인자 1은 명령이 아니라 사람 말이다.
   const looksLikeConfig = rest[0]?.endsWith(".json") && !/\s/.test(rest[0]);
@@ -252,6 +281,13 @@ async function sendToBot(rest) {
     else if (arg === "--file") files.push(rest2[++i]);
     else if (arg.startsWith("--file=")) files.push(arg.slice("--file=".length));
     else if (arg === "--now") now = true;
+    // 모르는 플래그를 본문에 섞으면 오타가 그대로 방에 실행 요청으로 간다(`--hlep` 처럼).
+    // 플래그처럼 생긴 말을 보내야 하면 `--` 뒤에 둔다.
+    else if (arg === "--") { words.push(...rest2.slice(i + 1)); break; }
+    else if (/^--?[a-z]/i.test(arg)) {
+      process.stderr.write(`ctb send: unknown option ${arg}\n\n${SEND_HELP}`);
+      process.exit(2);
+    }
     else words.push(arg);
   }
   const text = words.join(" ").trim();
@@ -273,11 +309,14 @@ async function sendToBot(rest) {
 
   let st = {};
   try { st = JSON.parse(readFileSync(statePathFor(configPath), "utf8")); } catch {}
+  // 파일은 실행이 아니라서 부른 세션의 방에 올리는 게 정상이다 — 방에서 도는 에이전트와 `ctb` 세션
+  // 모두 CTB_CHAT_ID 를 받는다. 글자는 안 된다: 자기 방은 그 세션이 쥐고 있어 큐에서 안 나온다.
+  if (!room && files.length && process.env.CTB_CHAT_ID) room = process.env.CTB_CHAT_ID;
   if (!room) {
     // 방을 안 주면 아는 방이 하나뿐일 때만 그걸 쓴다 — 스크립트에서 엉뚱한 방으로 가면 안 된다.
     const known = Object.entries(st.sessions || {}).filter(([, b]) => b?.title);
     if (known.length !== 1) {
-      process.stderr.write("ctb send: --chat is required. Rooms this bot knows:\n");
+      process.stderr.write("ctb send: --chat is required (see `ctb send --help`). Rooms this bot knows:\n");
       for (const [k, b] of known) process.stderr.write(`  ${k}  ${b.title}\n`);
       process.exit(2);
     }
@@ -316,7 +355,7 @@ async function sendToBot(rest) {
         let msg;
         try { msg = JSON.parse(line); } catch { continue; }
         // 중간 줄은 진행 상황(stderr), 마지막 줄만 결과(stdout)
-        if (msg.ok === undefined) { process.stderr.write(`ctb: ${msg.status}\n`); continue; }
+        if (msg.ok === undefined) { process.stderr.write(`ctb: ${msg.status}${msg.hint ? ` — ${msg.hint}` : ""}\n`); continue; }
         // 파이프로 받는 게 이 명령의 쓰임이라 잘리면 안 된다 — 쓰기가 끝난 뒤에 종료한다.
         if (msg.ok) { process.stdout.write(`${msg.text}\n`, () => finish(0)); }
         else { process.stderr.write(`ctb send: ${msg.error}\n`); finish(1); }
@@ -340,6 +379,34 @@ async function sendToBot(rest) {
   process.exitCode = code;
 }
 
+// `ctb rooms` — `--chat` 이 받는 방 키를 보여준다. 예전엔 볼 길이 `ctb send` 의 에러 메시지뿐이었다.
+function listRooms(rest) {
+  const configPath = resolveConfig(rest[0]?.endsWith(".json") ? rest[0] : undefined);
+  let cfg = {}, st = {};
+  try { cfg = JSON.parse(readFileSync(configPath, "utf8")); } catch {
+    process.stderr.write(`ctb rooms: cannot read ${configPath}\n`);
+    process.exit(1);
+  }
+  try { st = JSON.parse(readFileSync(statePathFor(configPath), "utf8")); } catch {}
+  const rows = roomRows(st, cfg);
+  process.stderr.write(`config: ${configPath}\n`);
+  if (!rows.length) { process.stderr.write("(no rooms yet — the bot records a room when it first answers there)\n"); return; }
+  const wRoom = Math.max(...rows.map((r) => cellWidth(r.room)));
+  const wName = Math.max(...rows.map((r) => cellWidth(r.name)));
+  for (const r of rows) {
+    const tail = [r.primary ? "*" : "", r.live ? "" : "(not in allowedChatId)"].filter(Boolean).join(" ");
+    console.log(`${pad(r.room, wRoom)}  ${pad(r.name, wName)}  ${pad(r.provider, 6)}  ${r.session}${tail ? `  ${tail}` : ""}`);
+  }
+}
+
+// 첫 인자가 알려진 하위 명령이 아닌 **맨 단어**면 멈춘다. 예전엔 그대로 provider 프롬프트로 넘어가서,
+// `ctb rooms` 가 기본 방(DM)의 세션을 'rooms' 라는 말로 깨우고 끝날 때 인수인계까지 그 방에 올렸다.
+// 문장(공백 포함)·플래그·config 파일은 그대로 통과한다 — 한 단어 프롬프트는 `ctb -- <단어>` 로.
+const SUBCOMMANDS = ["send", "rooms", "bot", "init"];
+function unknownSubcommand(word) {
+  return typeof word === "string" && /^[a-z][a-z0-9-]*$/i.test(word) && !SUBCOMMANDS.includes(word);
+}
+
 async function main() {
   if (a === "-h" || a === "--help") {
     console.log(
@@ -353,13 +420,18 @@ async function main() {
       `                                with typing and the answer posted there. Needs \`ctb bot\` up.\n` +
       `                                Asks for approval in that room unless --now.\n` +
       `  ctb send --chat <room> --file <path> [--file <path>] [--now] [caption]\n` +
-      `                                Post files to that room as-is — no agent, no session.\n` +
+      `                                Post files to that room as-is — no agent, no session,\n` +
+      `                                no approval.\n` +
       `                                Photos up to 10MB, anything else up to 50MB, 10 per call.\n` +
+      `                                Defaults to $CTB_CHAT_ID (the calling session's room).\n` +
+      `                                \`ctb send --help\` lists every option.\n` +
+      `  ctb rooms [config.json]       List known rooms and the key --chat takes\n` +
       `  ctb bot [config.json]         Start the Telegram bot daemon\n` +
       `  ctb init [dir]                Create a config.json template\n` +
       `  ctb --help | --version\n\n` +
-      `config.json defaults to $BOT_CONFIG or the package's own config.json.\n` +
-      `A bare name like "planner.json" resolves relative to the package directory.\n\n` +
+      `config.json defaults to $BOT_CONFIG, then mybot.json / config.json in the current directory,\n` +
+      `then the same names in the package directory — so run ctb from the bot's folder.\n` +
+      `A bare name like "planner.json" resolves relative to the current directory, then the package.\n\n` +
       `Provider precedence: --provider flag → /provider override in state → config.provider → claude.\n\n` +
       `Examples:\n` +
       `  ctb                           Pick a room, then continue its session interactively\n` +
@@ -394,6 +466,19 @@ async function main() {
   if (a === "send") {
     await sendToBot(args.slice(1));
     return;
+  }
+
+  if (a === "rooms") {
+    listRooms(args.slice(1));
+    return;
+  }
+
+  if (unknownSubcommand(a)) {
+    process.stderr.write(
+      `ctb: unknown command "${a}". Commands: ${SUBCOMMANDS.join(", ")} (see \`ctb --help\`).\n`
+      + `To start a session with that word as the prompt, use \`ctb -- ${a}\`.\n`,
+    );
+    process.exit(2);
   }
 
   // Run the selected provider, resuming that provider's bot session.
