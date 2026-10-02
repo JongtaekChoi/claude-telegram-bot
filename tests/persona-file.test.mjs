@@ -89,4 +89,83 @@ writeFileSync(join(pdir, "notes.txt"), "마크다운이 아니다\n본문\n");
   eq("새로 쓴 파일이 바로 보인다", a.reloadPersonas().length, 4);
 }
 
+
+// ── 입력 받기 (add/edit/rm) ──────────────────────────────────────────────
+// 처음엔 한 메시지(첫 줄 id·둘째 줄 이름·나머지 본문)만 받았는데, 텔레그램 모바일은 엔터가 곧
+// 전송이라 첫 줄만 날아가서 사용법만 되돌아왔다(2026-10-02). 두 단계로도 받는다.
+{
+  const editBlock = cut("const PERSONA_PROMPT_MAX =", "\nasync function handlePersonaSet");
+  const { mkdtempSync, existsSync } = await import("node:fs");
+  const dir = join(mkdtempSync(join(tmpdir(), "pe-")), "personas");
+  let sent, personas;
+  const api = (list = []) => {
+    sent = []; personas = list;
+    return new Function(
+      "PERSONA_DIR", "PERSONA_ID_RE", "PERSONAS", "state", "send", "t", "reloadPersonas",
+      "mkdirSync", "writeFileSync", "unlinkSync", "join", "Date",
+      `${editBlock}\nreturn { handlePersonaEdit, pendingPersona };`,
+    )(
+      dir, /^[a-z0-9][a-z0-9-]*$/i, personas, { sessions: {} },
+      async (c, text) => { sent.push(text); }, (l, k, ...a) => `${k}(${a.join("|")})`,
+      () => personas, mkdirSync, writeFileSync, (f) => { throw new Error("no rm in test"); }, join, Date,
+    );
+  };
+
+  // 한 메시지로 끝내기 — 첫 줄에 id 와 이름, 다음 줄부터 본문
+  const a = api();
+  await a.handlePersonaEdit("688", "add", "one-shot 한방\n본문입니다\n두 줄짜리", "ko");
+  ok("한 메시지: 바로 쓴다", sent[0].startsWith("personaAdded(한방|one-shot"), sent[0]);
+  ok("파일이 생긴다", existsSync(join(dir, "one-shot.md")));
+
+  // 두 단계 — id 와 이름만 보내고 본문은 다음 메시지로
+  const b = api();
+  await b.handlePersonaEdit("688", "add", "two-step 두단계", "ko");
+  ok("본문이 없으면 기다린다", sent[0].startsWith("personaAwaitBody(두단계|two-step"), sent[0]);
+  ok("아직 안 쓴다", !existsSync(join(dir, "two-step.md")));
+  eq("기다리는 중", b.pendingPersona.size, 1);
+  await b.handlePersonaEdit("688", "add", "two-step 두단계\n나중에 온 본문", "ko");
+  ok("다음 메시지로 완성된다", sent[1].startsWith("personaAdded(두단계|two-step"), sent[1]);
+
+  // 이름을 아예 안 주면 id 를 이름으로 — 이름 하나 때문에 되묻는 건 과하다
+  // 이름 없이 id + 본문 — 가장 자연스러운 입력이다. 예전엔 본문 첫 줄이 이름으로 먹혀서
+  // 본문이 비고 사용법만 되돌아갔다.
+  const c = api();
+  await c.handlePersonaEdit("688", "add", "no-name\n본문만 있다", "ko");
+  ok("이름이 없으면 id 를 쓰고 본문은 그대로", sent[0].startsWith("personaAdded(no-name|no-name"), sent[0]);
+
+  // id 규칙 — 왜 안 되는지 말한다. 사용법만 되돌리면 같은 걸 또 보낸다.
+  const d = api();
+  await d.handlePersonaEdit("688", "add", "scroll_dev 밑줄\n본문", "ko");
+  ok("밑줄 id 는 이유를 말한다", sent[0] === "personaBadId(scroll_dev)", sent[0]);
+  await d.handlePersonaEdit("688", "add", "한글아이디 이름\n본문", "ko");
+  ok("한글 id 도 이유를 말한다", sent[1].startsWith("personaBadId("), sent[1]);
+  await d.handlePersonaEdit("688", "add", "", "ko");
+  ok("아무것도 없으면 사용법", sent[2] === "personaAddUsage()", sent[2]);
+
+  // config 출신은 채팅에서 못 고친다
+  const e = api([{ id: "cfg-one", name: "설정", prompt: "x" }]);
+  await e.handlePersonaEdit("688", "edit", "cfg-one 새 이름\n새 본문", "ko");
+  ok("config 출신은 거절", sent[0] === "personaFromConfig(cfg-one)", sent[0]);
+
+  // 있는 id 로 add, 없는 id 로 edit
+  const f = api([{ id: "mine", name: "내것", prompt: "x", fromFile: true }]);
+  await f.handlePersonaEdit("688", "add", "mine 이름\n본문", "ko");
+  ok("이미 있으면 add 거절", sent[0] === "personaExists(mine)", sent[0]);
+  await f.handlePersonaEdit("688", "edit", "nope 이름\n본문", "ko");
+  ok("없으면 edit 거절", sent[1] === "personaNoSuch(nope)", sent[1]);
+
+  // 취소
+  const g = api();
+  await g.handlePersonaEdit("688", "add", "will-cancel 취소할것", "ko");
+  await g.handlePersonaEdit("688", "cancel", "", "ko");
+  ok("취소하면 기다리기를 멈춘다", sent[1] === "personaCanceled()" && g.pendingPersona.size === 0, sent[1]);
+  await g.handlePersonaEdit("688", "cancel", "", "ko");
+  ok("기다리는 게 없으면 그렇다고 한다", sent[2] === "personaNoPending()", sent[2]);
+
+  // 너무 긴 프롬프트 — 매 턴 시스템 프롬프트에 통째로 실린다
+  const h = api();
+  await h.handlePersonaEdit("688", "add", `too-long 길다\n${"가".repeat(8001)}`, "ko");
+  ok("8000자 넘으면 거절", sent[0].startsWith("personaTooLong("), sent[0]);
+}
+
 report();

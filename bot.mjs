@@ -416,10 +416,20 @@ const STR = {
     personaSetEmpty: "At least one role has to stay — a group with none has nothing to run as.",
     personaSetDm: "Role sets are per **group**. This is a direct chat, so every role is available here.",
     personaAddUsage:
-      "Usage — the id on the first line, then the display name, then the prompt:\n\n" +
-      "`/persona add scroll-dev`\n`Scroll Stitch dev`\n`You are the developer for Scroll Stitch. …`\n\n" +
+      "Send the id and a name on one line, and I'll ask for the prompt next:\n\n" +
+      "`/persona add scroll-dev Scroll Stitch dev`\n\n" +
+      "Or put the prompt on the following lines of the same message. " +
       "`/persona edit <id>` rewrites one · `/persona rm <id>` deletes one. Ids are `a-z 0-9 -`.",
     personaEditDm: "Roles are created in a direct chat with me, not in a group.",
+    personaAwaitBody: (name, id) =>
+      `🎭 **${name}** (\`${id}\`) — now send the prompt as your next message.\n` +
+      "It becomes that role's system prompt, so write it as instructions to the agent. `/persona cancel` backs out; I stop waiting after 10 minutes.",
+    personaCanceled: "Dropped — nothing was written.",
+    personaNoPending: "I wasn't waiting for anything.",
+    personaBadId: (got) =>
+      `\`${got}\` can't be an id. Ids become a filename and a state key, so they're limited to ` +
+      "**a-z, 0-9 and `-`** — no spaces, underscores or non-Latin letters. Try `scroll-dev`.\n" +
+      "(The display name has no such limit — that's the part people see.)",
     personaFromConfig: (id) =>
       `\`${id}\` is defined in \`config.json\`, which I don't write to — edit it there and \`/restart\`.\n` +
       "(Roles made here live in `.claude-bot/personas/`, so a broken one can never take the bot down with it.)",
@@ -1054,10 +1064,20 @@ const STR = {
     personaSetEmpty: "하나는 남아야 합니다 — 고를 역할이 없는 그룹은 돌 수가 없습니다.",
     personaSetDm: "역할 집합은 **그룹** 단위입니다. 여기는 1:1 대화라 모든 역할을 쓸 수 있습니다.",
     personaAddUsage:
-      "사용법 — 첫 줄에 id, 둘째 줄에 이름, 그다음부터 프롬프트:\n\n" +
-      "`/persona add scroll-dev`\n`스크롤스티치 개발`\n`너는 Scroll Stitch 개발을 맡는다. …`\n\n" +
+      "한 줄에 id 와 이름만 보내면 프롬프트는 제가 다음에 물어봅니다:\n\n" +
+      "`/persona add scroll-dev 스크롤스티치 개발`\n\n" +
+      "한 메시지로 끝내려면 같은 메시지의 다음 줄부터 프롬프트를 쓰면 됩니다. " +
       "`/persona edit <id>` 로 고치고 `/persona rm <id>` 로 지웁니다. id 는 `a-z 0-9 -` 입니다.",
     personaEditDm: "역할은 그룹이 아니라 저와의 1:1 대화에서 만듭니다.",
+    personaAwaitBody: (name, id) =>
+      `🎭 **${name}** (\`${id}\`) — 이제 프롬프트를 **다음 메시지로** 보내주세요.\n` +
+      "그 역할의 시스템 프롬프트가 되니 에이전트에게 주는 지시문으로 쓰시면 됩니다. `/persona cancel` 로 빠져나갈 수 있고, 10분 지나면 기다리기를 멈춥니다.",
+    personaCanceled: "취소했습니다 — 아무것도 쓰지 않았습니다.",
+    personaNoPending: "기다리고 있던 게 없습니다.",
+    personaBadId: (got) =>
+      `\`${got}\` 는 id 로 못 씁니다. id 는 파일명이자 state 키라서 **a-z, 0-9, \`-\`** 만 됩니다 — ` +
+      "띄어쓰기·밑줄·한글은 안 됩니다. `scroll-dev` 처럼 지어주세요.\n" +
+      "(화면에 보이는 **이름**은 제한이 없습니다. 한글로 쓰셔도 됩니다.)",
     personaFromConfig: (id) =>
       `\`${id}\` 은 \`config.json\` 에 있는 역할입니다. 봇은 config 를 쓰지 않으니 파일을 고치고 \`/restart\` 하세요.\n` +
       "(여기서 만든 역할은 `.claude-bot/personas/` 에 있어서, 깨져도 봇이 같이 죽지 않습니다.)",
@@ -4024,10 +4044,31 @@ async function handlePersona(chatId, l) {
 // 통째로 무의미해진다. 규칙 한 줄: **권한이 넓어지는 방향의 변경은 전부 사람 손을 거친다.**
 // → docs/design/room-personas.md "페르소나를 채팅에서 만든다"
 const PERSONA_PROMPT_MAX = 8000; // 시스템 프롬프트에 매 턴 실린다 — 길면 토큰이 매번 샌다
+// **두 단계로도 받는다.** 처음엔 한 메시지(첫 줄 id·둘째 줄 이름·나머지 본문)만 받게 했는데,
+// 텔레그램 모바일은 **엔터가 곧 전송**이라 여러 줄을 한 메시지로 보내는 게 어렵다. 실제로 첫 줄만
+// 날아가서 사용법만 되돌아왔다(2026-10-02). 그래서 id 만 보내면 다음 메시지를 본문으로 받는다.
+// 메모리에만 두고 10분이면 만료된다 — 승인 대기와 같은 성질이라 디스크에 쌓을 이유가 없다.
+const pendingPersona = new Map(); // chatId → { verb, id, name, at }
+const PENDING_PERSONA_TTL = 10 * 60_000;
+function takePendingPersona(chatId) {
+  const p = pendingPersona.get(String(chatId));
+  if (!p) return null;
+  pendingPersona.delete(String(chatId));
+  return Date.now() - p.at > PENDING_PERSONA_TTL ? null : p;
+}
 async function handlePersonaEdit(chatId, verb, rest, l) {
-  const [idRaw, ...bodyLines] = rest.split("\n");
-  const id = idRaw.trim().toLowerCase();
-  if (!PERSONA_ID_RE.test(id)) { await send(chatId, t(l, "personaAddUsage")); return; }
+  if (verb === "cancel") {
+    await send(chatId, t(l, pendingPersona.delete(String(chatId)) ? "personaCanceled" : "personaNoPending"));
+    return;
+  }
+  const [idLine, ...bodyLines] = rest.split("\n");
+  // 한 줄 안에서 id 뒤에 오는 말은 이름이다 — `/persona add scroll-dev 스크롤 개발` 처럼.
+  const [idRaw, ...nameWords] = idLine.trim().split(/\s+/);
+  const id = (idRaw || "").toLowerCase();
+  // 왜 안 됐는지 말한다. 사용법만 되돌려주면 **무엇이 틀렸는지 알 수 없어서** 같은 걸 또 보낸다
+  // (실제로 그랬다 — 2026-10-02). id 는 파일명과 state 키가 되므로 규칙 자체는 못 늦춘다.
+  if (!id) { await send(chatId, t(l, "personaAddUsage")); return; }
+  if (!PERSONA_ID_RE.test(id)) { await send(chatId, t(l, "personaBadId", idRaw)); return; }
   const existing = PERSONAS.find((p) => p.id === id);
   // config 출신은 채팅에서 못 고친다. 봇이 사람이 쓴 정의를 덮으면 잘못 만든 역할을 손으로 고칠
   // 길이 없어진다(합집합에서 config 가 이기는 것과 같은 이유다).
@@ -4046,9 +4087,19 @@ async function handlePersonaEdit(chatId, verb, rest, l) {
   }
   if (verb === "add" && existing) { await send(chatId, t(l, "personaExists", id)); return; }
   if (verb === "edit" && !existing) { await send(chatId, t(l, "personaNoSuch", id)); return; }
-  const name = (bodyLines[0] || "").trim();
-  const prompt = bodyLines.slice(1).join("\n").trim();
-  if (!name || !prompt) { await send(chatId, t(l, "personaAddUsage")); return; }
+  // **이름은 첫 줄에만, 나머지 줄은 전부 본문.** 처음엔 "둘째 줄이 이름" 이었는데, 이름 없이
+  // `/persona add <id>` + 본문을 보내면 본문 첫 줄이 이름으로 먹히고 본문이 비어서 사용법만
+  // 되돌아갔다(2026-10-02). 한 메시지 안의 줄마다 다른 뜻을 주면 사람이 틀리는 쪽이 기본값이 된다.
+  // 이름을 안 주면 id 를 쓴다 — 이름 하나 때문에 되묻는 건 과하고, 나중에 edit 으로 바꾸면 된다.
+  const name = nameWords.join(" ").trim() || id;
+  const prompt = bodyLines.join("\n").trim();
+  if (!prompt) {
+    // 본문이 없으면 **다음 메시지**를 본문으로 받는다. 모바일에서 한 메시지로 여러 줄을 보내기
+    // 어려운 걸 여기서 흡수한다.
+    pendingPersona.set(String(chatId), { verb, id, name, at: Date.now() });
+    await send(chatId, t(l, "personaAwaitBody", name, id));
+    return;
+  }
   if (prompt.length > PERSONA_PROMPT_MAX) { await send(chatId, t(l, "personaTooLong", prompt.length, PERSONA_PROMPT_MAX)); return; }
   try {
     mkdirSync(PERSONA_DIR, { recursive: true });
@@ -5254,7 +5305,7 @@ async function handle(msg) {
   // 거절 문구를 보내면 그게 곧 "이런 명령이 있다"는 안내가 되고, 에이전트에게 넘기면
   // "역할 하나 만들어줘" 가 그대로 프롬프트가 된다.
   {
-    const m = text.match(/^\/persona (add|edit|rm)\b([\s\S]*)$/);
+    const m = text.match(/^\/persona (add|edit|rm|cancel)\b([\s\S]*)$/);
     if (m) {
       if (!isOwner(msg.from)) {
         console.warn(`/persona ${m[1]} ignored — not the owner (from ${msg.from?.id}, room ${chatId})`);
@@ -5262,6 +5313,15 @@ async function handle(msg) {
       }
       if (isGroupChat(msg.chat)) { await send(chatId, t(l, "personaEditDm")); return; }
       await handlePersonaEdit(chatId, m[1], m[2].replace(/^[ \t]+/, ""), l);
+      return;
+    }
+  }
+  // 역할 본문을 기다리는 중이면 이 메시지가 본문이다. 명령은 가로채지 않는다 — 기다리는 중에도
+  // `/status` 는 동작해야 하고, `/persona cancel` 로 빠져나갈 수 있어야 한다.
+  if (!text.startsWith("/") && pendingPersona.has(String(chatId)) && isOwner(msg.from)) {
+    const p = takePendingPersona(chatId);
+    if (p) {
+      await handlePersonaEdit(chatId, p.verb, `${p.id} ${p.name}\n${text}`, l);
       return;
     }
   }

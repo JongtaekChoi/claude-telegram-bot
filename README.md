@@ -277,7 +277,7 @@ Core commands:
 | `/jobs` | Background jobs that outlive replies — ▶ running, ✅ finished |
 | `/persona` | The role this room runs as, and the prompt behind it (view only — you change it from the buttons at `/new`) |
 | `/persona set` | In a **group**: which roles that group may use. Every topic in it picks from this set and the first one is the default; a room already running as a role keeps it. Tap to add or drop |
-| `/persona add\|edit\|rm` | **Owner, in a DM**: write a role's prompt without touching `config.json`. First line the id, then the display name, then the prompt. Takes effect with no restart |
+| `/persona add\|edit\|rm` | **Owner, in a DM**: write a role's prompt without touching `config.json`. Id and name on the first line, prompt on the lines after — or send the id alone and I'll ask for the prompt next. Takes effect with no restart |
 | `/tell [room] [message]` | Hand a message to another room this bot runs — it executes there, with that room's session. Sent bare, it lists the rooms |
 | `/rooms` | Rooms this bot knows · `rm <n>` drops them · `sweep` clears out deleted topics → [details below](#tidying-the-room-list-rooms) |
 | `/router [on\|off]` | Only in a forum's **parent topic**: show whether it asks which room a message is for · `off` stops asking there (anyone in the room can flip it; the room is told) |
@@ -806,8 +806,10 @@ Picking applies that role's prompt **and its own `/remember` memory** (`memory.d
 it. With no `personas` key nothing changes at all — `persona` keeps working exactly as before.
 
 **You can write a role from your phone.** `/persona add` in a direct chat with the bot (owner only)
-saves it to `.claude-bot/personas/<id>.md` — first line the display name, the rest the prompt — and it
-shows up with no restart. The bot never writes `config.json`: a broken config has no guard at boot, so
+saves it to `.claude-bot/personas/<id>.md` and it shows up with no restart. Put the id and a display
+name on the command line and the prompt on the lines below, or send just the id and answer with the
+prompt in your next message — Telegram on a phone sends on Enter, so a one-message form alone would be
+the wrong default. The bot never writes `config.json`: a broken config has no guard at boot, so
 it would crash-loop with SSH as the only way back, and that is the one thing a feature meant for remote
 management must not create. A broken role *file* just drops that one role. So the two halves live apart:
 the **definition** (id, name, prompt) is content the bot owns, while the **permissions** (`dir`,
