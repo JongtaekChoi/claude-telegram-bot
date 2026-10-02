@@ -7,15 +7,15 @@ import { ok, report } from "./helpers/assert.mjs";
 
 const block = cut("const ROUTE_QUIET_MS =", "// 에이전트에게 옆방에 메시지 넘기는 법을");
 
-let sent, handled, NOW, busyRooms, menus, saved;
+let sent, handled, NOW, busyRooms, menus, saved, logs;
 
-function build({ sessions = {}, allowed = ["-100"], lastRunAt = {} } = {}) {
-  sent = []; handled = []; busyRooms = new Set(); menus = []; saved = 0;
+function build({ sessions = {}, allowed = ["-100"], lastRunAt = {}, roomRuns = {} } = {}) {
+  sent = []; handled = []; busyRooms = new Set(); menus = []; saved = 0; logs = [];
   const state = { sessions };
   const chatRuntime = new Map();
   const api = new Function(
     "state", "allowedIds", "knownRooms", "baseChatId", "tgTarget", "rt", "chatRuntime",
-    "send", "t", "handle", "Date", "chatBucket", "saveState", "sendMenu", "roomLabel", "BOT_LANG",
+    "send", "t", "handle", "Date", "chatBucket", "saveState", "sendMenu", "roomLabel", "BOT_LANG", "console",
     `${block}\nreturn { routerSiblings, routerDesk, routerOff, routeShouldAsk, handleRouter, deskGuardInstruction, routeShortLabel, routePreview, askRoute, runRoute, routeInFlow, pendingRoutes, ROUTE_QUIET_MS };`,
   )(
     state, allowed,
@@ -29,7 +29,11 @@ function build({ sessions = {}, allowed = ["-100"], lastRunAt = {} } = {}) {
       return { chat_id: c, ...(th ? { message_thread_id: Number(th) } : {}) };
     },
     (chatId) => ({ lastRunAt: lastRunAt[String(chatId)] || 0 }),
-    { get: (r) => (busyRooms.has(String(r)) ? { busy: true } : undefined) },
+    { get: (r) => {
+      const run = roomRuns[String(r)];
+      const busy = busyRooms.has(String(r));
+      return busy || run ? { busy: busy || undefined, lastRunAt: run } : undefined;
+    } },
     async (id, text, opts) => { sent.push({ id, text, markup: opts?.replyMarkup }); },
     (l, k, ...a) => `${k}(${a.join("|")})`,
     async (msg) => { handled.push(msg); },
@@ -39,6 +43,7 @@ function build({ sessions = {}, allowed = ["-100"], lastRunAt = {} } = {}) {
     async (id, text, markup) => { menus.push({ id, text, markup }); },
     (room) => sessions[String(room)]?.title || String(room),
     "ko",
+    { log: (m) => logs.push(m), error: () => {} },
   );
   return api;
 }
@@ -342,6 +347,44 @@ const FORUM = {
 {
   const a = build({ sessions: FORUM });
   ok("미리보기 기본 길이는 그대로 80", a.routePreview({ text: "가".repeat(200) }, "ko").length === 80);
+}
+
+// ── 마지막으로 대화한 토픽을 맨 앞에 ────────────────────────────────────
+// 탭 수는 그대로다. 순서만 바꾸고 고르는 건 사람이라, 틀려도 대가가 없다.
+{
+  NOW = 2_000_000_000_000;
+  const a = build({ sessions: FORUM, roomRuns: { "-100:35": NOW - 60_000, "-100:11": NOW - 600_000 } });
+  await a.askRoute("-100", { text: "x" }, "ko", a.routerSiblings("-100"));
+  const cbs = sent[0].markup.inline_keyboard.slice(0, 2).flat().map((b) => b.callback_data);
+  ok("최근 대화한 토픽이 맨 앞", cbs[0] === "rt:1:-100:35", JSON.stringify(cbs));
+  ok("그다음이 두 번째", cbs[1] === "rt:1:-100:11", JSON.stringify(cbs));
+  const labels = sent[0].markup.inline_keyboard.flat().map((b) => b.text);
+  ok("첫 버튼에만 '방금'", labels.filter((x) => x.includes("routeRecent")).length === 1, JSON.stringify(labels));
+}
+{
+  // 오래된 방은 순서만 앞이고 꼬리표는 안 붙는다 — 붙이면 추천처럼 보여 잘못 유도한다.
+  NOW = 2_000_000_000_000;
+  const a = build({ sessions: FORUM, roomRuns: { "-100:35": NOW - 3 * 60 * 60_000 } });
+  await a.askRoute("-100", { text: "x" }, "ko", a.routerSiblings("-100"));
+  const labels = sent[0].markup.inline_keyboard.flat().map((b) => b.text);
+  ok("세 시간 전이면 꼬리표 없음", !labels.some((x) => x.includes("routeRecent")), JSON.stringify(labels));
+  ok("그래도 맨 앞", sent[0].markup.inline_keyboard[0][0].callback_data === "rt:1:-100:35");
+}
+{
+  // 재시작 직후엔 활동 기록이 없다 — 예전처럼 제목순.
+  const a = build({ sessions: FORUM });
+  await a.askRoute("-100", { text: "x" }, "ko", a.routerSiblings("-100"));
+  const cbs = sent[0].markup.inline_keyboard.slice(0, 2).flat().map((b) => b.callback_data);
+  ok("기록이 없으면 제목순 그대로", cbs.join() === "rt:1:-100:520,rt:1:-100:11,rt:1:-100:35", JSON.stringify(cbs));
+}
+
+// ── 기록 ────────────────────────────────────────────────────────────────
+// 가정으로 논쟁하지 않으려고 남긴다. 본문은 안 남긴다.
+{
+  const a = build({ sessions: FORUM });
+  await a.askRoute("-100", { text: "비밀 얘기" }, "ko", a.routerSiblings("-100"));
+  ok("물었다는 기록", logs.some((m) => m === "Router ask: -100 (3 siblings)"), JSON.stringify(logs));
+  ok("본문은 안 남긴다", !logs.some((m) => m.includes("비밀")), JSON.stringify(logs));
 }
 
 report();

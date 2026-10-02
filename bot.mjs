@@ -481,6 +481,7 @@ const STR = {
     routeExpired: "That prompt is gone (the bot restarted). Send it again.",
     routeMuted: (room) => `📨 ${room} is muted (\`/*\`). Nothing was sent — unmute it there with \`*/\` first.`,
     routeIncoming: (room) => `📮 Sent here from ${room}:`,
+    routeRecent: "just now",
     routeAttachLeft: "(attachment — it stayed in the parent topic)",
     routerOffBtn: "🔕 Stop asking here",
     routerOnBtn: "📮 Ask again here",
@@ -764,6 +765,7 @@ const STR = {
     routeExpired: "그 메시지는 사라졌습니다 (봇이 재시작했습니다). 다시 보내주세요.",
     routeMuted: (room) => `📨 ${room} 은 뮤트 상태입니다 (\`/*\`). 아무것도 보내지 않았습니다 — 그 방에서 \`*/\` 로 먼저 푸세요.`,
     routeIncoming: (room) => `📮 ${room} 에서 넘어온 말입니다:`,
+    routeRecent: "방금",
     routeAttachLeft: "(첨부 — 상위 방에 있습니다)",
     routerOffBtn: "🔕 이 방에선 그만 묻기",
     routerOnBtn: "📮 다시 묻게 하기",
@@ -2399,7 +2401,10 @@ function routePreview(msg, l, max = 80) {
 
 // 계획 승인·/tell 과 같은 성질이라 메모리에만 둔다 — 재시작하면 사라지고 그 뒤에 누르면 만료
 // 안내가 나간다. 사람이 안 누르고 지나간 말이 디스크에 쌓일 이유가 없다.
-const pendingRoutes = new Map(); // id → { msg }
+// 첫 버튼에 "방금" 을 붙일 범위. 이보다 오래됐으면 순서만 앞에 두고 꼬리표는 안 단다 —
+// 두 시간 전 방을 "방금"이라 부르면 그 자체가 틀린 추천이 된다.
+const ROUTE_RECENT_MS = 60 * 60_000;
+const pendingRoutes = new Map(); // id → { msg, from, at }
 const PENDING_ROUTE_MAX = 20;
 let routeSeq = 0;
 
@@ -2410,10 +2415,21 @@ async function askRoute(chatId, msg, l, rooms) {
   pendingRoutes.set(id, { msg, from: String(chatId), at: Date.now() });
   if (pendingRoutes.size > PENDING_ROUTE_MAX) pendingRoutes.delete(pendingRoutes.keys().next().value);
   const parent = state.sessions?.[String(chatId)]?.title;
+  // **마지막으로 대화한 토픽을 맨 앞에.** 탭 수는 그대로지만 어디를 누를지 고민이 없어진다 —
+  // 상위 방에 흘리는 말은 대개 방금까지 일하던 토픽 얘기라서다. 추측으로 **보내는** 것과는
+  // 다르다: 순서만 바꾸고 고르는 건 사람이라, 틀려도 대가가 없다.
+  // 재시작하면 활동 기록이 없어(런타임 메모리) 예전처럼 제목순이 된다 — 그게 맞다.
+  const lastRun = (room) => chatRuntime.get(String(room))?.lastRunAt || 0;
+  const ordered = [...rooms].sort((a, b) => lastRun(b.room) - lastRun(a.room));
+  const freshest = lastRun(ordered[0]?.room);
   const rows = [];
-  for (let i = 0; i < rooms.length; i += 2)
-    rows.push(rooms.slice(i, i + 2).map((r) => ({
-      text: routeShortLabel(r.title, parent) + (chatRuntime.get(String(r.room))?.busy ? " ⏳" : ""),
+  for (let i = 0; i < ordered.length; i += 2)
+    rows.push(ordered.slice(i, i + 2).map((r) => ({
+      // 최근 것에만 "방금"을 붙인다. 오래된 방에 붙이면 추천처럼 보여서 오히려 잘못 유도한다.
+      text: routeShortLabel(r.title, parent)
+        + (chatRuntime.get(String(r.room))?.busy ? " ⏳"
+           : lastRun(r.room) && lastRun(r.room) === freshest && Date.now() - freshest < ROUTE_RECENT_MS
+             ? ` · ${t(l, "routeRecent")}` : ""),
       callback_data: `rt:${id}:${r.room}`,
     })));
   rows.push([
@@ -2423,6 +2439,10 @@ async function askRoute(chatId, msg, l, rooms) {
   // 끄는 길은 **여기서만** 알 수 있다. 안내 문구를 한 줄 더 붙이면 모든 질문마다 읽히고 평생 한 번
   // 쓰이는데, 버튼은 성가심을 느끼는 바로 그 자리에 있고 누르는 것이 곧 그 동작이다.
   rows.push([{ text: t(l, "routerOffBtn"), callback_data: "rr:off" }]);
+  // 몇 번 묻고 사람들이 뭘 고르는지는 **아무 데도 안 남아** 있었다. 그래서 "자동으로 보낼까"를
+  // 따질 때 가정으로 논쟁하게 된다(실제로 그랬다). 빈도·선택·묵은 시간만 남긴다 — 본문은 안
+  // 남긴다. 사람 말을 로그 파일로 옮길 이유가 없다.
+  console.log(`Router ask: ${chatId} (${ordered.length} siblings)`);
   // sendMenu 가 아니라 send 다. 뒤이어 또 말을 걸면 dropLiveMenu 가 이 버튼을 걷어가는데,
   // 그러면 붙잡아 둔 말이 손댈 방법 없이 사라진다 — 조용히 잃는 것이 이 기능이 막으려는 바로 그것이다.
   await send(chatId, t(l, "routeAsk", routePreview(msg, l)), { replyMarkup: { inline_keyboard: rows } });
@@ -4869,6 +4889,9 @@ async function handleCallback(cq) {
     const pending = pendingRoutes.get(cq.data.slice(3, sep));
     pendingRoutes.delete(cq.data.slice(3, sep));
     const dest = cq.data.slice(sep + 1);
+    // 고른 결과와 **묻고 나서 걸린 시간**. 이 두 줄이 쌓이면 "자동으로 보낼까 · 창을 늘릴까 ·
+    // 끈 방이 많나" 를 가정이 아니라 bot.log 한 번 훑어서 답할 수 있다.
+    if (pending) console.log(`Router ${pending.from} → ${dest} (${Math.round((Date.now() - pending.at) / 1000)}s)`);
     if (!pending) await send(chatId, t(l, "routeExpired"));
     else if (dest === "x") await send(chatId, t(l, "routeCanceled"));
     else if (dest === "here") {
