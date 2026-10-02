@@ -15,11 +15,12 @@
 // 자동 판별하고, cfg.lang 을 주면 그 언어로 고정함. 콘솔/CLI 출력은 영어 단일.
 
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 
 import dns from "node:dns";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
+import { homedir } from "node:os";
 import { spawn, execFileSync } from "node:child_process";
 
 // 일부 네트워크에서 IPv6 경로가 막혀 있으면 Node의 fetch(undici)가 IPv6를
@@ -321,7 +322,7 @@ const STR = {
       "• /new — reset conversation context (new session)\n" +
       "• /newchat [name] — open a new topic and start fresh there (forum groups) · /newtopic works too\n" +
       "• /sessions — list past sessions in this project and pick one to carry on from\n" +
-      "• /name — name the current session so it stands out in /sessions\n" +
+      "• /name — name the current session so it stands out in /sessions · /name - clears it\n" +
       "• /jobs — background jobs that outlive replies · you get a message when one ends\n" +
       "• /persona — the role this room runs as, and the prompt behind it · change it at /new\n" +
       "• /persona set — in a group: which roles that group may use (its topics pick from this set)\n" +
@@ -333,21 +334,23 @@ const STR = {
       "• /plan <request> — plan only (no edits), then approve/cancel to run for real\n" +
       "• /plan on|off — pin plan mode to this room until you turn it off\n" +
       "• Codex fallback can run automatically when Claude hits a limit (if enabled)\n" +
-      "• /ollama — toggle Ollama chat mode (bypass Claude, use local LLM)\n" +
+      "• /ollama — toggle Ollama chat mode for the whole bot (bypass Claude, use local LLM) · owner, in a DM\n" +
+      "• /testfallback — check that the Codex / Ollama fallback answers\n" +
       "• /stop — stop the current task · /stop --reset to also roll back the session\n" +
       "• /local — which room a local `ctb` session holds · end it from here\n" +
       "• /cron — list tasks · /cron add <natural language> to add · /cron rm <id> to remove\n" +
       "• /remember <text> — save to persistent memory (survives /new)\n" +
       "• /memory — view memory · /memory rm <n> to drop lines (`3`, `3 5 7`, `3-9`) · /memory clear to wipe\n" +
       "• /reserve — show retry queue status at usage-limit reset · /reserve rm to cancel\n" +
-      "• /restart — restart the bot (after a syntax check)\n" +
+      "• /restart — restart the bot (after a syntax check) · owner, in a DM — it interrupts every room\n" +
       "• /status — bot status & version\n" +
       "• /provider — view / switch this room's provider\n" +
       "• /model — view / switch this room's model\n" +
       "• /autocompact — view / set the auto-compact token threshold\n" +
       "• /mergewindow — view / set how long to wait for a follow-up message\n" +
       "• /id — show this chat ID\n" +
-      "• /allow — chats allowed to use this bot · `/allow <chatId>` opens one (owner only, no restart)\n" +
+      "• /allow — chats allowed to use this bot · `/allow <chatId>` opens one · `/allow rm <chatId>` closes it (owner only, no restart)\n" +
+      "• /usage — which commands get used, across every bot on this machine (owner only, never sent anywhere)\n" +
       `\nWorking dir: ${dir}\nPermission mode: ${cfg.permissionMode}`,
     chatMigrated: (from, to) =>
       "🔀 This group was upgraded to a supergroup, so Telegram issued it a new chat ID " +
@@ -421,6 +424,14 @@ const STR = {
       "Or put the prompt on the following lines of the same message. " +
       "`/persona edit <id>` rewrites one · `/persona rm <id>` deletes one. Ids are `a-z 0-9 -`.",
     personaEditDm: "Roles are created in a direct chat with me, not in a group.",
+    ownerDmOnly: (cmd) => `${cmd} affects every room this bot runs, so I only take it in a direct chat with me.`,
+    usageShow: (u) =>
+      !u
+        ? "📊 Nothing counted yet. Every bot on this machine adds to `~/.claude-telegram-bot/usage.jsonl` from 0.8.0 on — nothing is sent anywhere."
+        : `📊 **Usage since ${u.since}** — every bot on this machine, never sent anywhere\n` +
+          `Bots: ${u.bots.map(([b, n]) => `${b} (${n})`).join(" · ")}\n\n` +
+          u.keys.map(([k, v]) => `\`${k}\` ${v.n} · ${v.last.slice(5)}`).join("\n") +
+          (u.never.length ? `\n\n**Never used** (candidates to retire): ${u.never.map((c) => `/${c}`).join(" ")}` : ""),
     personaAwaitBody: (name, id) =>
       `🎭 **${name}** (\`${id}\`) — now send the prompt as your next message.\n` +
       "It becomes that role's system prompt, so write it as instructions to the agent. `/persona cancel` backs out; I stop waiting after 10 minutes.",
@@ -759,7 +770,7 @@ const STR = {
       "• /new — 대화 맥락 초기화 (새 세션)\n" +
       "• /newchat [이름] — 새 주제를 만들어 거기서 새 세션 시작 (주제 켜진 그룹) · /newtopic 도 같음\n" +
       "• /sessions — 이 프로젝트의 지난 세션 목록 · 골라서 이어가기\n" +
-      "• /name — 지금 세션에 이름 붙이기 · /sessions 에서 바로 찾기\n" +
+      "• /name — 지금 세션에 이름 붙이기 · /sessions 에서 바로 찾기 · /name - 로 해제\n" +
       "• /jobs — 답장 후에도 살아 있는 백그라운드 작업 · 끝나면 먼저 알려줌\n" +
       "• /persona — 이 방이 어떤 역할로 도는지와 그 프롬프트 본문 · 바꾸는 건 /new 에서\n" +
       "• /persona set — 그룹에서: 그 그룹이 쓸 역할 고르기 (그 안의 토픽들이 이 집합에서 고릅니다)\n" +
@@ -771,21 +782,23 @@ const STR = {
       "• /plan <요청> — 계획만 세우기 (편집 없음) → 승인/취소로 실제 실행\n" +
       "• /plan on|off — 끌 때까지 이 방을 plan 모드로 고정\n" +
       "• Codex 폴백 활성화 시 Claude 한도 도달 때 자동으로 대신 실행\n" +
-      "• /ollama — Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM 사용)\n" +
+      "• /ollama — 봇 전체를 Ollama 채팅 모드로 토글 (Claude 우회, 로컬 LLM 사용) · 오너 DM 에서만\n" +
+      "• /testfallback — Codex·Ollama 폴백이 응답하는지 확인\n" +
       "• /stop — 진행 중인 작업 중단 · /stop --reset 으로 세션도 되돌리기\n" +
       "• /local — 로컬 `ctb` 세션이 잡고 있는 방 확인 · 여기서 종료\n" +
       "• /cron — 예약 작업 보기 · /cron add <자연어>로 추가 · /cron rm <번호>로 삭제\n" +
       "• /remember <내용> — 퍼시스턴트 메모리에 저장 (/new 로 초기화해도 유지)\n" +
       "• /memory — 메모리 보기 · /memory rm <번호> 로 삭제 (`3`, `3 5 7`, `3-9`) · /memory clear 로 전체 삭제\n" +
       "• /reserve — 한도 리셋 시 대기열 상태 확인 · /reserve rm 으로 취소\n" +
-      "• /restart — 봇 재시작 (문법 검사 후 안전하게)\n" +
+      "• /restart — 봇 재시작 (문법 검사 후 안전하게) · 모든 방의 작업이 끊기므로 오너 DM 에서만\n" +
       "• /status — 봇 상태·버전 보기\n" +
       "• /provider — 이 방의 provider 보기·전환\n" +
       "• /model — 이 방의 모델 보기·전환\n" +
       "• /autocompact — 자동 압축 임계값 보기·설정\n" +
       "• /mergewindow — 다음 메시지를 얼마나 기다렸다 합칠지 보기·설정\n" +
       "• /id — 이 채팅 ID 확인\n" +
-      "• /allow — 이 봇을 쓸 수 있는 방 목록 · `/allow <chatId>` 로 추가 (오너만, 재시작 불필요)\n" +
+      "• /allow — 이 봇을 쓸 수 있는 방 목록 · `/allow <chatId>` 로 추가 · `/allow rm <chatId>` 로 제거 (오너만, 재시작 불필요)\n" +
+      "• /usage — 이 머신의 봇 전체에서 어떤 명령을 쓰는지 집계 (오너만, 바깥으로 안 보냄)\n" +
       `\n작업 폴더: ${dir}\n권한 모드: ${cfg.permissionMode}`,
     chatMigrated: (from, to) =>
       "🔀 이 그룹이 슈퍼그룹으로 승격되면서 텔레그램이 채팅 ID 를 새로 발급했습니다 " +
@@ -1069,6 +1082,14 @@ const STR = {
       "한 메시지로 끝내려면 같은 메시지의 다음 줄부터 프롬프트를 쓰면 됩니다. " +
       "`/persona edit <id>` 로 고치고 `/persona rm <id>` 로 지웁니다. id 는 `a-z 0-9 -` 입니다.",
     personaEditDm: "역할은 그룹이 아니라 저와의 1:1 대화에서 만듭니다.",
+    ownerDmOnly: (cmd) => `${cmd} 은 이 봇이 맡은 모든 방에 영향을 주는 명령이라 저와의 1:1 대화에서만 받습니다.`,
+    usageShow: (u) =>
+      !u
+        ? "📊 아직 집계된 게 없습니다. 0.8.0 부터 이 머신의 봇 전부가 `~/.claude-telegram-bot/usage.jsonl` 에 적습니다 — 바깥으로는 아무것도 안 보냅니다."
+        : `📊 **${u.since} 부터의 사용 집계** — 이 머신의 봇 전체, 바깥으로 안 보냄\n` +
+          `봇: ${u.bots.map(([b, n]) => `${b} (${n})`).join(" · ")}\n\n` +
+          u.keys.map(([k, v]) => `\`${k}\` ${v.n} · ${v.last.slice(5)}`).join("\n") +
+          (u.never.length ? `\n\n**한 번도 안 쓴 것** (정리 후보): ${u.never.map((c) => `/${c}`).join(" ")}` : ""),
     personaAwaitBody: (name, id) =>
       `🎭 **${name}** (\`${id}\`) — 이제 프롬프트를 **다음 메시지로** 보내주세요.\n` +
       "그 역할의 시스템 프롬프트가 되니 에이전트에게 주는 지시문으로 쓰시면 됩니다. `/persona cancel` 로 빠져나갈 수 있고, 10분 지나면 기다리기를 멈춥니다.",
@@ -1459,13 +1480,13 @@ const COMMANDS = {
     { command: "router", description: "Forum parent topic: ask which room a message is for · off stops asking" },
     { command: "compact", description: "Compress context to free up space (keeps session)" },
     { command: "plan", description: "Plan only (no edits) · on|off to pin plan mode to this room" },
-    { command: "ollama", description: "Toggle Ollama chat mode (bypass Claude, use local LLM)" },
+    { command: "ollama", description: "Toggle Ollama chat mode for the whole bot (owner DM)" },
     { command: "stop", description: "Stop the current task (--reset to roll back session)" },
     { command: "local", description: "Which room a local ctb session holds · end it" },
     { command: "remember", description: "Save to persistent memory (survives /new)" },
     { command: "memory", description: "View memory · rm <n> drops lines (3-9 ok) · clear wipes it" },
     { command: "cron", description: "List / add / remove scheduled tasks" },
-    { command: "restart", description: "Restart the bot (after syntax check)" },
+    { command: "restart", description: "Restart the bot after a syntax check (owner DM)" },
     { command: "status", description: "Bot status / version" },
     { command: "provider", description: "View / switch this room's provider" },
     { command: "model", description: "View / switch this room's model" },
@@ -1474,6 +1495,8 @@ const COMMANDS = {
     { command: "reserve", description: "Schedule retry when usage limit resets · /reserve rm to cancel" },
     { command: "id", description: "Show this chat ID" },
     { command: "allow", description: "Chats allowed to use this bot · add / remove one (owner only)" },
+    { command: "usage", description: "Which commands get used, across this machine's bots (owner only)" },
+    { command: "testfallback", description: "Check that the Codex / Ollama fallback answers" },
     { command: "help", description: "Help" },
   ],
   ko: [
@@ -1488,13 +1511,13 @@ const COMMANDS = {
     { command: "router", description: "포럼 상위 토픽에서 어디로 보낼지 묻기 · off 로 그만 묻기" },
     { command: "compact", description: "컨텍스트 압축 (세션 유지, 공간 확보)" },
     { command: "plan", description: "계획만 세우기 (편집 없음) · on|off 로 이 방에 고정" },
-    { command: "ollama", description: "Ollama 채팅 모드 토글 (Claude 우회, 로컬 LLM)" },
+    { command: "ollama", description: "봇 전체 Ollama 채팅 모드 토글 (오너 DM)" },
     { command: "stop", description: "작업 중단 (--reset 으로 세션 되돌리기)" },
     { command: "local", description: "로컬 ctb 세션이 잡은 방 확인·종료" },
     { command: "remember", description: "퍼시스턴트 메모리에 저장 (/new 후에도 유지)" },
     { command: "memory", description: "메모리 보기 · rm <번호>로 삭제(3-9 가능) · clear로 전체" },
     { command: "cron", description: "예약 작업 보기·추가·삭제" },
-    { command: "restart", description: "봇 재시작 (문법 검사 후)" },
+    { command: "restart", description: "봇 재시작 · 문법 검사 후 (오너 DM)" },
     { command: "status", description: "봇 상태·버전 보기" },
     { command: "provider", description: "이 방의 provider 보기·전환" },
     { command: "model", description: "이 방의 모델 보기·전환" },
@@ -1503,6 +1526,8 @@ const COMMANDS = {
     { command: "reserve", description: "한도 리셋 시 재시도 예약 · /reserve rm 으로 취소" },
     { command: "id", description: "이 채팅 ID 확인" },
     { command: "allow", description: "이 봇을 쓸 수 있는 방 목록 · 추가·삭제 (오너만)" },
+    { command: "usage", description: "이 머신 봇 전체의 명령 사용 집계 (오너만)" },
+    { command: "testfallback", description: "Codex·Ollama 폴백 응답 확인" },
     { command: "help", description: "도움말" },
   ],
 };
@@ -1836,6 +1861,70 @@ for (const id of state.adoptedChatIds || []) if (!allowedIds.includes(id)) allow
 // 쓴다. **방이 아니라 사람으로 가르는 게 핵심이다** — 그룹 멤버십이 권한이 되면 그룹 관리자가
 // 사람을 추가하는 순간 어드민이 늘어난다. → docs/design/owner-admin.md
 const isOwner = (from) => allowedIds.includes(String(from?.id));
+
+// ── 사용 집계 ─────────────────────────────────────────────────────────────
+// 안 쓰는 기능을 걷어낼 근거. 바깥으로는 아무것도 안 보낸다 — 의존성 0, 외부 호출 0 인 봇이라는
+// 약속을 깨면서까지 모을 데이터가 아니다. 대신 **이 머신의 봇 전부가 한 파일에** 적는다:
+// 소스 폴더에서 도는 봇과 npm 으로 깐 봇이 각자 state.json 을 갖고 있어서, state 에 두면 봇마다
+// 따로 쌓여 "이 명령을 정말 아무도 안 쓰나"를 한눈에 못 본다. 여러 프로세스가 같은 파일을 쓰므로
+// JSON 을 고쳐 쓰지 않고 **한 줄씩 덧붙인다**(O_APPEND 라 짧은 줄은 섞이지 않는다).
+// 키는 사람이 읽는 이름이다(`/persona add`, `button: /sessions`) — 접두어 표를 몰라도 읽힌다.
+const USAGE_LOG = join(homedir(), ".claude-telegram-bot", "usage.jsonl");
+// 인자 첫 단어 중 **이것만** 키에 붙인다. 아무 단어나 붙이면 `/plan add a button` 이 `/plan add` 로 잡힌다.
+const USAGE_SUBS = {
+  persona: ["add", "edit", "rm", "cancel", "set"], plan: ["on", "off"], rooms: ["rm", "sweep"],
+  router: ["on", "off"], memory: ["rm", "clear"], cron: ["add", "rm", "del", "remove"], allow: ["rm"],
+  local: ["kill", "stop"], stop: ["--reset"], name: ["-", "off"], new: ["--chat"], reserve: ["rm"],
+  autocompact: ["off", "default", "reset"], mergewindow: ["off", "default", "reset"],
+  provider: ["claude", "codex", "default", "reset"], model: ["default", "reset"],
+};
+// 메뉴에 없는 것도 센다 — 숨은 명령일수록 "아무도 안 쓴다"를 확인하고 싶다.
+const USAGE_COMMANDS = [...COMMANDS.en.map((c) => c.command), "newtopic", "personaset", "testfallback", "usage"];
+const USAGE_BUTTONS = {
+  ac: "/autocompact", cp: "/compact (auto-compact ask)", dp: "ctb send approve", md: "/model",
+  mw: "/mergewindow", pa: "/new role pick", pl: "/plan on|off", plan: "/plan approve", pv: "/provider",
+  rr: "/router on|off", rt: "router room pick", ss: "/sessions", tl: "/tell approve", ps: "/persona set",
+  local: "/local",
+};
+const localDay = () => new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD, 로컬 기준
+function countUse(key) {
+  if (!key) return;
+  try {
+    mkdirSync(dirname(USAGE_LOG), { recursive: true });
+    appendFileSync(USAGE_LOG, JSON.stringify({ d: localDay(), bot: cfg.name || "claude-telegram-bot", k: key }) + "\n");
+  } catch {} // 집계가 실패했다고 명령이 실패하면 안 된다
+}
+function commandUseKey(text) {
+  const m = text.match(/^\/([a-z_]+)(?:\s+(\S+))?/i);
+  if (!m) return null;
+  const cmd = m[1].toLowerCase();
+  if ((cfg.commands || {})[m[1]]) return `/${m[1]} (custom)`;
+  if (!USAGE_COMMANDS.includes(cmd) && cmd !== "start") return null; // 오타·에이전트에게 가는 말은 안 센다
+  const sub = m[2]?.toLowerCase();
+  return USAGE_SUBS[cmd]?.includes(sub) ? `/${cmd} ${sub}` : `/${cmd}`;
+}
+function readUsage() {
+  let raw = "";
+  try { raw = readFileSync(USAGE_LOG, "utf8"); } catch { return null; }
+  const keys = new Map(), bots = new Map();
+  let since = "";
+  for (const line of raw.split("\n")) {
+    let e;
+    try { e = JSON.parse(line); } catch { continue; } // 끊긴 줄 하나가 전체를 막지 않게
+    if (!e?.k) continue;
+    const k = keys.get(e.k) || { n: 0, last: "" };
+    k.n++;
+    if (e.d > k.last) k.last = e.d;
+    keys.set(e.k, k);
+    bots.set(e.bot, (bots.get(e.bot) || 0) + 1);
+    if (!since || e.d < since) since = e.d;
+  }
+  // 한 번도 안 쓴 명령 — 걷어낼 후보. 하위 명령이나 버튼으로라도 썼으면 쓴 것으로 친다.
+  const used = (c) => [...keys.keys()].some((k) => k === `/${c}` || k.startsWith(`/${c} `) || k.startsWith(`button: /${c}`));
+  if (!keys.size) return null;
+  const never = USAGE_COMMANDS.filter((c) => !used(c));
+  return { keys: [...keys].sort((a, b) => b[1].n - a[1].n), bots: [...bots], since, never };
+}
 
 // ── 방(chatId)별 세션 ─────────────────────────────────────────────────────
 // 같은 봇이 여러 방(DM·그룹)을 담당할 때 방마다 대화 맥락과 provider/model override 를 분리한다.
@@ -4322,6 +4411,7 @@ async function handleDispatch(req, emit) {
     if (checked.error) return emit({ ok: false, error: checked.error });
     const caption = String(req.text || "").trim() || undefined;
     emit({ status: "sending" });
+    countUse("ctb send --file");
     await dispatchFilesNow(room, checked.files, caption, (final) => emit(final));
     return;
   }
@@ -4338,6 +4428,7 @@ async function handleDispatch(req, emit) {
     return emit({ ok: false, error: "too many terminal requests are awaiting approval" });
   const text = String(req.text).trim();
   const reply = (final) => emit(final);
+  countUse("ctb send");
   if (req.now) {
     emit({ status: "running" });
     await dispatchNow(room, text, reply);
@@ -5018,6 +5109,7 @@ async function handleCallback(cq) {
   }
   const l = langOf({ from: cq.from });
   await tg("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
+  { const pre = String(cq.data || "").split(":")[0]; countUse(`button: ${USAGE_BUTTONS[pre] || pre}`); }
   // 중복 클릭 방지 — 원본 메시지의 버튼 제거
   if (!menu) {
     if (liveMenus.get(chatId) === cq.message.message_id) liveMenus.delete(chatId);
@@ -5168,6 +5260,7 @@ async function handle(msg) {
   }
   if (text.startsWith("//")) {
     seen();
+    countUse("// note");
     return;
   }
   // 처음 보는 방의 첫 대화 — 역할 버튼을 띄우되 **답은 그냥 진행한다.** 폰에서 급히 물었는데
@@ -5181,6 +5274,7 @@ async function handle(msg) {
   }
   if (text.startsWith("/*")) {
     seen();
+    countUse("/* block");
     // 한 메시지 안에서 열고 닫으면(`/* 메모 */`) 블록에 들어가지 않고 1회성 무시로 끝낸다.
     if (!text.slice(2).includes("*/")) {
       chatBucket(chatId).muted = true;
@@ -5203,6 +5297,7 @@ async function handle(msg) {
   }
 
   // 명령어
+  if (text.startsWith("/")) countUse(commandUseKey(text));
   if (text === "/start" || text === "/help") {
     await send(chatId, t(l, "help", roomDir(chatId) || cfg.projectDir));
     return;
@@ -5348,6 +5443,25 @@ async function handle(msg) {
   }
   if (text === "/cron" || text.startsWith("/cron ")) {
     await handleCron(chatId, text.slice(5).trim(), l);
+    return;
+  }
+  // 봇 전체에 걸리는 두 명령 — 재시작은 모든 방의 작업을 끊고, /ollama 는 방이 아니라 봇 전체
+  // (`state.ollamaMode`)를 갈아끼운다. 방 하나의 권한으로 열어 두면 그룹의 아무나 남의 작업을
+  // 끊는다. 오너가 아니면 `/allow` 처럼 **존재를 알리지 않고**, 오너라도 그룹에서는 DM 으로 보낸다
+  // — 그룹에서 치면 그 방 사람들 눈앞에서 다른 방까지 흔드는 셈이라서다.
+  if (text === "/restart" || text === "/ollama") {
+    if (!isOwner(msg.from)) {
+      console.warn(`${text} ignored — not the owner (from ${msg.from?.id}, room ${chatId})`);
+      return;
+    }
+    if (isGroupChat(msg.chat)) { await send(chatId, t(l, "ownerDmOnly", text)); return; }
+  }
+  if (text === "/usage") {
+    if (!isOwner(msg.from)) {
+      console.warn(`/usage ignored — not the owner (from ${msg.from?.id}, room ${chatId})`);
+      return;
+    }
+    await send(chatId, t(l, "usageShow", readUsage()));
     return;
   }
   if (text === "/restart") {

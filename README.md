@@ -286,13 +286,15 @@ Core commands:
 | `/compact` | Compact the current context (Claude only) |
 | `/stop [--reset]` | Stop the task; optionally restore its previous session ID |
 | `/local [kill]` | Show which room a local `ctb` session is holding, and end it from Telegram |
-| `/ollama` | Toggle local Ollama chat mode |
+| `/ollama` | Toggle local Ollama chat mode — for the whole bot, so **owner only, in a DM** |
 | `/testfallback` | Test the configured Codex or Ollama fallback |
 | `/status` | Show version, provider, CLI versions, model, fallback, and session state |
 | `/remember <text>` · `/memory` | Save or inspect persistent memory (`/memory rm <n>` drops lines — `3`, `3 5 7`, or `3-9`) |
 | `/cron` · `/reserve` | Manage scheduled jobs and usage-limit retries |
 | `/allow` | Chats allowed to use this bot, with where each came from · `/allow <chatId>` opens one (in effect immediately, no restart) · `/allow rm <chatId>` closes it. **Owner only** — the gate is your Telegram user id, not the room, and neither the agent nor `ctb send` can reach it. `[config]` entries are read-only here: edit the file and `/restart` |
-| `/autocompact` · `/mergewindow` · `/restart` · `/id` · `/help` | Maintenance and help commands |
+| `/usage` | Which commands, buttons and `ctb send` calls get used — **owner only**. Every bot on this machine (source checkout or npm install) appends to one local file, `~/.claude-telegram-bot/usage.jsonl`; nothing is sent anywhere. Ends with the commands never used, the candidates to retire |
+| `/restart` | Restart the bot after a syntax check. It interrupts every room, so **owner only, in a DM** — in a group the owner is pointed to the DM and anyone else gets no reply |
+| `/autocompact` · `/mergewindow` · `/id` · `/help` | Maintenance and help commands |
 
 > **A removed rule can look like it's still in effect** — that's expected. `/memory rm` drops the
 > line from the `RULES` block injected on every call, but the **conversation already in progress**
@@ -349,7 +351,8 @@ Core commands:
 > (`KeepAlive`); under a bare `node bot.mjs` with no supervisor it just stops. Your session resumes
 > after the restart (the id lives in `state.json`). Unlike `/stop`, a restart is **not** room-scoped —
 > it takes the whole process down, so any task running in another room dies with it. Rooms that had a
-> task running or messages queued get told; idle rooms aren't bothered.
+> task running or messages queued get told; idle rooms aren't bothered. That is why it is **owner only,
+> in a DM** — before 0.8.0 anyone in an allowed group could cut off every other room's work.
 
 </details>
 

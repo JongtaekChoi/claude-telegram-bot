@@ -73,14 +73,14 @@ function build({ sendOk = true, description } = {}) {
   const mk = () => new Function(
     "allowedIds", "baseChatId", "DISPATCH_FILES_MAX", "checkDispatchFiles", "dispatchFilesNow", "state",
     "readLocalLock", "pendingDispatch", "PENDING_DISPATCH_MAX", "PENDING_DISPATCH_TTL", "dispatchNow",
-    "askDispatch", "roomLabel",
+    "askDispatch", "roomLabel", "countUse",
     `${hd}\nreturn handleDispatch;`,
   )(
     ["-100"], (r) => String(r).split(":")[0], 10,
     (paths) => ({ files: paths.map((abs) => ({ abs })) }),
     async (room, files) => calls.push(["now", room, files.length]),
     { sessions: { "-100:5": { muted: true } } }, () => ({ room: "-100:5" }), new Map(), 20, 600_000,
-    async () => calls.push(["run"]), async () => calls.push(["ask"]), (r) => `방(${r})`,
+    async () => calls.push(["run"]), async () => calls.push(["ask"]), (r) => `방(${r})`, () => {},
   );
   const out = [];
   await mk()({ room: "-100:5", files: [png] }, (o) => out.push(o));
