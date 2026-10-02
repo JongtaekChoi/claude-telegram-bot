@@ -432,6 +432,8 @@ const STR = {
     ollamaOff: "✅ Ollama mode off. Back to Claude.",
     busy: "⏳ A previous task is still running. Please try again when it finishes.",
     queued: (n) => `⏳ Queued (#${n}). Will run when the current task finishes.`,
+    sessionRestarted:
+      "♻️ The previous session was gone, so I started a fresh one — earlier context from it is lost.",
     stopOk: "🛑 Task stopped.",
     stopReset: "🛑 Task stopped and session rolled back to before the task.",
     stopNoop: "No task is running.",
@@ -711,6 +713,8 @@ const STR = {
       "슈퍼그룹에서 '주제(Topics)'가 켜져 있어야 하고, 봇에 '주제 관리' 권한이 있어야 합니다.",
     busy: "⏳ 이전 작업이 아직 진행 중입니다. 끝나면 다시 보내주세요.",
     queued: (n) => `⏳ 대기열에 추가됐습니다 (${n}번째). 현재 작업이 끝나면 자동으로 실행됩니다.`,
+    sessionRestarted:
+      "♻️ 지난 세션이 사라져서 새 세션으로 시작했습니다 — 그 세션의 맥락은 남아 있지 않습니다.",
     stopOk: "🛑 작업을 중단했습니다.",
     stopReset: "🛑 작업을 중단하고 세션을 작업 이전으로 되돌렸습니다.",
     stopNoop: "실행 중인 작업이 없습니다.",
@@ -2481,6 +2485,15 @@ function parseResetTime(raw) {
   return null;
 }
 
+// provider 가 "그런 세션 없다"고 답하는 경우. `state.json` 에 적힌 세션 ID 가 사라지는 건 드물지
+// 않다 — 사람이 `~/.claude` 를 치우거나, 다른 머신에서 같은 방을 열거나, provider 가 오래된 걸
+// 걷어낸다. 그런데 봇은 세션이 있으면 **항상** `--resume` 을 붙이므로, 한 번 이렇게 되면 그 방은
+// 영영 아무것도 못 돌린다. 터미널에서 `ctb send` 로 그 방에 말을 거는 길까지 같이 막혀서, 고치러
+// 가는 길 자체가 끊긴다(2026-10-02 에 구현 토픽이 그렇게 잠겼다). state.json 손편집이 유일한
+// 탈출구였다. → 세션 ID 를 버리고 한 번 더 돌린다.
+const SESSION_GONE_RE = /no conversation found|conversation not found|session not found|no such session|no session with|thread not found|no thread with/i;
+const isSessionGone = (raw) => SESSION_GONE_RE.test(String(raw || ""));
+
 function isFallbackError(raw, code) {
   const t = (raw || "").toLowerCase();
   return t.includes("credit") || t.includes("balance") || t.includes("billing") || t.includes("payment")
@@ -2730,11 +2743,18 @@ function runClaude(prompt, sessionId, opts = {}) {
       if (opts.trackChild) opts.trackChild.child = null;
       resolve({ ok: false, text: `Failed to start claude: ${e.message}` });
     });
+    // 죽은 세션 ID 를 물고 온 경우엔 ID 를 버리고 딱 한 번 다시 돈다. 이 오류는 세션이 시작되기도
+    // 전에 나므로 JSON 이 아니라 stderr 로 오는 쪽이 보통이지만, 양쪽 다 본다.
+    const retryFresh = async () => ({
+      ...(await runClaude(prompt, undefined, { ...opts, _freshRetry: true })),
+      sessionRestarted: true,
+    });
     child.on("close", (code) => {
       if (opts.trackChild) opts.trackChild.child = null;
       try {
         const j = JSON.parse(out);
         const rawErr = j.result ?? "";
+        if (sessionId && !opts._freshRetry && j.is_error && isSessionGone(rawErr)) return void resolve(retryFresh());
         const text = j.is_error ? classifyClaudeError(rawErr, code) : (rawErr || "(empty response)");
         const resetAt = j.is_error ? parseResetTime(rawErr) : null;
         const canFallback = j.is_error && isFallbackError(rawErr, code);
@@ -2742,6 +2762,7 @@ function runClaude(prompt, sessionId, opts = {}) {
         resolve({ ok: !j.is_error, text, sessionId: j.session_id, cost: j.total_cost_usd, ctxTokens, resetAt, canFallback });
       } catch {
         const raw = (err || out || "no output").slice(0, 3500);
+        if (sessionId && !opts._freshRetry && isSessionGone(raw)) return void resolve(retryFresh());
         resolve({ ok: false, text: classifyClaudeError(raw, code), resetAt: parseResetTime(raw), canFallback: isFallbackError(raw, code) });
       }
     });
@@ -2872,6 +2893,12 @@ function runCodex(prompt, lang = "en", opts = {}) {
         return finish({ ok: true, text: header + finalText, sessionId });
       }
       const raw = (err || out || finalText || "no output").slice(0, 1000);
+      // Claude 와 같은 이유로, 사라진 thread 를 물고 있으면 ID 를 버리고 한 번 다시 돈다.
+      if (resumeSessionId && !opts._freshRetry && isSessionGone(raw))
+        return void finish(
+          runCodex(prompt, lang, { ...opts, sessionId: undefined, _freshRetry: true })
+            .then((res) => ({ ...res, sessionRestarted: true })),
+        );
       finish({ ok: false, text: `Codex failed (exit ${code}):\n${raw}`, canFallback: isFallbackError(raw, code) });
     });
     child.stdin.end(codexPrompt);
@@ -4516,6 +4543,9 @@ function resumeQueueAfterProviderSwitch(chatId, previousProvider) {
 async function replyWithClaudeResult(chatId, l, prompt, msg, res, started, planPending, gen) {
   const r = rt(chatId);
   const secs = Math.round((Date.now() - started) / 1000);
+  // 세션이 사라져서 새로 시작했으면 그 사실을 먼저 말한다. 조용히 넘어가면 에이전트가 지난 맥락을
+  // 통째로 잃은 걸 사용자만 모르고, "왜 아까 한 얘기를 기억 못 하냐"가 된다.
+  if (res.sessionRestarted && !r.stopping) await send(chatId, t(l, "sessionRestarted")).catch(() => {});
   if (!res.ok) {
     // plan 고정 중에는 폴백하지 않는다. Codex 에는 plan 모드가 없어서, 계획만 받으려던 요청이
     // 한도에 걸렸다는 이유로 파일을 고치는 실행으로 바뀐다 — 권한이 조용히 넓어지는 유일한 자리다.
