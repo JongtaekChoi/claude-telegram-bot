@@ -425,7 +425,7 @@ The only keys you need to start are `token`, `allowedChatId`, `projectDir`, `cla
 | `codexFallback` | (optional) `true` to enable Codex as the preferred fallback when Claude is rate-limited or out of credits |
 | `codexBin` | (optional) Path to the `codex` binary. Defaults to `"codex"` on `PATH`; use an absolute path for launchd |
 | `codexModel` | (optional) Codex model passed with `--model`; `/model` shows the models available to the installed Codex CLI as buttons. Empty/default lets the CLI choose and is safest. |
-| `codexSandbox` | (optional) Codex sandbox for a new `codex exec` session (default: `"workspace-write"`) |
+| `codexSandbox` | (optional) Codex sandbox for new bot sessions and local `ctb` sessions (including resume); explicit CLI sandbox options take precedence (default: `"workspace-write"`) |
 | `codexTimeout` | (optional) Milliseconds to wait for Codex before falling back to reserve/Ollama (default: `600000`) |
 | `ollamaFallback` | (optional) `true` to enable Ollama as a secondary fallback when Claude is rate-limited or out of credits |
 | `ollamaModel` | (optional) Ollama model to use for fallback (default: `"qwen3.5:4b"`). The context a session carries over is capped by this model's runtime context window (`num_ctx`), which Ollama defaults to ~4K regardless of the model's architectural max — too small for a long Claude session. Bake a larger window into a variant with a `Modelfile` (`FROM qwen3.5:4b` + `PARAMETER num_ctx 6144`, `ollama create qwen3.5:4b-ctx6k -f Modelfile`) and point this at it. Size it to your RAM — on an 8 GB machine ~6K is the safe ceiling; 32K swaps the machine to death. |
@@ -1036,3 +1036,5 @@ See [CHANGELOG.md](./CHANGELOG.md) for recent changes.
 ## License
 
 MIT © Jongtaek Choi
+
+Local `ctb` applies `codexSandbox` to both new and resumed Codex sessions (default: `workspace-write`). Explicit CLI sandbox options take precedence. Restart the local session to use a changed setting; this does not change an already-running session. Terminal output does not process `ctb-tell`, `ctb-image`, `ctb-video`, or `ctb-file` markers: use `ctb send`, and report a failed send as undelivered. These markers are handled only by the bot response path.

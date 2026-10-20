@@ -71,10 +71,34 @@ const run = (args, env = {}) => spawnSync(process.execPath, [join(ROOT, "ctb.mjs
   const st = { sessions: { "111": { title: "DM" }, "-100:7": { title: "기획" } } };
   const txt = fn(join(sockDir, "config.json"), st, "-100:7");
   ok("자기 방 키를 알려준다", txt.includes("attached to room -100:7"), txt);
+  ok("로컬 마커 금지 안내", txt.includes("not processed here") && txt.includes("Do not fall back to markers"), txt);
   ok("옆방은 목록에 있다", txt.includes("111  — DM"), txt);
   ok("자기 방은 글자 목록에 없다", !txt.includes("-100:7  — 기획"), txt);
   const alone = fn(join(sockDir, "config.json"), { sessions: { "-100:7": { title: "기획" } } }, "-100:7");
   ok("옆방이 없어도 파일 안내는 붙는다", alone?.includes("attached to room -100:7") && !alone.includes("Rooms:"), alone);
 }
 
+{
+  const source = cutCtb("function codexSandboxArgs(cfg, forwardedArgs) {", "\nfunction dispatchInstruction");
+  const options = new Function(`${source}; return codexSandboxArgs;`)();
+  eq("Codex default remains workspace-write", JSON.stringify(options({}, [])), '["--sandbox","workspace-write"]');
+  eq("configured sandbox is forwarded", JSON.stringify(options({codexSandbox: "danger-full-access"}, [])), '["--sandbox","danger-full-access"]');
+  for (const args of [["--sandbox", "read-only"], ["--sandbox=read-only"], ["-s", "read-only"], ["-sread-only"],
+    ["--full-auto"], ["--approve-for-me"], ["--yolo"], ["--dangerously-bypass-approvals-and-sandbox"],
+    ["-c", 'sandbox_mode="read-only"'], ['--config=sandbox_mode="read-only"'], ['-csandbox_mode="read-only"']]) {
+    eq(`explicit sandbox wins: ${args.join(" ")}`, options({codexSandbox: "danger-full-access"}, args).length, 0);
+  }
+  eq("unrelated config preserves sandbox", options({}, ["-c", 'model="example"']).length, 2);
+  eq("prompt after separator is not an option", options({}, ["--", "--sandbox=read-only"]).length, 2);
+}
+{
+  const helper = cutCtb("function codexSandboxArgs(cfg, forwardedArgs) {", "\nfunction dispatchInstruction");
+  const assembly = cutCtb("  const hasModelArg = forwardedArgs.some", "\n  // CTB_CHAT_ID:");
+  const argsFor = new Function("cfg", "forwardedArgs", "sessionId", "provider",
+    `const room = {}; const st = {}; const sysArgs = []; ${helper} ${assembly} return finalArgs;`);
+  eq("new interactive session uses config", JSON.stringify(argsFor({codexSandbox: "read-only"}, [], null, "codex")), '["--sandbox","read-only"]');
+  eq("resume uses config too", JSON.stringify(argsFor({codexSandbox: "danger-full-access"}, [], "session-id", "codex")), '["resume","--sandbox","danger-full-access","session-id"]');
+  eq("resume preserves explicit policy", JSON.stringify(argsFor({codexSandbox: "danger-full-access"}, ["-s", "read-only"], "sid", "codex")), '["resume","sid","-s","read-only"]');
+  eq("Claude receives no Codex flags", JSON.stringify(argsFor({codexSandbox: "danger-full-access"}, [], "sid", "claude")), '["--resume","sid"]');
+}
 report();

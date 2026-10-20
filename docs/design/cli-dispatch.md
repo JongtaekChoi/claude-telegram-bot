@@ -215,3 +215,9 @@ ctb send [--chat <방>] --file <경로> [--file <경로>] [캡션]
 
 - **`ctb send` 는 답을 끝까지 기다린다.** 대상 방이 바쁘면 그 방 큐가 빌 때까지 매달린다. 오래
   걸리는 방에 던져 놓고 빠지는 모드(`--detach` 류)는 필요해지면 그때 연다.
+
+## 로컬 Codex 실행 권한과 전달 안내 (2026-10-19)
+
+로컬 `ctb`도 `codexSandbox`를 신규/이어가기 실행에 전달한다. 기본은 workspace-write이고, 사용자가 CLI에서 지정한 sandbox 옵션(또는 sandbox_mode 설정)은 우선한다. 이전에는 bot.mjs만 이 값을 읽어 config를 바꿔도 로컬 실행에는 적용되지 않았다. 이미 실행 중인 세션의 권한을 바꾸는 기능은 아니다.
+
+터미널 출력의 ctb-tell/image/video/file 마커는 처리되지 않는다. `ctb send` 실패 시 마커로 대체하거나 전달 성공을 주장하지 않는다. Claude의 터미널 주입 안내에도 이를 명시한다. Codex 로컬 경로는 현재 --append-system-prompt 주입을 지원하지 않으므로 같은 안내가 자동 주입된다고 주장하지 않는다.

@@ -229,7 +229,7 @@ CLI를 업데이트한 뒤에는 무인 실행에 맡기기 전에 `/testfallbac
 | `codexFallback` | (선택) `true`로 설정하면 Claude 레이트 리밋·크레딧 부족 시 Codex를 우선 폴백으로 사용 |
 | `codexBin` | (선택) `codex` 실행 파일 경로. 기본값은 `PATH`의 `"codex"`이며 launchd에서는 절대경로 권장 |
 | `codexModel` | (선택) Codex에 `--model`로 넘길 모델. Codex 활성 상태에서 `/model`을 실행하면 설치된 CLI에서 선택 가능한 모델이 버튼으로 표시됩니다. 비우거나 기본값을 쓰는 것이 가장 안전합니다. |
-| `codexSandbox` | (선택) 첫 `codex exec` 세션의 샌드박스 (기본값: `"workspace-write"`) |
+| `codexSandbox` | (선택) 봇 신규 세션 및 로컬 `ctb` 신규·이어가기 세션의 샌드박스. 직접 지정한 CLI 옵션 우선 (기본값: `"workspace-write"`) |
 | `codexTimeout` | (선택) Codex 응답을 기다리는 최대 시간(ms). 실패하면 reserve/Ollama로 넘어감 (기본값: `600000`) |
 | `ollamaFallback` | (선택) `true`로 설정하면 Claude 레이트 리밋·크레딧 부족 시 로컬 Ollama를 보조 폴백으로 사용 |
 | `ollamaModel` | (선택) 폴백에 쓸 Ollama 모델 (기본값: `"qwen3.5:4b"`). 세션이 이어받는 맥락의 양은 이 모델의 런타임 컨텍스트 창(`num_ctx`)에 의해 제한됨 — 모델 아키텍처상 최대치와 무관하게 Ollama 기본값은 ~4K라, 긴 Claude 세션에는 부족함. `Modelfile`로 더 큰 창을 구워넣은 변형을 만들어(`FROM qwen3.5:4b` + `PARAMETER num_ctx 6144`, `ollama create qwen3.5:4b-ctx6k -f Modelfile`) 이 값으로 지정할 것. 크기는 RAM에 맞출 것 — 8GB 머신에선 ~6K가 안전 상한이고, 32K는 스왑으로 시스템이 먹통이 됨 |
@@ -775,3 +775,5 @@ CI는 Node 18, 20, 22에서 같은 검사를 실행합니다.
 ## 라이선스
 
 MIT © Jongtaek Choi
+
+로컬 `ctb`도 신규·이어가기 Codex 세션에 `codexSandbox`를 적용한다(기본 `workspace-write`). 직접 지정한 CLI 샌드박스 옵션이 우선한다. 변경한 설정은 로컬 세션을 종료한 뒤 다시 시작해야 적용되며 실행 중 권한을 바꾸지 않는다. 터미널 출력에서는 `ctb-tell`·`ctb-image`·`ctb-video`·`ctb-file` 마커가 처리되지 않는다. `ctb send`를 사용하고 실패하면 미전송으로 보고한다. 마커는 봇 응답 처리 경로에서만 동작한다.

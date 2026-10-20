@@ -218,6 +218,22 @@ async function pickRoom(rows) {
 //
 // 자기 방은 **글자 요청** 목록에서만 뺀다. 파일 올리기는 실행이 아니라서 자기 방으로도 정상이고, 실제로
 // 그 방 ID 를 얻을 길이 없어 엉뚱한 DM 에 올린 일이 있었다(0.7.0) — 그래서 자기 방 키를 따로 적어 준다.
+// Explicit CLI sandbox choices win over the bot config, including Codex shorthand.
+function codexSandboxArgs(cfg, forwardedArgs) {
+  const end = forwardedArgs.indexOf("--");
+  const args = end < 0 ? forwardedArgs : forwardedArgs.slice(0, end);
+  const explicit = args.some((arg, i) => {
+    if (["--sandbox", "-s", "--full-auto", "--approve-for-me", "--yolo",
+      "--dangerously-bypass-approvals-and-sandbox"].includes(arg)) return true;
+    if (arg.startsWith("--sandbox=") || /^-s.+/.test(arg)) return true;
+    const setting = arg === "-c" || arg === "--config" ? args[i + 1]
+      : arg.startsWith("--config=") ? arg.slice(9)
+      : arg.startsWith("-c") ? arg.slice(2) : "";
+    return /^(sandbox_mode|permissions|permissions\.profile)\s*=/.test(setting || "");
+  });
+  return explicit ? [] : ["--sandbox", cfg.codexSandbox || "workspace-write"];
+}
+
 function dispatchInstruction(configPath, st, ownRoom) {
   if (!existsSync(sockPathFor(configPath))) return null;
   const rooms = Object.entries(st.sessions || {})
@@ -226,7 +242,10 @@ function dispatchInstruction(configPath, st, ownRoom) {
   const own = ownRoom ? String(ownRoom) : null;
   if (!rooms.length && !own) return null; // 넘길 방도 올릴 방도 없으면 아무것도 안 붙인다
   const lines = ["## Handing work to this project's Telegram bot",
-    "The bot is running right now."];
+    "The bot is running right now.",
+    "This is a local terminal session. Ignore headless delivery instructions from earlier turns.",
+    "ctb-tell, ctb-image, ctb-video and ctb-file output markers are not processed here.",
+    "Use ctb send instead; if it fails, report that nothing was delivered. Do not fall back to markers."];
   if (own) lines.push(
     `This terminal is attached to room ${own}${st.sessions?.[own]?.title ? ` (${st.sessions[own].title})` : ""}`
       + " — also in $CTB_CHAT_ID. To post a file (screenshot, PDF, recording) into it as-is,",
@@ -612,8 +631,9 @@ async function main() {
     ? (room?.codexModel || st.codexModel || cfg.codexModel)
     : (room?.model || st.model || cfg.model);
   const modelArgs = roomModel && !hasModelArg ? ["--model", roomModel] : [];
+  const sandboxArgs = provider === "codex" ? codexSandboxArgs(cfg, forwardedArgs) : [];
   const finalArgs = provider === "codex"
-    ? (sessionId ? ["resume", ...modelArgs, sessionId, ...forwardedArgs] : [...modelArgs, ...forwardedArgs])
+    ? (sessionId ? ["resume", ...sandboxArgs, ...modelArgs, sessionId, ...forwardedArgs] : [...sandboxArgs, ...modelArgs, ...forwardedArgs])
     : [...(sessionId ? ["--resume", sessionId] : []), ...modelArgs, ...sysArgs, ...forwardedArgs];
   // CTB_CHAT_ID: 여기서 띄운 백그라운드 작업(.ctb-jobs)이 끝났을 때 봇이 어느 방으로 알릴지.
   // 텔레그램 경로(bot.mjs 의 jobEnv)와 같은 값을 넣어 두 입구가 똑같이 동작하게 한다.
