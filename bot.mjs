@@ -326,7 +326,7 @@ const STR = {
       "• /jobs — background jobs that outlive replies · you get a message when one ends\n" +
       "• /persona — the role this room runs as, and the prompt behind it · change it at /new\n" +
       "• /persona set — in a group: which roles that group may use (its topics pick from this set)\n" +
-      "• /persona add|edit|rm — owner, in a DM: write a role's prompt (lives in .claude-bot/personas/)\n" +
+      "• /persona add|edit|rename|rm — owner, in a DM: write a role's prompt · rename changes only its name (lives in .claude-bot/personas/)\n" +
       "• /tell <room> <message> — hand a message to another room this bot runs · /tell alone lists them\n" +
       "• /rooms — rooms this bot knows · rm <n> drops ones you no longer use · sweep finds topics deleted in Telegram\n" +
       "• /router — forum parent topic: asks which room a message is for · off stops asking there\n" +
@@ -422,7 +422,8 @@ const STR = {
       "Send the id and a name on one line, and I'll ask for the prompt next:\n\n" +
       "`/persona add scroll-dev Scroll Stitch dev`\n\n" +
       "Or put the prompt on the following lines of the same message. " +
-      "`/persona edit <id>` rewrites one · `/persona rm <id>` deletes one. Ids are `a-z 0-9 -`.",
+      "`/persona edit <id>` rewrites the prompt · `/persona rename <id> <name>` changes only the name · " +
+      "`/persona rm <id>` deletes one. Ids are `a-z 0-9 -` and can't be changed later.",
     personaEditDm: "Roles are created in a direct chat with me, not in a group.",
     ownerDmOnly: (cmd) => `${cmd} affects every room this bot runs, so I only take it in a direct chat with me.`,
     usageShow: (u) =>
@@ -435,6 +436,18 @@ const STR = {
     personaAwaitBody: (name, id) =>
       `🎭 **${name}** (\`${id}\`) — now send the prompt as your next message.\n` +
       "It becomes that role's system prompt, so write it as instructions to the agent. `/persona cancel` backs out; I stop waiting after 10 minutes.",
+    personaEditAwait: (name, id, prompt) =>
+      `🎭 **${name}** (\`${id}\`) — this is its prompt now. Send the new one as your next message: it replaces ` +
+      "the whole prompt, and the name stays as it is.\n\n" +
+      `${editPromptBlock(prompt)}\n` +
+      "`/persona cancel` backs out; I stop waiting after 10 minutes.",
+    personaEditName: (id) =>
+      `\`/persona edit\` only rewrites the prompt — the name stays. To change the name: \`/persona rename ${id} <name>\`. Nothing was written.`,
+    personaRenameUsage:
+      "Send the id and the new name on one line:\n\n`/persona rename scroll-dev Scroll Stitch`\n\n" +
+      "Only the name changes — the prompt stays exactly as it is. The id can't be changed.",
+    personaRenamed: (old, name, id) =>
+      `🎭 \`${id}\` is now **${name}** (was ${old}). The prompt is untouched, and lists and buttons show the new name right away.`,
     personaCanceled: "Dropped — nothing was written.",
     personaNoPending: "I wasn't waiting for anything.",
     personaBadId: (got) =>
@@ -774,7 +787,7 @@ const STR = {
       "• /jobs — 답장 후에도 살아 있는 백그라운드 작업 · 끝나면 먼저 알려줌\n" +
       "• /persona — 이 방이 어떤 역할로 도는지와 그 프롬프트 본문 · 바꾸는 건 /new 에서\n" +
       "• /persona set — 그룹에서: 그 그룹이 쓸 역할 고르기 (그 안의 토픽들이 이 집합에서 고릅니다)\n" +
-      "• /persona add|edit|rm — 오너가 DM 에서: 역할 프롬프트 만들기 (.claude-bot/personas/ 에 저장)\n" +
+      "• /persona add|edit|rename|rm — 오너가 DM 에서: 역할 프롬프트 만들기 · rename 은 이름만 바꿈 (.claude-bot/personas/ 에 저장)\n" +
       "• /tell <방> <메시지> — 이 봇이 맡은 다른 방으로 메시지 넘기기 · /tell 만 보내면 방 목록\n" +
       "• /rooms — 이 봇이 아는 방 목록 · rm <번호> 로 정리 · sweep 은 텔레그램에서 지운 토픽을 찾아 뺍니다\n" +
       "• /router — 포럼 상위 토픽에서 어디로 보낼지 묻습니다 · off 로 그만 묻게 합니다\n" +
@@ -1080,7 +1093,8 @@ const STR = {
       "한 줄에 id 와 이름만 보내면 프롬프트는 제가 다음에 물어봅니다:\n\n" +
       "`/persona add scroll-dev 스크롤스티치 개발`\n\n" +
       "한 메시지로 끝내려면 같은 메시지의 다음 줄부터 프롬프트를 쓰면 됩니다. " +
-      "`/persona edit <id>` 로 고치고 `/persona rm <id>` 로 지웁니다. id 는 `a-z 0-9 -` 입니다.",
+      "`/persona edit <id>` 로 프롬프트를 고치고, `/persona rename <id> <이름>` 으로 이름만 바꾸고, " +
+      "`/persona rm <id>` 로 지웁니다. id 는 `a-z 0-9 -` 이고 나중에 바꿀 수 없습니다.",
     personaEditDm: "역할은 그룹이 아니라 저와의 1:1 대화에서 만듭니다.",
     ownerDmOnly: (cmd) => `${cmd} 은 이 봇이 맡은 모든 방에 영향을 주는 명령이라 저와의 1:1 대화에서만 받습니다.`,
     usageShow: (u) =>
@@ -1093,6 +1107,18 @@ const STR = {
     personaAwaitBody: (name, id) =>
       `🎭 **${name}** (\`${id}\`) — 이제 프롬프트를 **다음 메시지로** 보내주세요.\n` +
       "그 역할의 시스템 프롬프트가 되니 에이전트에게 주는 지시문으로 쓰시면 됩니다. `/persona cancel` 로 빠져나갈 수 있고, 10분 지나면 기다리기를 멈춥니다.",
+    personaEditAwait: (name, id, prompt) =>
+      `🎭 **${name}** (\`${id}\`) 의 지금 프롬프트입니다. 새 프롬프트를 **다음 메시지로** 보내주세요 — ` +
+      "프롬프트 전체가 그걸로 바뀌고, 이름은 그대로 둡니다.\n\n" +
+      `${editPromptBlock(prompt)}\n` +
+      "`/persona cancel` 로 빠져나갈 수 있고, 10분 지나면 기다리기를 멈춥니다.",
+    personaEditName: (id) =>
+      `\`/persona edit\` 은 프롬프트만 고칩니다 — 이름은 그대로예요. 이름을 바꾸려면 \`/persona rename ${id} <이름>\`. 아무것도 쓰지 않았습니다.`,
+    personaRenameUsage:
+      "id 와 새 이름을 한 줄에 보내주세요:\n\n`/persona rename scroll-dev 스크롤스티치`\n\n" +
+      "이름만 바뀌고 프롬프트는 그대로입니다. id 는 바꿀 수 없습니다.",
+    personaRenamed: (old, name, id) =>
+      `🎭 \`${id}\` 의 이름을 **${name}** 로 바꿨습니다 (전: ${old}). 프롬프트는 그대로이고, 목록과 버튼에 바로 새 이름이 뜹니다.`,
     personaCanceled: "취소했습니다 — 아무것도 쓰지 않았습니다.",
     personaNoPending: "기다리고 있던 게 없습니다.",
     personaBadId: (got) =>
@@ -1474,7 +1500,7 @@ const COMMANDS = {
     { command: "sessions", description: "List past sessions · pick one to carry on from" },
     { command: "name", description: "Name the current session" },
     { command: "jobs", description: "Background jobs still running (survive replies)" },
-    { command: "persona", description: "The role this room runs as · set per group · add/edit/rm in owner DM" },
+    { command: "persona", description: "The role this room runs as · set per group · add/edit/rename/rm in owner DM" },
     { command: "tell", description: "Hand a message to another room this bot runs · lists rooms if used alone" },
     { command: "rooms", description: "Rooms this bot knows · rm <n> drops them · sweep finds deleted topics" },
     { command: "router", description: "Forum parent topic: ask which room a message is for · off stops asking" },
@@ -1505,7 +1531,7 @@ const COMMANDS = {
     { command: "sessions", description: "지난 세션 목록 · 골라서 이어가기" },
     { command: "name", description: "지금 세션에 이름 붙이기" },
     { command: "jobs", description: "백그라운드 작업 목록 (답장 후에도 살아 있는 것)" },
-    { command: "persona", description: "이 방이 어떤 역할로 도는지 · set 으로 그룹 집합 · 오너 DM 에서 add/edit/rm" },
+    { command: "persona", description: "이 방이 어떤 역할로 도는지 · set 으로 그룹 집합 · 오너 DM 에서 add/edit/rename/rm" },
     { command: "tell", description: "이 봇이 맡은 다른 방으로 메시지 넘기기 · 인자 없으면 방 목록" },
     { command: "rooms", description: "이 봇이 아는 방 목록 · rm <번호>로 정리 · sweep으로 지운 토픽 청소" },
     { command: "router", description: "포럼 상위 토픽에서 어디로 보낼지 묻기 · off 로 그만 묻기" },
@@ -1872,7 +1898,7 @@ const isOwner = (from) => allowedIds.includes(String(from?.id));
 const USAGE_LOG = join(homedir(), ".claude-telegram-bot", "usage.jsonl");
 // 인자 첫 단어 중 **이것만** 키에 붙인다. 아무 단어나 붙이면 `/plan add a button` 이 `/plan add` 로 잡힌다.
 const USAGE_SUBS = {
-  persona: ["add", "edit", "rm", "cancel", "set"], plan: ["on", "off"], rooms: ["rm", "sweep"],
+  persona: ["add", "edit", "rename", "rm", "cancel", "set"], plan: ["on", "off"], rooms: ["rm", "sweep"],
   router: ["on", "off"], memory: ["rm", "clear"], cron: ["add", "rm", "del", "remove"], allow: ["rm"],
   local: ["kill", "stop"], stop: ["--reset"], name: ["-", "off"], new: ["--chat"], reserve: ["rm"],
   autocompact: ["off", "default", "reset"], mergewindow: ["off", "default", "reset"],
@@ -4126,12 +4152,20 @@ async function handlePersona(chatId, l) {
 // 그룹 버킷에 앉고, 그 안의 토픽들은 전부 이 집합에서 고른다. config 키를 새로 만들지 않는 이유는
 // "목록은 config, 선택 결과는 방별 state" 를 어기면 진실이 둘로 갈리기 때문이다(버튼으로 고른
 // 값이 재시작 때 되돌아간다). → docs/design/room-personas.md
-// `/persona add|edit|rm` — 역할 **정의**를 채팅에서 만들고 고친다.
+// `/persona add|edit|rename|rm` — 역할 **정의**를 채팅에서 만들고 고친다.
+//
+// 이름과 프롬프트는 **따로 고친다.** 처음엔 edit 하나가 둘을 다 받았는데, 이름만 바꾸려 해도
+// 프롬프트를 통째로 다시 보내야 했고 이름을 빠뜨리면 id 로 돌아갔다 — 이름 하나 고치려다 본문이
+// 바뀌는 길이 기본값이었다(2026-10-02). 그래서 rename 은 이름만, edit 은 프롬프트만 쓴다.
+// id 는 어느 쪽으로도 못 바꾼다 — 파일명이자 방들이 물고 있는 state 키다.
 //
 // 정의(id·name·prompt)는 콘텐츠라 봇이 파일로 소유한다. 권한(`dir`·`permissionMode`)은 config 에
 // 남겨 사람만 정한다 — 채팅에서 만든 역할이 폴더와 권한까지 스스로 정하면 "권한은 사람 것" 이
 // 통째로 무의미해진다. 규칙 한 줄: **권한이 넓어지는 방향의 변경은 전부 사람 손을 거친다.**
 // → docs/design/room-personas.md "페르소나를 채팅에서 만든다"
+// edit 이 보여주는 지금 프롬프트. 코드블록이라야 폰에서 눌러 통째로 복사된다. 다만 send() 는 3800자
+// 근처에서 메시지를 쪼개고 코드블록 경계는 모르므로, 쪼개질 만큼 길면 블록 없이 그대로 보낸다.
+const editPromptBlock = (prompt) => (prompt.length <= 3000 && !prompt.includes("```") ? `\`\`\`\n${prompt}\n\`\`\`` : prompt);
 const PERSONA_PROMPT_MAX = 8000; // 시스템 프롬프트에 매 턴 실린다 — 길면 토큰이 매번 샌다
 // **두 단계로도 받는다.** 처음엔 한 메시지(첫 줄 id·둘째 줄 이름·나머지 본문)만 받게 했는데,
 // 텔레그램 모바일은 **엔터가 곧 전송**이라 여러 줄을 한 메시지로 보내는 게 어렵다. 실제로 첫 줄만
@@ -4156,7 +4190,7 @@ async function handlePersonaEdit(chatId, verb, rest, l) {
   const id = (idRaw || "").toLowerCase();
   // 왜 안 됐는지 말한다. 사용법만 되돌려주면 **무엇이 틀렸는지 알 수 없어서** 같은 걸 또 보낸다
   // (실제로 그랬다 — 2026-10-02). id 는 파일명과 state 키가 되므로 규칙 자체는 못 늦춘다.
-  if (!id) { await send(chatId, t(l, "personaAddUsage")); return; }
+  if (!id) { await send(chatId, t(l, verb === "rename" ? "personaRenameUsage" : "personaAddUsage")); return; }
   if (!PERSONA_ID_RE.test(id)) { await send(chatId, t(l, "personaBadId", idRaw)); return; }
   const existing = PERSONAS.find((p) => p.id === id);
   // config 출신은 채팅에서 못 고친다. 봇이 사람이 쓴 정의를 덮으면 잘못 만든 역할을 손으로 고칠
@@ -4175,18 +4209,36 @@ async function handlePersonaEdit(chatId, verb, rest, l) {
     return;
   }
   if (verb === "add" && existing) { await send(chatId, t(l, "personaExists", id)); return; }
-  if (verb === "edit" && !existing) { await send(chatId, t(l, "personaNoSuch", id)); return; }
+  if (verb !== "add" && !existing) { await send(chatId, t(l, "personaNoSuch", id)); return; }
+  if (verb === "rename") {
+    // 첫 줄의 id 뒤가 새 이름이다. 둘째 줄부터는 보지 않는다 — 프롬프트는 파일에 있는 그대로 다시 쓴다.
+    const newName = nameWords.join(" ").trim();
+    if (!newName) { await send(chatId, t(l, "personaRenameUsage")); return; }
+    try {
+      writeFileSync(join(PERSONA_DIR, `${id}.md`), `${newName}\n${existing.prompt}\n`);
+    } catch (e) { await send(chatId, t(l, "personaWriteFail", e.message)); return; }
+    reloadPersonas();
+    await send(chatId, t(l, "personaRenamed", existing.name, newName, id));
+    return;
+  }
+  // edit 에 이름을 붙이면 **조용히 무시하지 않고** 거절한다. 예전 문법(`edit <id> <이름>`)을 기억하는
+  // 사람에게 무시는 "이름이 바뀐 줄 알았는데 안 바뀜" 이 된다.
+  if (verb === "edit" && nameWords.length) { await send(chatId, t(l, "personaEditName", id)); return; }
   // **이름은 첫 줄에만, 나머지 줄은 전부 본문.** 처음엔 "둘째 줄이 이름" 이었는데, 이름 없이
   // `/persona add <id>` + 본문을 보내면 본문 첫 줄이 이름으로 먹히고 본문이 비어서 사용법만
   // 되돌아갔다(2026-10-02). 한 메시지 안의 줄마다 다른 뜻을 주면 사람이 틀리는 쪽이 기본값이 된다.
-  // 이름을 안 주면 id 를 쓴다 — 이름 하나 때문에 되묻는 건 과하고, 나중에 edit 으로 바꾸면 된다.
-  const name = nameWords.join(" ").trim() || id;
+  // 이름을 안 주면 id 를 쓴다 — 이름 하나 때문에 되묻는 건 과하고, 나중에 rename 으로 바꾸면 된다.
+  // edit 은 지금 이름을 그대로 쓴다.
+  const name = verb === "edit" ? existing.name : nameWords.join(" ").trim() || id;
   const prompt = bodyLines.join("\n").trim();
   if (!prompt) {
     // 본문이 없으면 **다음 메시지**를 본문으로 받는다. 모바일에서 한 메시지로 여러 줄을 보내기
-    // 어려운 걸 여기서 흡수한다.
+    // 어려운 걸 여기서 흡수한다. edit 은 지금 프롬프트를 먼저 보여준다 — 통째로 갈아끼우는
+    // 명령이라, 안 보여주면 고치려던 게 아니라 기억나는 대로 다시 쓰게 된다.
     pendingPersona.set(String(chatId), { verb, id, name, at: Date.now() });
-    await send(chatId, t(l, "personaAwaitBody", name, id));
+    await send(chatId, verb === "edit"
+      ? t(l, "personaEditAwait", name, id, existing.prompt)
+      : t(l, "personaAwaitBody", name, id));
     return;
   }
   if (prompt.length > PERSONA_PROMPT_MAX) { await send(chatId, t(l, "personaTooLong", prompt.length, PERSONA_PROMPT_MAX)); return; }
@@ -5400,7 +5452,7 @@ async function handle(msg) {
   // 거절 문구를 보내면 그게 곧 "이런 명령이 있다"는 안내가 되고, 에이전트에게 넘기면
   // "역할 하나 만들어줘" 가 그대로 프롬프트가 된다.
   {
-    const m = text.match(/^\/persona (add|edit|rm|cancel)\b([\s\S]*)$/);
+    const m = text.match(/^\/persona (add|edit|rename|rm|cancel)\b([\s\S]*)$/);
     if (m) {
       if (!isOwner(msg.from)) {
         console.warn(`/persona ${m[1]} ignored — not the owner (from ${msg.from?.id}, room ${chatId})`);
@@ -5416,7 +5468,8 @@ async function handle(msg) {
   if (!text.startsWith("/") && pendingPersona.has(String(chatId)) && isOwner(msg.from)) {
     const p = takePendingPersona(chatId);
     if (p) {
-      await handlePersonaEdit(chatId, p.verb, `${p.id} ${p.name}\n${text}`, l);
+      // edit 은 이름을 안 받는다 — 이름 자리에 뭔가 붙이면 "이름은 rename 으로" 로 거절된다.
+      await handlePersonaEdit(chatId, p.verb, `${p.verb === "add" ? `${p.id} ${p.name}` : p.id}\n${text}`, l);
       return;
     }
   }

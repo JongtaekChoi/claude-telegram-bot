@@ -166,6 +166,45 @@ writeFileSync(join(pdir, "notes.txt"), "마크다운이 아니다\n본문\n");
   const h = api();
   await h.handlePersonaEdit("688", "add", `too-long 길다\n${"가".repeat(8001)}`, "ko");
   ok("8000자 넘으면 거절", sent[0].startsWith("personaTooLong("), sent[0]);
+
+  // ── rename 은 이름만, edit 은 프롬프트만 ──────────────────────────────
+  // 처음엔 edit 하나가 둘을 다 받아서, 이름만 바꾸려 해도 프롬프트를 통째로 다시 보내야 했고
+  // 이름을 빠뜨리면 id 로 돌아갔다(2026-10-02).
+  mkdirSync(dir, { recursive: true });
+  const mine = () => [{ id: "mine", name: "내것", prompt: "원래 본문\n두 줄", fromFile: true }];
+  const read = () => readFileSync(join(dir, "mine.md"), "utf8");
+
+  const r = api(mine());
+  writeFileSync(join(dir, "mine.md"), "내것\n원래 본문\n두 줄\n");
+  await r.handlePersonaEdit("688", "rename", "mine 테스터 담당", "ko");
+  eq("rename: 이름만 바뀌고 본문은 그대로", read(), "테스터 담당\n원래 본문\n두 줄\n");
+  eq("rename: 전후 이름을 말한다", sent[0], "personaRenamed(내것|테스터 담당|mine)");
+  await r.handlePersonaEdit("688", "rename", "mine 새이름\n이건 본문이 아니다", "ko");
+  ok("rename: 둘째 줄은 안 본다", read() === "새이름\n원래 본문\n두 줄\n", read());
+  await r.handlePersonaEdit("688", "rename", "mine", "ko");
+  eq("rename: 이름이 없으면 사용법", sent[2], "personaRenameUsage()");
+  await r.handlePersonaEdit("688", "rename", "", "ko");
+  eq("rename: id 도 없으면 rename 사용법", sent[3], "personaRenameUsage()");
+  await r.handlePersonaEdit("688", "rename", "nope 이름", "ko");
+  eq("rename: 없는 id", sent[4], "personaNoSuch(nope)");
+  eq("rename: 기다리지 않는다", r.pendingPersona.size, 0);
+
+  const rc = api([{ id: "cfg-one", name: "설정", prompt: "x" }]);
+  await rc.handlePersonaEdit("688", "rename", "cfg-one 새 이름", "ko");
+  eq("rename: config 출신은 거절", sent[0], "personaFromConfig(cfg-one)");
+
+  const ed = api(mine());
+  writeFileSync(join(dir, "mine.md"), "내것\n원래 본문\n두 줄\n");
+  await ed.handlePersonaEdit("688", "edit", "mine 새이름\n새 본문", "ko");
+  eq("edit 에 이름을 붙이면 거절", sent[0], "personaEditName(mine)");
+  eq("거절하면 아무것도 안 쓴다", read(), "내것\n원래 본문\n두 줄\n");
+  await ed.handlePersonaEdit("688", "edit", "mine", "ko");
+  ok("edit: 지금 프롬프트를 보여주고 기다린다",
+    sent[1] === "personaEditAwait(내것|mine|원래 본문\n두 줄)" && ed.pendingPersona.size === 1, sent[1]);
+  // 대기 중 다음 메시지는 dispatch 가 `${id}\n${본문}` 으로 되돌려 넣는다(edit 은 이름을 안 싣는다)
+  await ed.handlePersonaEdit("688", "edit", "mine\n새 본문", "ko");
+  eq("edit: 이름은 그대로, 본문만 바뀐다", read(), "내것\n새 본문\n");
+  eq("edit: 고쳤다고 말한다", sent[2], "personaEdited(내것|mine|1)");
 }
 
 report();
