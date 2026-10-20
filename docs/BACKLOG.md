@@ -41,6 +41,14 @@
       오너가 그 방에서 `/model` 을 눌러야 한다 — **문서가 약속한 걸 코드가 안 지키는 자리.**
       `dir` 은 배선돼 있으니(bot.mjs:1329) 같은 자리에 `model`·`provider` 를 얹으면 된다.
       (2026-08-28 큐브 프로젝트에서 관리자 페르소나에 `model: sonnet` 을 넣었다가 발견)
+- [ ] **`credKeychainOnly` 안내가 SSH 원인을 모른다** — 지금 문구는 "터미널에서 `claude` 로 다시
+      로그인 → 키체인 지우고 재시작"인데, 오너는 주로 **SSH** 로 쓰고 SSH 세션은 로그인 키체인이
+      잠겨 있어 `claude` 가 파일로만 폴백한다. Claude Code 가 갱신 때 파일을 지우므로(bot.mjs 의
+      `CRED_NOTICE_GAP` 주석) 재로그인은 **같은 일을 되풀이시킨다**(2026-10-13 또 발생, 직전
+      10-12 에 CLI 2.1.238→2.1.296 자동 업데이트). 문구를 SSH 해법으로 바꾼다: ① 접속 때
+      `security unlock-keychain ~/Library/Keychains/login.keychain-db` ② `claude setup-token` →
+      `CLAUDE_CODE_OAUTH_TOKEN`. 재로그인 안내는 맥 앞 터미널용으로 남긴다. 영/한 두 벌, README 의
+      인증 문제 해결 절도 같이.
 - [ ] **포럼 "모두" 뷰에 작업중 표시** — 토픽 하나가 돌고 있어도 "모두" 화면에서는 아무 표시가
       없어서, 봇이 일하는 중인지 죽었는지 구분이 안 된다. 메커니즘은 이미 관찰돼 있다 —
       `sendChatAction` 에 스레드를 **안** 적으면 "모두" 뷰에만 뜬다(bot.mjs:1468 주석). 함정으로
