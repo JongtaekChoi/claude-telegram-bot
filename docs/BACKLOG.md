@@ -49,6 +49,13 @@
       `security unlock-keychain ~/Library/Keychains/login.keychain-db` ② `claude setup-token` →
       `CLAUDE_CODE_OAUTH_TOKEN`. 재로그인 안내는 맥 앞 터미널용으로 남긴다. 영/한 두 벌, README 의
       인증 문제 해결 절도 같이.
+- [ ] **리프레시 토큰 수명 상한을 미리 알린다** — 리프레시 토큰에도 상한(약 30일)이 있어 닿으면
+      `this login reached its time limit and cannot be renewed` 로 **실패한 뒤에야** 안다
+      (2026-11-10, 봇 넷이 같이 `expired (keychain)`). `credExpired` 는 이미 지난 시점만 보므로
+      `refreshTokenExpiresAt` 이 며칠(3일?) 안이면 먼저 알린다 — 하루 한 번, 재로그인 방법과 함께.
+      재로그인 뒤 다른 봇이 옛 판독으로 늦게 보낸 경보(Molt)도 같이 본다: 보내기 직전 한 번 더 읽기.
+      대안으로 봇 config `env` 에 `setup-token`(1년) — 에러가 권하는 방식이지만 config 넷에 평문이고
+      scope 가 `user:inference` 뿐이라 봇이 쓰는 기능 중 `user:profile` 필요한 게 없는지 먼저 확인.
 - [ ] **포럼 "모두" 뷰에 작업중 표시** — 토픽 하나가 돌고 있어도 "모두" 화면에서는 아무 표시가
       없어서, 봇이 일하는 중인지 죽었는지 구분이 안 된다. 메커니즘은 이미 관찰돼 있다 —
       `sendChatAction` 에 스레드를 **안** 적으면 "모두" 뷰에만 뜬다(bot.mjs:1468 주석). 함정으로
